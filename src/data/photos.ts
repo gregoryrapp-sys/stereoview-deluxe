@@ -2,6 +2,7 @@ export interface Photo {
   id: string;
   srcLeft: string;
   srcRight: string;
+  srcGif: string;
   alt: string;
 }
 
@@ -12,6 +13,7 @@ export const photos: Photo[] = [
     id: '1',
     srcLeft: '/photos/1-left.jpg',
     srcRight: '/photos/1-right.jpg',
+    srcGif: '/photos/1-wiggle.gif',
     alt: 'Stereoscopic photo 1'
   }
 ];
