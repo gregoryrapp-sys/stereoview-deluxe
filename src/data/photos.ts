@@ -20,24 +20,28 @@ export const photos: Photo[] = [
     id: '2',
     srcLeft: '/photos/2-left.jpg',
     srcRight: '/photos/2-right.jpg',
+    srcGif: '/photos/2-wiggle.gif',
     alt: 'Two friends celebrating at dinner'
   },
   {
     id: '3',
     srcLeft: '/photos/3-left.jpg',
     srcRight: '/photos/3-right.jpg',
+    srcGif: '/photos/3-wiggle.gif',
     alt: 'Three friends on the dance floor'
   },
   {
     id: '4',
     srcLeft: '/photos/4-left.jpg',
     srcRight: '/photos/4-right.jpg',
+    srcGif: '/photos/4-wiggle.gif',
     alt: 'Friends dancing at the party'
   },
   {
     id: '5',
     srcLeft: '/photos/5-left.jpg',
     srcRight: '/photos/5-right.jpg',
+    srcGif: '/photos/5-wiggle.gif',
     alt: 'Group carrying friend at celebration'
   }
 ];
