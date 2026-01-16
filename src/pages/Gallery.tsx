@@ -126,10 +126,15 @@ export default function Gallery() {
               onClick={() => handlePhotoClick(index)}
               className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
             >
+              {/*
+                Display raw stereo image but show only the left half as thumbnail.
+                The image is 2:1 aspect ratio (left+right), we show it at 200% width
+                and use object-position to show only the left half.
+              */}
               <img
-                src={photo.srcLeft}
+                src={photo.src}
                 alt={photo.alt}
-                className="h-full w-full object-cover transition-opacity group-hover:opacity-90"
+                className="h-full w-[200%] object-cover object-left transition-opacity group-hover:opacity-90"
                 loading="lazy"
               />
             </button>
@@ -145,6 +150,7 @@ export default function Gallery() {
         {isViewerOpen && viewMode === 'stereo' && (
           <StereoViewer
             photo={photos[selectedPhotoIndex]}
+            photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
             onPrevious={() => handleNavigate('prev')}
             onNext={() => handleNavigate('next')}
@@ -155,6 +161,7 @@ export default function Gallery() {
         {isViewerOpen && viewMode === 'gif' && (
           <GifViewer
             photo={photos[selectedPhotoIndex]}
+            photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
             onPrevious={() => handleNavigate('prev')}
             onNext={() => handleNavigate('next')}

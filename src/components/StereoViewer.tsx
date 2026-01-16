@@ -1,11 +1,13 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Photo } from '@/data/photos';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { Photo, photos } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
-import { X } from 'lucide-react';
+import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
+import { X, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface StereoViewerProps {
   photo: Photo;
+  photoIndex: number;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -15,6 +17,7 @@ interface StereoViewerProps {
 
 export default function StereoViewer({
   photo,
+  photoIndex,
   onClose,
   onPrevious,
   onNext,
@@ -22,6 +25,23 @@ export default function StereoViewer({
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+
+  // Process the stereo image into left/right halves
+  const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
+
+  // Preload adjacent images for smoother navigation
+  const adjacentSrcs = useMemo(() => {
+    const srcs: string[] = [];
+    if (photoIndex > 0) {
+      srcs.push(photos[photoIndex - 1].src);
+    }
+    if (photoIndex < photos.length - 1) {
+      srcs.push(photos[photoIndex + 1].src);
+    }
+    return srcs;
+  }, [photoIndex]);
+
+  usePreloadImages(adjacentSrcs);
 
   // Update container size on mount and resize
   useEffect(() => {
@@ -109,38 +129,54 @@ export default function StereoViewer({
       }}
       onClick={handleContainerClick}
     >
-      {/* Dual viewport stereoscopic display */}
-      <div className="flex h-full w-full">
-        {/* Left viewport - displays left image */}
-        <div className="h-full w-1/2 overflow-hidden">
-          <div
-            className="h-full w-full transition-transform duration-75"
-            style={{ transform: imageTransform }}
-          >
-            <img
-              src={photo.srcLeft}
-              alt={`${photo.alt} (left)`}
-              className="h-full w-full object-contain"
-              draggable={false}
-            />
-          </div>
+      {/* Loading state */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-white/60" />
         </div>
+      )}
 
-        {/* Right viewport - displays right image */}
-        <div className="h-full w-1/2 overflow-hidden">
-          <div
-            className="h-full w-full transition-transform duration-75"
-            style={{ transform: imageTransform }}
-          >
-            <img
-              src={photo.srcRight}
-              alt={`${photo.alt} (right)`}
-              className="h-full w-full object-contain"
-              draggable={false}
-            />
+      {/* Error state */}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="text-red-400 text-center px-4">{error}</p>
+        </div>
+      )}
+
+      {/* Dual viewport stereoscopic display */}
+      {leftUrl && rightUrl && (
+        <div className="flex h-full w-full">
+          {/* Left viewport - displays left image */}
+          <div className="h-full w-1/2 overflow-hidden">
+            <div
+              className="h-full w-full transition-transform duration-75"
+              style={{ transform: imageTransform }}
+            >
+              <img
+                src={leftUrl}
+                alt={`${photo.alt} (left)`}
+                className="h-full w-full object-contain"
+                draggable={false}
+              />
+            </div>
+          </div>
+
+          {/* Right viewport - displays right image */}
+          <div className="h-full w-1/2 overflow-hidden">
+            <div
+              className="h-full w-full transition-transform duration-75"
+              style={{ transform: imageTransform }}
+            >
+              <img
+                src={rightUrl}
+                alt={`${photo.alt} (right)`}
+                className="h-full w-full object-contain"
+                draggable={false}
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Close button */}
       <button
