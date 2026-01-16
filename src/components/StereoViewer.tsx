@@ -25,20 +25,28 @@ export default function StereoViewer({
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
 
   // Fullscreen and landscape orientation lock
-  const { containerRef, exitFullscreen } = useFullscreenLandscape(true, onClose);
+  const { containerRef, exitFullscreen, isPortrait } = useFullscreenLandscape(true, onClose);
 
   // Update container size on mount and resize
   useEffect(() => {
     const updateSize = () => {
-      setContainerSize({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      });
+      // When in portrait mode and rotated, swap width/height for gesture calculations
+      if (isPortrait) {
+        setContainerSize({
+          width: window.innerHeight,
+          height: window.innerWidth,
+        });
+      } else {
+        setContainerSize({
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
+      }
     };
     updateSize();
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
-  }, []);
+  }, [isPortrait]);
 
   const handleSwipeLeft = useCallback(() => {
     setSwipeDirection('left');
@@ -103,6 +111,21 @@ export default function StereoViewer({
   // The transform to apply to each half (synchronized)
   const imageTransform = `scale(${scale}) translate(${translateX / scale}px, ${translateY / scale}px)`;
 
+  // Calculate rotation styles for portrait mode
+  const rotationStyles = isPortrait
+    ? {
+        transform: 'rotate(90deg)',
+        transformOrigin: 'center center',
+        width: `${window.innerHeight}px`,
+        height: `${window.innerWidth}px`,
+        position: 'fixed' as const,
+        top: '50%',
+        left: '50%',
+        marginTop: `-${window.innerWidth / 2}px`,
+        marginLeft: `-${window.innerHeight / 2}px`,
+      }
+    : {};
+
   return (
     <div
       ref={containerRef}
@@ -111,6 +134,7 @@ export default function StereoViewer({
         swipeDirection === 'left' && "animate-slide-left",
         swipeDirection === 'right' && "animate-slide-right"
       )}
+      style={rotationStyles}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={(e) => {
