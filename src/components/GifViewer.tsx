@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import { Photo } from '@/data/photos';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -21,44 +21,8 @@ export default function GifViewer({
   hasNext,
 }: GifViewerProps) {
   const [showControls, setShowControls] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef<number>(0);
   const touchStartY = useRef<number>(0);
-
-  // Request fullscreen on mount
-  useEffect(() => {
-    const container = containerRef.current;
-    if (container && document.fullscreenEnabled) {
-      container.requestFullscreen?.().catch(() => {
-        // Fullscreen not supported or denied, continue anyway
-      });
-    }
-
-    return () => {
-      if (document.fullscreenElement) {
-        document.exitFullscreen?.().catch(() => {});
-      }
-    };
-  }, []);
-
-  // Listen for fullscreen exit (e.g., user presses Escape)
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        onClose();
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [onClose]);
-
-  const handleClose = useCallback(async () => {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen?.().catch(() => {});
-    }
-    onClose();
-  }, [onClose]);
 
   const handleContainerClick = () => {
     setShowControls(prev => !prev);
@@ -90,14 +54,13 @@ export default function GifViewer({
 
     // Swipe down to close
     if (deltaY > 100 && Math.abs(deltaY) > Math.abs(deltaX)) {
-      handleClose();
+      onClose();
     }
   };
 
   return (
     <div
-      ref={containerRef}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black"
+      className="h-full w-full flex items-center justify-center bg-black"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onClick={handleContainerClick}
@@ -114,7 +77,7 @@ export default function GifViewer({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          handleClose();
+          onClose();
         }}
         className={cn(
           "absolute right-4 top-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200",

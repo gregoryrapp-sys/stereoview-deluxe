@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { photos } from '@/data/photos';
@@ -13,17 +13,56 @@ export default function Gallery() {
   const { isAuthenticated, logout } = useAuth();
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('stereo');
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleCloseViewer = useCallback(async () => {
+    // Exit fullscreen first
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if ((document as any).webkitFullscreenElement) {
+        await (document as any).webkitExitFullscreen();
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+    setSelectedPhotoIndex(null);
+  }, []);
+
+  // Listen for fullscreen exit (user presses back/escape)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFullscreen = !!(document.fullscreenElement || (document as any).webkitFullscreenElement);
+      if (!isFullscreen && selectedPhotoIndex !== null) {
+        setSelectedPhotoIndex(null);
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, [selectedPhotoIndex]);
 
   if (!isAuthenticated) {
     return <Navigate to="/" replace />;
   }
 
+  // Request fullscreen synchronously in click handler (user gesture required)
   const handlePhotoClick = (index: number) => {
+    const container = fullscreenContainerRef.current;
+    if (container) {
+      // Request fullscreen immediately - this is synchronous with user gesture
+      if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+      } else if ((container as any).webkitRequestFullscreen) {
+        (container as any).webkitRequestFullscreen();
+      }
+    }
     setSelectedPhotoIndex(index);
-  };
-
-  const handleCloseViewer = () => {
-    setSelectedPhotoIndex(null);
   };
 
   const handleNavigate = (direction: 'prev' | 'next') => {
@@ -35,6 +74,8 @@ export default function Gallery() {
       setSelectedPhotoIndex(selectedPhotoIndex + 1);
     }
   };
+
+  const isViewerOpen = selectedPhotoIndex !== null;
 
   return (
     <div className="min-h-screen">
@@ -96,27 +137,32 @@ export default function Gallery() {
         </div>
       </main>
 
-      {/* Full-Screen Viewer */}
-      {selectedPhotoIndex !== null && viewMode === 'stereo' && (
-        <StereoViewer
-          photo={photos[selectedPhotoIndex]}
-          onClose={handleCloseViewer}
-          onPrevious={() => handleNavigate('prev')}
-          onNext={() => handleNavigate('next')}
-          hasPrevious={selectedPhotoIndex > 0}
-          hasNext={selectedPhotoIndex < photos.length - 1}
-        />
-      )}
-      {selectedPhotoIndex !== null && viewMode === 'gif' && (
-        <GifViewer
-          photo={photos[selectedPhotoIndex]}
-          onClose={handleCloseViewer}
-          onPrevious={() => handleNavigate('prev')}
-          onNext={() => handleNavigate('next')}
-          hasPrevious={selectedPhotoIndex > 0}
-          hasNext={selectedPhotoIndex < photos.length - 1}
-        />
-      )}
+      {/* Fullscreen Container - always in DOM for immediate fullscreen request */}
+      <div
+        ref={fullscreenContainerRef}
+        className={`fixed inset-0 z-50 bg-black ${isViewerOpen ? 'block' : 'hidden'}`}
+      >
+        {isViewerOpen && viewMode === 'stereo' && (
+          <StereoViewer
+            photo={photos[selectedPhotoIndex]}
+            onClose={handleCloseViewer}
+            onPrevious={() => handleNavigate('prev')}
+            onNext={() => handleNavigate('next')}
+            hasPrevious={selectedPhotoIndex > 0}
+            hasNext={selectedPhotoIndex < photos.length - 1}
+          />
+        )}
+        {isViewerOpen && viewMode === 'gif' && (
+          <GifViewer
+            photo={photos[selectedPhotoIndex]}
+            onClose={handleCloseViewer}
+            onPrevious={() => handleNavigate('prev')}
+            onNext={() => handleNavigate('next')}
+            hasPrevious={selectedPhotoIndex > 0}
+            hasNext={selectedPhotoIndex < photos.length - 1}
+          />
+        )}
+      </div>
     </div>
   );
 }
