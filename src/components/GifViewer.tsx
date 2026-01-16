@@ -1,10 +1,12 @@
-import { useState, useRef } from 'react';
-import { Photo } from '@/data/photos';
-import { X, ChevronLeft, ChevronRight } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { Photo, photos } from '@/data/photos';
+import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
+import { X, ChevronLeft, ChevronRight, Loader2, Pause, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface GifViewerProps {
   photo: Photo;
+  photoIndex: number;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -12,8 +14,12 @@ interface GifViewerProps {
   hasNext: boolean;
 }
 
+// Frame interval in ms (matches original GIF at 150ms)
+const FRAME_INTERVAL = 150;
+
 export default function GifViewer({
   photo,
+  photoIndex,
   onClose,
   onPrevious,
   onNext,
@@ -21,11 +27,52 @@ export default function GifViewer({
   hasNext,
 }: GifViewerProps) {
   const [showControls, setShowControls] = useState(true);
+  const [showLeft, setShowLeft] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(true);
   const touchStartX = useRef<number>(0);
   const touchStartY = useRef<number>(0);
 
+  // Process the stereo image into left/right halves
+  const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
+
+  // Preload adjacent images for smoother navigation
+  const adjacentSrcs = useMemo(() => {
+    const srcs: string[] = [];
+    if (photoIndex > 0) {
+      srcs.push(photos[photoIndex - 1].src);
+    }
+    if (photoIndex < photos.length - 1) {
+      srcs.push(photos[photoIndex + 1].src);
+    }
+    return srcs;
+  }, [photoIndex]);
+
+  usePreloadImages(adjacentSrcs);
+
+  // Animate between left and right frames (wiggle effect)
+  useEffect(() => {
+    if (!isPlaying || !leftUrl || !rightUrl) return;
+
+    const interval = setInterval(() => {
+      setShowLeft(prev => !prev);
+    }, FRAME_INTERVAL);
+
+    return () => clearInterval(interval);
+  }, [isPlaying, leftUrl, rightUrl]);
+
+  // Reset animation when photo changes
+  useEffect(() => {
+    setShowLeft(true);
+    setIsPlaying(true);
+  }, [photo.id]);
+
   const handleContainerClick = () => {
     setShowControls(prev => !prev);
+  };
+
+  const togglePlayPause = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsPlaying(prev => !prev);
   };
 
   // Simple swipe handling
@@ -58,6 +105,8 @@ export default function GifViewer({
     }
   };
 
+  const currentUrl = showLeft ? leftUrl : rightUrl;
+
   return (
     <div
       className="h-full w-full flex items-center justify-center bg-black"
@@ -65,13 +114,29 @@ export default function GifViewer({
       onTouchEnd={handleTouchEnd}
       onClick={handleContainerClick}
     >
-      {/* GIF display - fills screen while maintaining aspect ratio */}
-      <img
-        src={photo.srcGif}
-        alt={photo.alt}
-        className="max-h-full max-w-full object-contain"
-        draggable={false}
-      />
+      {/* Loading state */}
+      {isLoading && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-white/60" />
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <p className="text-red-400 text-center px-4">{error}</p>
+        </div>
+      )}
+
+      {/* Wiggle animation display - alternates between left and right */}
+      {currentUrl && (
+        <img
+          src={currentUrl}
+          alt={photo.alt}
+          className="max-h-full max-w-full object-contain"
+          draggable={false}
+        />
+      )}
 
       {/* Close button */}
       <button
@@ -85,6 +150,17 @@ export default function GifViewer({
         )}
       >
         <X className="h-6 w-6" />
+      </button>
+
+      {/* Play/Pause button */}
+      <button
+        onClick={togglePlayPause}
+        className={cn(
+          "absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200",
+          showControls ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}
+      >
+        {isPlaying ? <Pause className="h-6 w-6" /> : <Play className="h-6 w-6" />}
       </button>
 
       {/* Navigation arrows */}
