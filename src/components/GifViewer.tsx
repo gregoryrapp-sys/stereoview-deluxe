@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { Photo } from '@/data/photos';
+import { useFullscreenLandscape } from '@/hooks/useFullscreenLandscape';
 import { X, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -21,44 +22,16 @@ export default function GifViewer({
   hasNext,
 }: GifViewerProps) {
   const [showControls, setShowControls] = useState(true);
-  const containerRef = useRef<HTMLDivElement>(null);
   const touchStartX = useRef<number>(0);
   const touchStartY = useRef<number>(0);
 
-  // Request fullscreen on mount
-  useEffect(() => {
-    const container = containerRef.current;
-    if (container && document.fullscreenEnabled) {
-      container.requestFullscreen?.().catch(() => {
-        // Fullscreen not supported or denied, continue anyway
-      });
-    }
-
-    return () => {
-      if (document.fullscreenElement) {
-        document.exitFullscreen?.().catch(() => {});
-      }
-    };
-  }, []);
-
-  // Listen for fullscreen exit (e.g., user presses Escape)
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      if (!document.fullscreenElement) {
-        onClose();
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [onClose]);
+  // Fullscreen and landscape orientation lock
+  const { containerRef, exitFullscreen, isPortrait } = useFullscreenLandscape(true, onClose);
 
   const handleClose = useCallback(async () => {
-    if (document.fullscreenElement) {
-      await document.exitFullscreen?.().catch(() => {});
-    }
+    await exitFullscreen();
     onClose();
-  }, [onClose]);
+  }, [exitFullscreen, onClose]);
 
   const handleContainerClick = () => {
     setShowControls(prev => !prev);
@@ -94,10 +67,26 @@ export default function GifViewer({
     }
   };
 
+  // Calculate rotation styles for portrait mode (CSS fallback when orientation lock unavailable)
+  const rotationStyles = isPortrait
+    ? {
+        transform: 'rotate(90deg)',
+        transformOrigin: 'center center',
+        width: `${window.innerHeight}px`,
+        height: `${window.innerWidth}px`,
+        position: 'fixed' as const,
+        top: '50%',
+        left: '50%',
+        marginTop: `-${window.innerWidth / 2}px`,
+        marginLeft: `-${window.innerHeight / 2}px`,
+      }
+    : {};
+
   return (
     <div
       ref={containerRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black"
+      style={rotationStyles}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
       onClick={handleContainerClick}
