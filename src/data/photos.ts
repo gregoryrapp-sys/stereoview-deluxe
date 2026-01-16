@@ -13,17 +13,5 @@ export const photos: Photo[] = [
     srcLeft: '/photos/1-left.jpg',
     srcRight: '/photos/1-right.jpg',
     alt: 'Stereoscopic photo 1'
-  },
-  {
-    id: '2',
-    srcLeft: '/photos/2-left.jpg',
-    srcRight: '/photos/2-right.jpg',
-    alt: 'Stereoscopic photo 2'
-  },
-  {
-    id: '3',
-    srcLeft: '/photos/3-left.jpg',
-    srcRight: '/photos/3-right.jpg',
-    alt: 'Stereoscopic photo 3'
   }
 ];
