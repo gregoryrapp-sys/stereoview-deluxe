@@ -172,6 +172,5 @@ Components go to `src/components/ui/` with automatic Tailwind theming.
 1. **No strict TypeScript** - `strict: false` in tsconfig for dev velocity
 2. **HMR overlay disabled** - Set in vite.config.ts for cleaner dev UX
 3. **Auth is client-side only** - Password check in browser, not secure for production
-4. **Lovable integration** - `lovable-tagger` plugin active in dev mode
-5. **Touch gestures** - StereoViewer prevents default touch to enable custom gestures
-6. **Photo data is static** - No backend/API, photos defined in `src/data/photos.ts`
+4. **Touch gestures** - StereoViewer prevents default touch to enable custom gestures
+5. **Photo data is static** - No backend/API, photos defined in `src/data/photos.ts`
