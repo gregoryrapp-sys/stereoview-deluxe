@@ -121,30 +121,30 @@ export default function StereoViewer({
     >
       {/* Dual viewport stereoscopic display */}
       <div className="flex h-full w-full">
-        {/* Left half */}
+        {/* Left viewport - displays left image */}
         <div className="h-full w-1/2 overflow-hidden">
           <div
-            className="h-full w-[200%] origin-left transition-transform duration-75"
+            className="h-full w-full transition-transform duration-75"
             style={{ transform: imageTransform }}
           >
             <img
-              src={photo.src}
-              alt={photo.alt}
+              src={photo.srcLeft}
+              alt={`${photo.alt} (left)`}
               className="h-full w-full object-contain"
               draggable={false}
             />
           </div>
         </div>
 
-        {/* Right half */}
+        {/* Right viewport - displays right image */}
         <div className="h-full w-1/2 overflow-hidden">
           <div
-            className="h-full w-[200%] origin-right -translate-x-1/2 transition-transform duration-75"
-            style={{ transform: `translateX(-50%) ${imageTransform}` }}
+            className="h-full w-full transition-transform duration-75"
+            style={{ transform: imageTransform }}
           >
             <img
-              src={photo.src}
-              alt={photo.alt}
+              src={photo.srcRight}
+              alt={`${photo.alt} (right)`}
               className="h-full w-full object-contain"
               draggable={false}
             />

@@ -57,7 +57,7 @@ export default function Gallery() {
               className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
             >
               <img
-                src={photo.src}
+                src={photo.srcLeft}
                 alt={photo.alt}
                 className="h-full w-full object-cover transition-opacity group-hover:opacity-90"
                 loading="lazy"

@@ -1,26 +1,29 @@
-import stereoPhoto1 from '@/assets/stereo-photo-1.jpeg';
-
 export interface Photo {
   id: string;
-  src: string;
+  srcLeft: string;
+  srcRight: string;
   alt: string;
 }
 
-// Stereoscopic photos - add more imports and entries as needed
+// Stereoscopic photos - left and right halves stored separately
+// Add more entries as needed with paths to your split images
 export const photos: Photo[] = [
   {
     id: '1',
-    src: stereoPhoto1,
+    srcLeft: '/photos/1-left.jpg',
+    srcRight: '/photos/1-right.jpg',
     alt: 'Stereoscopic photo 1'
   },
   {
     id: '2',
-    src: 'https://placehold.co/2000x1000/16213e/3a4a6a?text=Stereo+Photo+2',
+    srcLeft: '/photos/2-left.jpg',
+    srcRight: '/photos/2-right.jpg',
     alt: 'Stereoscopic photo 2'
   },
   {
     id: '3',
-    src: 'https://placehold.co/2000x1000/0f3460/2a5a8a?text=Stereo+Photo+3',
+    srcLeft: '/photos/3-left.jpg',
+    srcRight: '/photos/3-right.jpg',
     alt: 'Stereoscopic photo 3'
   }
 ];
