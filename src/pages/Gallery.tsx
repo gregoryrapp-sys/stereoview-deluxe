@@ -3,12 +3,16 @@ import { Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { photos } from '@/data/photos';
 import StereoViewer from '@/components/StereoViewer';
+import GifViewer from '@/components/GifViewer';
 import { LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+
+type ViewMode = 'stereo' | 'gif';
 
 export default function Gallery() {
   const { isAuthenticated, logout } = useAuth();
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('stereo');
 
   if (!isAuthenticated) {
     return <Navigate to="/" replace />;
@@ -37,14 +41,39 @@ export default function Gallery() {
       {/* Header */}
       <header className="sticky top-0 z-10 flex items-center justify-between bg-background/80 px-4 py-4 backdrop-blur-sm">
         <h1 className="text-xl font-light tracking-wide">Greg's Photos</h1>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={logout}
-          className="text-muted-foreground hover:text-foreground"
-        >
-          <LogOut className="h-5 w-5" />
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* View Mode Toggle */}
+          <div className="flex rounded-lg bg-secondary p-1">
+            <button
+              onClick={() => setViewMode('stereo')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === 'stereo'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Stereo
+            </button>
+            <button
+              onClick={() => setViewMode('gif')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === 'gif'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              GIF
+            </button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={logout}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            <LogOut className="h-5 w-5" />
+          </Button>
+        </div>
       </header>
 
       {/* Photo Grid */}
@@ -68,8 +97,18 @@ export default function Gallery() {
       </main>
 
       {/* Full-Screen Viewer */}
-      {selectedPhotoIndex !== null && (
+      {selectedPhotoIndex !== null && viewMode === 'stereo' && (
         <StereoViewer
+          photo={photos[selectedPhotoIndex]}
+          onClose={handleCloseViewer}
+          onPrevious={() => handleNavigate('prev')}
+          onNext={() => handleNavigate('next')}
+          hasPrevious={selectedPhotoIndex > 0}
+          hasNext={selectedPhotoIndex < photos.length - 1}
+        />
+      )}
+      {selectedPhotoIndex !== null && viewMode === 'gif' && (
+        <GifViewer
           photo={photos[selectedPhotoIndex]}
           onClose={handleCloseViewer}
           onPrevious={() => handleNavigate('prev')}
