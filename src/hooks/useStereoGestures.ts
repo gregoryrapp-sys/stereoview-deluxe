@@ -21,7 +21,8 @@ export function useStereoGestures(
   onSwipeLeft: () => void,
   onSwipeRight: () => void,
   containerWidth: number,
-  containerHeight: number
+  containerHeight: number,
+  isPortrait: boolean = false
 ) {
   const [state, setState] = useState<GestureState>({
     scale: 1,
@@ -59,6 +60,20 @@ export function useStereoGestures(
     return Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
   };
 
+  // Transform screen coordinates to view coordinates when in portrait mode
+  // When content is rotated 90deg clockwise, we need to transform touch deltas:
+  // - Screen right (positive X) → View up (negative Y)
+  // - Screen down (positive Y) → View right (positive X)
+  const transformDelta = useCallback((deltaX: number, deltaY: number): { x: number; y: number } => {
+    if (isPortrait) {
+      return {
+        x: deltaY,
+        y: -deltaX,
+      };
+    }
+    return { x: deltaX, y: deltaY };
+  }, [isPortrait]);
+
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 2) {
       // Pinch start
@@ -95,8 +110,11 @@ export function useStereoGestures(
       });
     } else if (e.touches.length === 1 && lastTouchRef.current && !isPinchingRef.current) {
       const touch = e.touches[0];
-      const deltaX = touch.clientX - lastTouchRef.current.x;
-      const deltaY = touch.clientY - lastTouchRef.current.y;
+      const rawDeltaX = touch.clientX - lastTouchRef.current.x;
+      const rawDeltaY = touch.clientY - lastTouchRef.current.y;
+
+      // Transform deltas for portrait mode rotation
+      const { x: deltaX, y: deltaY } = transformDelta(rawDeltaX, rawDeltaY);
 
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
 
@@ -116,7 +134,7 @@ export function useStereoGestures(
         });
       }
     }
-  }, [state.scale, clampTranslate]);
+  }, [state.scale, clampTranslate, transformDelta]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (e.touches.length === 0) {
@@ -125,8 +143,14 @@ export function useStereoGestures(
       // Check for swipe (only when not zoomed)
       if (touchStartRef.current && state.scale <= 1) {
         const endX = e.changedTouches[0].clientX;
+        const endY = e.changedTouches[0].clientY;
         const endTime = Date.now();
-        const deltaX = endX - touchStartRef.current.x;
+        const rawDeltaX = endX - touchStartRef.current.x;
+        const rawDeltaY = endY - touchStartRef.current.y;
+
+        // Transform deltas for portrait mode rotation
+        const { x: deltaX } = transformDelta(rawDeltaX, rawDeltaY);
+
         const deltaTime = endTime - touchStartRef.current.time;
         const velocity = Math.abs(deltaX) / deltaTime;
 
@@ -163,7 +187,7 @@ export function useStereoGestures(
       const touch = e.touches[0];
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     }
-  }, [state.scale, onSwipeLeft, onSwipeRight]);
+  }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta]);
 
   const resetTransform = useCallback(() => {
     setState({ scale: 1, translateX: 0, translateY: 0 });
