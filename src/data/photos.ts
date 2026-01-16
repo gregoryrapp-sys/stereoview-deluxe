@@ -1,15 +1,16 @@
+import stereoPhoto1 from '@/assets/stereo-photo-1.jpeg';
+
 export interface Photo {
   id: string;
   src: string;
   alt: string;
 }
 
-// Placeholder photos with 1:2 aspect ratio patterns
-// These will be replaced with real stereoscopic images
+// Stereoscopic photos - add more imports and entries as needed
 export const photos: Photo[] = [
   {
     id: '1',
-    src: 'https://placehold.co/2000x1000/1a1a2e/4a4a6a?text=Stereo+Photo+1',
+    src: stereoPhoto1,
     alt: 'Stereoscopic photo 1'
   },
   {
