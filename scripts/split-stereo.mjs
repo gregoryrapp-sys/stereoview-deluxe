@@ -7,6 +7,7 @@ const images = [
   { input: 'src/assets/IMG_2824.jpeg', id: '3', alt: 'Three friends on the dance floor' },
   { input: 'src/assets/IMG_2911.jpeg', id: '4', alt: 'Friends dancing at the party' },
   { input: 'src/assets/IMG_3084.jpeg', id: '5', alt: 'Group carrying friend at celebration' },
+  { input: 'src/assets/Crop test.jpeg', id: '6', alt: 'Crop test' },
 ];
 
 const outputDir = 'public/photos';

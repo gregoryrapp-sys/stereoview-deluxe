@@ -43,5 +43,12 @@ export const photos: Photo[] = [
     srcRight: '/photos/5-right.jpg',
     srcGif: '/photos/5-wiggle.gif',
     alt: 'Group carrying friend at celebration'
+  },
+  {
+    id: '6',
+    srcLeft: '/photos/6-left.jpg',
+    srcRight: '/photos/6-right.jpg',
+    srcGif: '/photos/6-wiggle.gif',
+    alt: 'Crop test'
   }
 ];
