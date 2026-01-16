@@ -76,7 +76,8 @@ export default function StereoViewer({
     handleSwipeLeft,
     handleSwipeRight,
     containerSize.width,
-    containerSize.height
+    containerSize.height,
+    isPortrait
   );
 
   // Reset transform when photo changes
