@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
-import { useFullscreenLandscape } from '@/hooks/useFullscreenLandscape';
 import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,29 +23,18 @@ export default function StereoViewer({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
 
-  // Fullscreen and landscape orientation lock
-  const { containerRef, exitFullscreen, isPortrait } = useFullscreenLandscape(true, onClose);
-
   // Update container size on mount and resize
   useEffect(() => {
     const updateSize = () => {
-      // When in portrait mode and rotated, swap width/height for gesture calculations
-      if (isPortrait) {
-        setContainerSize({
-          width: window.innerHeight,
-          height: window.innerWidth,
-        });
-      } else {
-        setContainerSize({
-          width: window.innerWidth,
-          height: window.innerHeight,
-        });
-      }
+      setContainerSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
     };
     updateSize();
     window.addEventListener('resize', updateSize);
     return () => window.removeEventListener('resize', updateSize);
-  }, [isPortrait]);
+  }, []);
 
   const handleSwipeLeft = useCallback(() => {
     setSwipeDirection('left');
@@ -77,7 +65,7 @@ export default function StereoViewer({
     handleSwipeRight,
     containerSize.width,
     containerSize.height,
-    isPortrait
+    false // not portrait rotated
   );
 
   // Reset transform when photo changes
@@ -92,50 +80,27 @@ export default function StereoViewer({
     }
   };
 
-  // Handle close with fullscreen exit
-  const handleClose = useCallback(async () => {
-    await exitFullscreen();
-    onClose();
-  }, [exitFullscreen, onClose]);
-
   // Handle swipe down to close
   const handleSwipeDown = useCallback((e: React.TouchEvent) => {
     if (scale <= 1) {
       const touch = e.changedTouches[0];
       const startY = (e as any).startY;
       if (startY !== undefined && touch.clientY - startY > 100) {
-        handleClose();
+        onClose();
       }
     }
-  }, [scale, handleClose]);
+  }, [scale, onClose]);
 
   // The transform to apply to each half (synchronized)
   const imageTransform = `scale(${scale}) translate(${translateX / scale}px, ${translateY / scale}px)`;
 
-  // Calculate rotation styles for portrait mode
-  const rotationStyles = isPortrait
-    ? {
-        transform: 'rotate(90deg)',
-        transformOrigin: 'center center',
-        width: `${window.innerHeight}px`,
-        height: `${window.innerWidth}px`,
-        position: 'fixed' as const,
-        top: '50%',
-        left: '50%',
-        marginTop: `-${window.innerWidth / 2}px`,
-        marginLeft: `-${window.innerHeight / 2}px`,
-      }
-    : {};
-
   return (
     <div
-      ref={containerRef}
       className={cn(
-        "viewer-container fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--viewer-bg))]",
+        "viewer-container h-full w-full flex items-center justify-center bg-black",
         swipeDirection === 'left' && "animate-slide-left",
         swipeDirection === 'right' && "animate-slide-right"
       )}
-      style={rotationStyles}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={(e) => {
@@ -181,7 +146,7 @@ export default function StereoViewer({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          handleClose();
+          onClose();
         }}
         className={cn(
           "absolute right-4 top-4 rounded-full bg-secondary/60 p-3 text-foreground backdrop-blur-sm transition-opacity duration-200",
