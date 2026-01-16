@@ -8,17 +8,17 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const CORRECT_PASSWORD = '8888';
+const CORRECT_PASSWORD = '88888888';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return sessionStorage.getItem('gregsPhotosAuth') === 'true';
+    return localStorage.getItem('gregsPhotosAuth') === 'true';
   });
 
   const login = (password: string): boolean => {
     if (password === CORRECT_PASSWORD) {
       setIsAuthenticated(true);
-      sessionStorage.setItem('gregsPhotosAuth', 'true');
+      localStorage.setItem('gregsPhotosAuth', 'true');
       return true;
     }
     return false;
@@ -26,7 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = () => {
     setIsAuthenticated(false);
-    sessionStorage.removeItem('gregsPhotosAuth');
+    localStorage.removeItem('gregsPhotosAuth');
   };
 
   return (

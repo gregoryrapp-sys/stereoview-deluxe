@@ -79,8 +79,8 @@ cn("base-class", condition && "conditional-class", className)
 
 ### Authentication
 - Context-based auth via `AuthContext.tsx`
-- Current password: `"8888"` (hardcoded for dev)
-- State persisted in sessionStorage
+- Current password: `"88888888"` (hardcoded for dev)
+- State persisted in localStorage (survives browser close)
 - Use `useAuth()` hook to access auth state
 
 ## Routes
