@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import { Photo } from '@/data/photos';
-import { useOrientation } from '@/hooks/useOrientation';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
-import { X, RotateCcw } from 'lucide-react';
+import { useFullscreenLandscape } from '@/hooks/useFullscreenLandscape';
+import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface StereoViewerProps {
@@ -20,10 +20,12 @@ export default function StereoViewer({
   onPrevious,
   onNext,
 }: StereoViewerProps) {
-  const isLandscape = useOrientation();
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+
+  // Fullscreen and landscape orientation lock
+  const { containerRef, exitFullscreen } = useFullscreenLandscape(true, onClose);
 
   // Update container size on mount and resize
   useEffect(() => {
@@ -81,47 +83,29 @@ export default function StereoViewer({
     }
   };
 
+  // Handle close with fullscreen exit
+  const handleClose = useCallback(async () => {
+    await exitFullscreen();
+    onClose();
+  }, [exitFullscreen, onClose]);
+
   // Handle swipe down to close
   const handleSwipeDown = useCallback((e: React.TouchEvent) => {
     if (scale <= 1) {
       const touch = e.changedTouches[0];
       const startY = (e as any).startY;
       if (startY !== undefined && touch.clientY - startY > 100) {
-        onClose();
+        handleClose();
       }
     }
-  }, [scale, onClose]);
-
-  // Orientation prompt for portrait mode
-  if (!isLandscape) {
-    return (
-      <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-[hsl(var(--viewer-bg))]">
-        <div className="rotate-prompt flex flex-col items-center space-y-6 text-center">
-          <RotateCcw className="h-20 w-20 text-muted-foreground" />
-          <div className="space-y-2">
-            <p className="text-xl font-light text-foreground">
-              Rotate Your Phone
-            </p>
-            <p className="text-muted-foreground">
-              Landscape mode required for stereoscopic viewing
-            </p>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="absolute right-4 top-4 rounded-full bg-secondary/80 p-2 text-foreground"
-        >
-          <X className="h-6 w-6" />
-        </button>
-      </div>
-    );
-  }
+  }, [scale, handleClose]);
 
   // The transform to apply to each half (synchronized)
   const imageTransform = `scale(${scale}) translate(${translateX / scale}px, ${translateY / scale}px)`;
 
   return (
     <div
+      ref={containerRef}
       className={cn(
         "viewer-container fixed inset-0 z-50 flex items-center justify-center bg-[hsl(var(--viewer-bg))]",
         swipeDirection === 'left' && "animate-slide-left",
@@ -172,7 +156,7 @@ export default function StereoViewer({
       <button
         onClick={(e) => {
           e.stopPropagation();
-          onClose();
+          handleClose();
         }}
         className={cn(
           "absolute right-4 top-4 rounded-full bg-secondary/60 p-3 text-foreground backdrop-blur-sm transition-opacity duration-200",
