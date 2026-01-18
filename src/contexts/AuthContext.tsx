@@ -1,39 +1,58 @@
-import React, { createContext, useContext, useState, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import { UserAccount } from '@/lib/types';
+import { ensureSeedData, getCurrentUserId, getUsers, setCurrentUserId } from '@/lib/storage';
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  login: (password: string) => boolean;
+  currentUser: UserAccount | null;
+  isAdmin: boolean;
+  login: (username: string, password: string) => UserAccount | null;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const CORRECT_PASSWORD = '88888888';
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('gregsPhotosAuth') === 'true';
-  });
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
 
-  const login = (password: string): boolean => {
-    if (password === CORRECT_PASSWORD) {
-      setIsAuthenticated(true);
-      localStorage.setItem('gregsPhotosAuth', 'true');
-      return true;
+  useEffect(() => {
+    ensureSeedData();
+    const userId = getCurrentUserId();
+    if (userId) {
+      const user = getUsers().find((entry) => entry.id === userId) ?? null;
+      setCurrentUser(user);
     }
-    return false;
+  }, []);
+
+  const login = (username: string, password: string): UserAccount | null => {
+    const user = getUsers().find(
+      (entry) => entry.username.toLowerCase() === username.toLowerCase() && entry.password === password
+    );
+    if (user) {
+      setCurrentUser(user);
+      setCurrentUserId(user.id);
+      return user;
+    }
+    return null;
   };
 
   const logout = () => {
-    setIsAuthenticated(false);
-    localStorage.removeItem('gregsPhotosAuth');
+    setCurrentUser(null);
+    setCurrentUserId(null);
   };
 
-  return (
-    <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({
+      isAuthenticated: !!currentUser,
+      currentUser,
+      isAdmin: currentUser?.role === 'admin',
+      login,
+      logout
+    }),
+    [currentUser]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
