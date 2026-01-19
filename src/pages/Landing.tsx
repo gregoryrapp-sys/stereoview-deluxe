@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
@@ -6,19 +6,29 @@ import { Input } from '@/components/ui/input';
 import { Camera } from 'lucide-react';
 
 export default function Landing() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
-  const { login } = useAuth();
+  const { login, currentUser } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (currentUser?.role === 'admin') {
+      navigate('/admin');
+    } else if (currentUser?.role === 'user') {
+      navigate('/user');
+    }
+  }, [currentUser, navigate]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (login(password)) {
-      navigate('/gallery');
+    const matchedUser = login(username, password);
+    if (matchedUser) {
+      navigate(matchedUser.role === 'admin' ? '/admin' : '/user');
     } else {
-      setError('Incorrect password');
+      setError('Incorrect username or password');
       setPassword('');
     }
   };
@@ -36,10 +46,10 @@ export default function Landing() {
         {/* Header */}
         <div className="text-center">
           <h1 className="text-3xl font-light tracking-wide text-foreground">
-            Welcome to Greg's Photos
+            StereoViewer
           </h1>
           <p className="mt-2 text-muted-foreground">
-            Enter password to continue
+            Sign in to continue
           </p>
         </div>
 
@@ -47,12 +57,19 @@ export default function Landing() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="h-12 bg-secondary text-center text-lg"
+              autoFocus
+            />
+            <Input
               type="password"
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="h-12 bg-secondary text-center text-lg tracking-widest"
-              autoFocus
             />
             {error && (
               <p className="text-center text-sm text-destructive">{error}</p>
@@ -62,7 +79,7 @@ export default function Landing() {
           <Button
             type="submit"
             className="h-12 w-full text-lg"
-            disabled={!password}
+            disabled={!username || !password}
           >
             Enter
           </Button>
