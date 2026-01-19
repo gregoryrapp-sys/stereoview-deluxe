@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Camera } from 'lucide-react';
 
 export default function Landing() {
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const { login } = useAuth();
@@ -19,6 +20,7 @@ export default function Landing() {
       navigate('/gallery');
     } else {
       setError('Incorrect password');
+      setUsername('');
       setPassword('');
     }
   };
@@ -39,7 +41,7 @@ export default function Landing() {
             Welcome to Greg's Photos
           </h1>
           <p className="mt-2 text-muted-foreground">
-            Enter password to continue
+            Enter your username and password to continue
           </p>
         </div>
 
@@ -47,12 +49,19 @@ export default function Landing() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="h-12 bg-secondary text-center text-lg"
+              autoFocus
+            />
+            <Input
               type="password"
               placeholder="Password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="h-12 bg-secondary text-center text-lg tracking-widest"
-              autoFocus
             />
             {error && (
               <p className="text-center text-sm text-destructive">{error}</p>
@@ -62,7 +71,7 @@ export default function Landing() {
           <Button
             type="submit"
             className="h-12 w-full text-lg"
-            disabled={!password}
+            disabled={!username || !password}
           >
             Enter
           </Button>
