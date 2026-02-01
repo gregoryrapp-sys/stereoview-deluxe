@@ -12,6 +12,7 @@ interface GifViewerProps {
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
+  photoSet?: Photo[];
 }
 
 // Frame interval in ms (matches original GIF at 150ms)
@@ -25,12 +26,14 @@ export default function GifViewer({
   onNext,
   hasPrevious,
   hasNext,
+  photoSet,
 }: GifViewerProps) {
   const [showControls, setShowControls] = useState(true);
   const [showLeft, setShowLeft] = useState(true);
   const [isPlaying, setIsPlaying] = useState(true);
   const touchStartX = useRef<number>(0);
   const touchStartY = useRef<number>(0);
+  const activePhotos = photoSet ?? photos;
 
   // Process the stereo image into left/right halves
   const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
@@ -39,13 +42,13 @@ export default function GifViewer({
   const adjacentSrcs = useMemo(() => {
     const srcs: string[] = [];
     if (photoIndex > 0) {
-      srcs.push(photos[photoIndex - 1].src);
+      srcs.push(activePhotos[photoIndex - 1].src);
     }
-    if (photoIndex < photos.length - 1) {
-      srcs.push(photos[photoIndex + 1].src);
+    if (photoIndex < activePhotos.length - 1) {
+      srcs.push(activePhotos[photoIndex + 1].src);
     }
     return srcs;
-  }, [photoIndex]);
+  }, [activePhotos, photoIndex]);
 
   usePreloadImages(adjacentSrcs);
 

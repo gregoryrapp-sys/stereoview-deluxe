@@ -1,36 +1,49 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
+import { users, User } from '@/data/users';
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  login: (password: string) => boolean;
+  user: User | null;
+  login: (username: string, password: string) => User | null;
   logout: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const CORRECT_PASSWORD = '88888888';
+const STORAGE_KEY = 'stereoViewerAuthUser';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    return localStorage.getItem('gregsPhotosAuth') === 'true';
+  const [user, setUser] = useState<User | null>(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return null;
+    try {
+      return JSON.parse(stored) as User;
+    } catch {
+      return null;
+    }
   });
 
-  const login = (password: string): boolean => {
-    if (password === CORRECT_PASSWORD) {
-      setIsAuthenticated(true);
-      localStorage.setItem('gregsPhotosAuth', 'true');
-      return true;
+  const login = (username: string, password: string): User | null => {
+    const matchedUser = users.find(
+      (candidate) =>
+        candidate.username.toLowerCase() === username.toLowerCase() &&
+        candidate.password === password
+    );
+    if (matchedUser) {
+      setUser(matchedUser);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(matchedUser));
+      return matchedUser;
     }
-    return false;
+    return null;
   };
 
   const logout = () => {
-    setIsAuthenticated(false);
-    localStorage.removeItem('gregsPhotosAuth');
+    setUser(null);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, login, logout }}>
+    <AuthContext.Provider value={{ isAuthenticated: !!user, user, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -5,7 +5,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Landing from "./pages/Landing";
-import Gallery from "./pages/Gallery";
+import Login from "./pages/Login";
+import Admin from "./pages/Admin";
+import UserDashboard from "./pages/UserDashboard";
+import AlbumView from "./pages/AlbumView";
+import ViewerPage from "./pages/ViewerPage";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -19,7 +23,11 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Landing />} />
-            <Route path="/gallery" element={<Gallery />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/admin" element={<Admin />} />
+            <Route path="/user/:username" element={<UserDashboard />} />
+            <Route path="/album/:albumId" element={<AlbumView />} />
+            <Route path="/viewer/:albumId/:photoId" element={<ViewerPage />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
