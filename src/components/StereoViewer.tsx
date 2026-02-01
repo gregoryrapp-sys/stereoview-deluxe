@@ -13,6 +13,7 @@ interface StereoViewerProps {
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
+  photoSet?: Photo[];
 }
 
 export default function StereoViewer({
@@ -21,10 +22,12 @@ export default function StereoViewer({
   onClose,
   onPrevious,
   onNext,
+  photoSet,
 }: StereoViewerProps) {
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+  const activePhotos = photoSet ?? photos;
 
   // Process the stereo image into left/right halves
   const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
@@ -33,13 +36,13 @@ export default function StereoViewer({
   const adjacentSrcs = useMemo(() => {
     const srcs: string[] = [];
     if (photoIndex > 0) {
-      srcs.push(photos[photoIndex - 1].src);
+      srcs.push(activePhotos[photoIndex - 1].src);
     }
-    if (photoIndex < photos.length - 1) {
-      srcs.push(photos[photoIndex + 1].src);
+    if (photoIndex < activePhotos.length - 1) {
+      srcs.push(activePhotos[photoIndex + 1].src);
     }
     return srcs;
-  }, [photoIndex]);
+  }, [activePhotos, photoIndex]);
 
   usePreloadImages(adjacentSrcs);
 
