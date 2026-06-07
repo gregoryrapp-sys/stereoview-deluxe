@@ -11,9 +11,11 @@ interface TouchPoint {
   y: number;
 }
 
-const MIN_SCALE = 1;
+const MIN_SCALE = 0.5;
 const MAX_SCALE = 5;
 const DOUBLE_TAP_ZOOM = 2.5;
+const DEFAULT_SCALE = 1;
+const SCALE_EPSILON = 0.01;
 const SWIPE_THRESHOLD = 50;
 const SWIPE_VELOCITY_THRESHOLD = 0.3;
 
@@ -25,7 +27,7 @@ export function useStereoGestures(
   isPortrait: boolean = false
 ) {
   const [state, setState] = useState<GestureState>({
-    scale: 1,
+    scale: DEFAULT_SCALE,
     translateX: 0,
     translateY: 0,
   });
@@ -33,12 +35,12 @@ export function useStereoGestures(
   const lastTouchRef = useRef<TouchPoint | null>(null);
   const lastTouchTimeRef = useRef<number>(0);
   const initialPinchDistanceRef = useRef<number>(0);
-  const initialScaleRef = useRef<number>(1);
+  const initialScaleRef = useRef<number>(DEFAULT_SCALE);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const isPinchingRef = useRef(false);
 
   const clampTranslate = useCallback((x: number, y: number, scale: number) => {
-    if (scale <= 1) {
+    if (scale <= DEFAULT_SCALE) {
       return { x: 0, y: 0 };
     }
 
@@ -119,7 +121,7 @@ export function useStereoGestures(
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
 
       // Only pan if zoomed in
-      if (state.scale > 1) {
+      if (state.scale > DEFAULT_SCALE) {
         setState(prev => {
           const clamped = clampTranslate(
             prev.translateX + deltaX,
@@ -140,8 +142,8 @@ export function useStereoGestures(
     if (e.touches.length === 0) {
       isPinchingRef.current = false;
 
-      // Check for swipe (only when not zoomed)
-      if (touchStartRef.current && state.scale <= 1) {
+      // Check for swipe (only when at or below the default size)
+      if (touchStartRef.current && state.scale <= DEFAULT_SCALE) {
         const endX = e.changedTouches[0].clientX;
         const endY = e.changedTouches[0].clientY;
         const endTime = Date.now();
@@ -168,9 +170,9 @@ export function useStereoGestures(
       if (now - lastTouchTimeRef.current < 300) {
         // Double tap detected
         setState(prev => {
-          if (prev.scale > 1) {
-            // Zoom out
-            return { scale: 1, translateX: 0, translateY: 0 };
+          if (Math.abs(prev.scale - DEFAULT_SCALE) > SCALE_EPSILON) {
+            // Reset to default
+            return { scale: DEFAULT_SCALE, translateX: 0, translateY: 0 };
           } else {
             // Zoom in
             return { scale: DOUBLE_TAP_ZOOM, translateX: 0, translateY: 0 };
@@ -190,7 +192,7 @@ export function useStereoGestures(
   }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta]);
 
   const resetTransform = useCallback(() => {
-    setState({ scale: 1, translateX: 0, translateY: 0 });
+    setState({ scale: DEFAULT_SCALE, translateX: 0, translateY: 0 });
   }, []);
 
   return {

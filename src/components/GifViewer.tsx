@@ -1,11 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Photo, photos } from '@/data/photos';
+import { Photo } from '@/data/photos';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { X, ChevronLeft, ChevronRight, Loader2, Pause, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 interface GifViewerProps {
   photo: Photo;
+  photos: Photo[];
   photoIndex: number;
   onClose: () => void;
   onPrevious: () => void;
@@ -19,6 +20,7 @@ const FRAME_INTERVAL = 150;
 
 export default function GifViewer({
   photo,
+  photos,
   photoIndex,
   onClose,
   onPrevious,
@@ -45,7 +47,7 @@ export default function GifViewer({
       srcs.push(photos[photoIndex + 1].src);
     }
     return srcs;
-  }, [photoIndex]);
+  }, [photoIndex, photos]);
 
   usePreloadImages(adjacentSrcs);
 
