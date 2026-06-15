@@ -21,6 +21,10 @@ type WebKitFullscreenElement = HTMLElement & {
   webkitRequestFullscreen?: () => Promise<void> | void;
 };
 
+function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
+  return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
+}
+
 export default function Gallery() {
   const { isAuthenticated, isAdmin, isLoading: isAuthLoading, logout, profile } = useAuth();
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
@@ -52,6 +56,24 @@ export default function Gallery() {
       return counts;
     }, {});
   }, [galleryData.albums]);
+
+  const photosByAlbum = useMemo(() => {
+    return galleryData.photos.reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {
+      if (!photo.albumId) return groups;
+
+      groups[photo.albumId] = [...(groups[photo.albumId] ?? []), photo];
+      return groups;
+    }, {});
+  }, [galleryData.photos]);
+
+  const photosByEvent = useMemo(() => {
+    return galleryData.photos.reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {
+      if (!photo.eventId) return groups;
+
+      groups[photo.eventId] = [...(groups[photo.eventId] ?? []), photo];
+      return groups;
+    }, {});
+  }, [galleryData.photos]);
 
   const selectedAlbum = useMemo(
     () => galleryData.albums.find((album) => album.id === selectedAlbumId) ?? null,
@@ -200,6 +222,9 @@ export default function Gallery() {
     selectedAlbum && selectedEvent
       ? `/upload?event=${selectedEvent.id}&album=${selectedAlbum.id}`
       : '/upload';
+  const selectedAlbumCover = selectedAlbum
+    ? getCoverPhoto(photosByAlbum[selectedAlbum.id] ?? [], selectedAlbum.cover_photo_id)
+    : null;
 
   return (
     <div className="min-h-screen">
@@ -289,18 +314,28 @@ export default function Gallery() {
 
             {galleryData.events.length > 0 ? galleryData.events.map((event) => {
               const eventAlbums = galleryData.albums.filter((album) => album.event_id === event.id);
+              const eventCover = getCoverPhoto(photosByEvent[event.id] ?? [], event.cover_photo_id);
 
               return (
                 <section key={event.id} className="space-y-2 rounded-md bg-background/60 p-2">
                   <button
                     onClick={() => handleSelectEvent(event.id)}
-                    className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left transition-colors ${
+                    className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left transition-colors ${
                       selectedEventId === event.id
                         ? 'bg-primary text-primary-foreground'
                         : 'text-foreground hover:bg-accent'
                     }`}
                   >
-                    <span className="min-w-0">
+                    <span className="h-12 w-16 shrink-0 overflow-hidden rounded bg-secondary">
+                      {eventCover ? (
+                        <StereoThumbnail photo={eventCover} />
+                      ) : (
+                        <span className="flex h-full w-full items-center justify-center">
+                          <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                        </span>
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">{event.title}</span>
                       <span
                         className={`block text-xs ${
@@ -310,25 +345,34 @@ export default function Gallery() {
                         {albumCountsByEvent[event.id] ?? 0} albums
                       </span>
                     </span>
-                    <FolderOpen className="h-4 w-4 shrink-0" />
                   </button>
 
                   {eventAlbums.length > 0 ? (
                     <div className="space-y-2">
                       {eventAlbums.map((album) => {
                         const isSelectedAlbum = selectedAlbumId === album.id;
+                        const albumCover = getCoverPhoto(photosByAlbum[album.id] ?? [], album.cover_photo_id);
 
                         return (
                           <div key={album.id} className="rounded-md border border-border/70 bg-secondary/40 p-2">
                             <button
                               onClick={() => handleSelectAlbum(album.id)}
-                              className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-2 text-left transition-colors ${
+                              className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors ${
                                 isSelectedAlbum
                                   ? 'bg-primary text-primary-foreground'
                                   : 'text-foreground hover:bg-accent'
                               }`}
                             >
-                              <span className="min-w-0">
+                              <span className="h-10 w-14 shrink-0 overflow-hidden rounded bg-background">
+                                {albumCover ? (
+                                  <StereoThumbnail photo={albumCover} />
+                                ) : (
+                                  <span className="flex h-full w-full items-center justify-center">
+                                    <Images className="h-4 w-4 text-muted-foreground" />
+                                  </span>
+                                )}
+                              </span>
+                              <span className="min-w-0 flex-1">
                                 <span className="block truncate text-sm">{album.title}</span>
                                 <span
                                   className={`block text-xs ${
@@ -338,7 +382,6 @@ export default function Gallery() {
                                   {photoCountsByAlbum[album.id] ?? 0} photos
                                 </span>
                               </span>
-                              <Images className="h-4 w-4 shrink-0" />
                             </button>
                           </div>
                         );
@@ -357,14 +400,25 @@ export default function Gallery() {
           </aside>
 
           <section className="min-w-0 space-y-3 lg:h-full lg:min-h-0 lg:overflow-auto lg:pr-1">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-light">
-                  {selectedAlbum?.title ?? 'Photos'}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
-                </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="h-16 w-24 shrink-0 overflow-hidden rounded-md bg-secondary">
+                  {selectedAlbumCover ? (
+                    <StereoThumbnail photo={selectedAlbumCover} />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <Images className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h2 className="truncate text-lg font-light">
+                    {selectedAlbum?.title ?? 'Photos'}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
+                  </p>
+                </div>
               </div>
               <div className="flex gap-2">
                 <Button asChild variant="secondary" className="gap-2">

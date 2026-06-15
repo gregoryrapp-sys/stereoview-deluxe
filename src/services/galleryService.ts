@@ -1,6 +1,6 @@
 import type { Photo } from '@/data/photos';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
-import type { AlbumRecord, EventRecord, PhotoRecord } from '@/types/database';
+import type { AlbumRecord, EventRecord, PhotoRecord, Profile, ShareLinkRecord, ShareScope } from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
   albumId?: string;
@@ -12,6 +12,12 @@ export interface GalleryData {
   events: EventRecord[];
   albums: AlbumRecord[];
   photos: GalleryPhoto[];
+}
+
+export type PublicProfile = Omit<Profile, 'email'>;
+
+export interface SharedGalleryData extends GalleryData {
+  profile: PublicProfile;
 }
 
 export type UploadImageSource =
@@ -29,6 +35,14 @@ const SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60;
 
 function safeFileName(name: string) {
   return name.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-');
+}
+
+export function makeSlug(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 }
 
 function loadImageUrl(url: string, label: string): Promise<HTMLImageElement> {
@@ -138,6 +152,21 @@ async function getPhotoUrl(photo: PhotoRecord): Promise<string> {
   return data.signedUrl;
 }
 
+async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: AlbumRecord[]): Promise<GalleryPhoto[]> {
+  const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
+
+  return Promise.all(
+    photoRows.map(async (photo) => ({
+      id: photo.id,
+      src: await getPhotoUrl(photo),
+      alt: photo.alt,
+      albumId: photo.album_id,
+      eventId: albumEventIds.get(photo.album_id),
+      storagePath: photo.storage_path,
+    })),
+  );
+}
+
 export async function fetchGalleryData(): Promise<GalleryData> {
   const { data: events, error: eventsError } = await supabase
     .from('events')
@@ -179,19 +208,49 @@ export async function fetchGalleryData(): Promise<GalleryData> {
     throw photosError;
   }
 
-  const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
-  const photos = await Promise.all(
-    photoRows.map(async (photo) => ({
-      id: photo.id,
-      src: await getPhotoUrl(photo),
-      alt: photo.alt,
-      albumId: photo.album_id,
-      eventId: albumEventIds.get(photo.album_id),
-      storagePath: photo.storage_path,
-    })),
-  );
+  const photos = await mapPhotoRowsToGalleryPhotos(photoRows, albums);
 
   return { events, albums, photos };
+}
+
+interface SharedGalleryRpcData {
+  profile: PublicProfile;
+  events: EventRecord[];
+  albums: AlbumRecord[];
+  photos: PhotoRecord[];
+}
+
+export async function fetchSharedGalleryBySlugs({
+  profileSlug,
+  eventSlug,
+  albumSlug,
+  password,
+}: {
+  profileSlug: string;
+  eventSlug?: string | null;
+  albumSlug?: string | null;
+  password: string;
+}): Promise<SharedGalleryData> {
+  const { data, error } = await supabase.rpc('get_shared_gallery_by_slugs', {
+    p_profile_slug: profileSlug,
+    p_event_slug: eventSlug ?? null,
+    p_album_slug: albumSlug ?? null,
+    p_password: password,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  const sharedData = data as SharedGalleryRpcData;
+  const photos = await mapPhotoRowsToGalleryPhotos(sharedData.photos, sharedData.albums);
+
+  return {
+    profile: sharedData.profile,
+    events: sharedData.events,
+    albums: sharedData.albums,
+    photos,
+  };
 }
 
 export async function uploadStereoPairPhoto({
@@ -242,10 +301,12 @@ export async function createEvent({
   ownerId,
   title,
   description,
+  slug,
 }: {
   ownerId: string;
   title: string;
   description?: string;
+  slug?: string;
 }): Promise<EventRecord> {
   const { data, error } = await supabase
     .from('events')
@@ -253,6 +314,7 @@ export async function createEvent({
       owner_id: ownerId,
       title,
       description: description || null,
+      slug: slug ? makeSlug(slug) : undefined,
     })
     .select('*')
     .single();
@@ -268,10 +330,12 @@ export async function createAlbum({
   eventId,
   title,
   description,
+  slug,
 }: {
   eventId: string;
   title: string;
   description?: string;
+  slug?: string;
 }): Promise<AlbumRecord> {
   const { data, error } = await supabase
     .from('albums')
@@ -279,6 +343,7 @@ export async function createAlbum({
       event_id: eventId,
       title,
       description: description || null,
+      slug: slug ? makeSlug(slug) : undefined,
     })
     .select('*')
     .single();
@@ -294,16 +359,22 @@ export async function updateEvent({
   eventId,
   title,
   description,
+  slug,
+  coverPhotoId,
 }: {
   eventId: string;
   title: string;
   description?: string;
+  slug?: string;
+  coverPhotoId?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from('events')
     .update({
       title,
       description: description || null,
+      ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
+      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
     })
     .eq('id', eventId);
 
@@ -316,22 +387,121 @@ export async function updateAlbum({
   albumId,
   title,
   description,
+  slug,
+  coverPhotoId,
 }: {
   albumId: string;
   title: string;
   description?: string;
+  slug?: string;
+  coverPhotoId?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from('albums')
     .update({
       title,
       description: description || null,
+      ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
+      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
     })
     .eq('id', albumId);
 
   if (error) {
     throw error;
   }
+}
+
+export async function updateProfilePresentation({
+  profileId,
+  displayName,
+  slug,
+  coverPhotoId,
+}: {
+  profileId: string;
+  displayName?: string | null;
+  slug?: string;
+  coverPhotoId?: string | null;
+}): Promise<void> {
+  const { error } = await supabase
+    .from('profiles')
+    .update({
+      ...(displayName !== undefined ? { display_name: displayName || null } : {}),
+      ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
+      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
+    })
+    .eq('id', profileId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function createShareLink({
+  scope,
+  profileId,
+  eventId,
+  albumId,
+  password,
+  expiresAt,
+}: {
+  scope: ShareScope;
+  profileId?: string | null;
+  eventId?: string | null;
+  albumId?: string | null;
+  password: string;
+  expiresAt?: string | null;
+}): Promise<ShareLinkRecord> {
+  const { data, error } = await supabase.rpc('create_share_link', {
+    p_scope: scope,
+    p_profile_id: profileId ?? null,
+    p_event_id: eventId ?? null,
+    p_album_id: albumId ?? null,
+    p_password: password,
+    p_expires_at: expiresAt ?? null,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function fetchShareLinks(): Promise<ShareLinkRecord[]> {
+  const { data, error } = await supabase
+    .from('share_links')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+export async function revokeShareLink(shareLinkId: string): Promise<void> {
+  const { error } = await supabase
+    .from('share_links')
+    .update({ is_active: false })
+    .eq('id', shareLinkId);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function verifySharePassword(token: string, password: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('verify_share_password', {
+    p_token: token,
+    p_password: password,
+  });
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
 }
 
 async function removeStorageObjects(paths: string[]) {

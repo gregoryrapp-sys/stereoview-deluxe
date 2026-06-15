@@ -10,6 +10,7 @@ import Gallery from "./pages/Gallery";
 import Admin from "./pages/Admin";
 import UploadPhoto from "./pages/UploadPhoto";
 import EventAlbumManagement from "./pages/EventAlbumManagement";
+import PublicGallery from "./pages/PublicGallery";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,9 @@ const App = () => (
             <Route path="/upload" element={<UploadPhoto />} />
             <Route path="/manage" element={<EventAlbumManagement />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/:profileSlug" element={<PublicGallery />} />
+            <Route path="/:profileSlug/:eventSlug" element={<PublicGallery />} />
+            <Route path="/:profileSlug/:eventSlug/:albumSlug" element={<PublicGallery />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
