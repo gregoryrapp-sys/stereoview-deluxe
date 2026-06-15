@@ -127,11 +127,10 @@ export default function StereoViewer({
       }
     : null;
 
-  // Transform the actual image-sized stage, not the full viewport. This keeps
-  // zoom anchored to the visible image's left edge instead of scaling
-  // object-contain padding.
+  // Transform the actual image-sized stage, not the full viewport. Scaling from
+  // the center keeps the stereo pair visually aligned at every zoom level.
   const imageTransform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
-  const imageTransformOrigin = 'left center';
+  const imageTransformOrigin = 'center center';
 
   return (
     <div

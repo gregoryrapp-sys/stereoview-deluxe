@@ -4,12 +4,13 @@ import { useAuth } from '@/contexts/AuthContext';
 import { fetchGalleryData, GalleryData, GalleryPhoto } from '@/services/galleryService';
 import StereoViewer from '@/components/StereoViewer';
 import GifViewer from '@/components/GifViewer';
+import TwoDViewer from '@/components/TwoDViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, FolderOpen, Images, LogOut, Settings, Shield, Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
-type ViewMode = 'stereo' | 'gif';
+type ViewMode = 'stereo' | '2d' | 'gif';
 
 type WebKitFullscreenDocument = Document & {
   webkitFullscreenElement?: Element | null;
@@ -236,6 +237,16 @@ export default function Gallery() {
               Stereo
             </button>
             <button
+              onClick={() => setViewMode('2d')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === '2d'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              2D
+            </button>
+            <button
               onClick={() => setViewMode('gif')}
               className={`rounded-md px-3 py-1 text-sm transition-colors ${
                 viewMode === 'gif'
@@ -399,6 +410,18 @@ export default function Gallery() {
       >
         {isViewerOpen && viewMode === 'stereo' && (
           <StereoViewer
+            photo={activePhotos[selectedPhotoIndex]}
+            photos={activePhotos}
+            photoIndex={selectedPhotoIndex}
+            onClose={handleCloseViewer}
+            onPrevious={() => handleNavigate('prev')}
+            onNext={() => handleNavigate('next')}
+            hasPrevious={selectedPhotoIndex > 0}
+            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+          />
+        )}
+        {isViewerOpen && viewMode === '2d' && (
+          <TwoDViewer
             photo={activePhotos[selectedPhotoIndex]}
             photos={activePhotos}
             photoIndex={selectedPhotoIndex}
