@@ -11,6 +11,7 @@ import Admin from "./pages/Admin";
 import UploadPhoto from "./pages/UploadPhoto";
 import EventAlbumManagement from "./pages/EventAlbumManagement";
 import PublicGallery from "./pages/PublicGallery";
+import Photographers from "./pages/Photographers";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,7 +29,10 @@ const App = () => (
             <Route path="/gallery" element={<Gallery />} />
             <Route path="/upload" element={<UploadPhoto />} />
             <Route path="/manage" element={<EventAlbumManagement />} />
+            <Route path="/manage/events/:eventId" element={<EventAlbumManagement />} />
+            <Route path="/manage/events/:eventId/albums/:albumId" element={<EventAlbumManagement />} />
             <Route path="/admin" element={<Admin />} />
+            <Route path="/photographers" element={<Photographers />} />
             <Route path="/:profileSlug" element={<PublicGallery />} />
             <Route path="/:profileSlug/:eventSlug" element={<PublicGallery />} />
             <Route path="/:profileSlug/:eventSlug/:albumSlug" element={<PublicGallery />} />

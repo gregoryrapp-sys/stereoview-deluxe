@@ -6,7 +6,7 @@ import StereoViewer from '@/components/StereoViewer';
 import GifViewer from '@/components/GifViewer';
 import TwoDViewer from '@/components/TwoDViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
-import { AlertCircle, FolderOpen, Images, LogOut, Settings, Shield, Upload } from 'lucide-react';
+import { AlertCircle, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
@@ -218,10 +218,6 @@ export default function Gallery() {
   };
 
   const isViewerOpen = selectedPhotoIndex !== null;
-  const uploadUrl =
-    selectedAlbum && selectedEvent
-      ? `/upload?event=${selectedEvent.id}&album=${selectedAlbum.id}`
-      : '/upload';
   const selectedAlbumCover = selectedAlbum
     ? getCoverPhoto(photosByAlbum[selectedAlbum.id] ?? [], selectedAlbum.cover_photo_id)
     : null;
@@ -240,6 +236,11 @@ export default function Gallery() {
           <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
             <Link to="/manage">
               <Settings className="h-5 w-5" />
+            </Link>
+          </Button>
+          <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
+            <Link to="/photographers">
+              <User className="h-5 w-5" />
             </Link>
           </Button>
           {isAdmin && (
@@ -427,10 +428,10 @@ export default function Gallery() {
                     Manage Events
                   </Link>
                 </Button>
-                <Button asChild className="gap-2">
-                  <Link to={uploadUrl}>
-                    <Upload className="h-4 w-4" />
-                    Add Photo
+                <Button asChild variant="secondary" className="gap-2">
+                  <Link to="/photographers">
+                    <User className="h-4 w-4" />
+                    Other Photographers
                   </Link>
                 </Button>
               </div>

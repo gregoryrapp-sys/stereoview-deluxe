@@ -47,7 +47,7 @@ export interface ShareLinkRecord {
   profile_id: string | null;
   event_id: string | null;
   album_id: string | null;
-  password_hash: string;
+  password_hash: string | null;
   created_by: string;
   is_active: boolean;
   expires_at: string | null;
@@ -117,7 +117,7 @@ export interface Database {
           profile_id?: string | null;
           event_id?: string | null;
           album_id?: string | null;
-          password_hash: string;
+          password_hash?: string | null;
           created_by: string;
           is_active?: boolean;
           expires_at?: string | null;
@@ -152,6 +152,10 @@ export interface Database {
           p_album_slug?: string | null;
           p_password?: string;
         };
+        Returns: unknown;
+      };
+      get_public_photographers: {
+        Args: Record<string, never>;
         Returns: unknown;
       };
     };

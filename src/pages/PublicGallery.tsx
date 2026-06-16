@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Lock, Unlock } from 'lucide-react';
 import StereoViewer from '@/components/StereoViewer';
@@ -20,6 +20,7 @@ export default function PublicGallery() {
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [hasTriedPublicOpen, setHasTriedPublicOpen] = useState(false);
 
   const selectedEvent = useMemo(
     () => sharedData?.events.find((event) => event.slug === eventSlug) ?? sharedData?.events[0] ?? null,
@@ -54,8 +55,7 @@ export default function PublicGallery() {
         : getCoverPhoto(sharedData.photos, sharedData.profile.cover_photo_id)
     : null;
 
-  const handleUnlock = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const openSharedGallery = async (passwordValue: string) => {
     setError('');
     setIsLoading(true);
 
@@ -64,7 +64,7 @@ export default function PublicGallery() {
         profileSlug,
         eventSlug,
         albumSlug,
-        password,
+        password: passwordValue,
       });
       setSharedData(data);
     } catch (unlockError) {
@@ -72,6 +72,17 @@ export default function PublicGallery() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  useEffect(() => {
+    if (hasTriedPublicOpen || sharedData) return;
+    setHasTriedPublicOpen(true);
+    openSharedGallery('');
+  }, [hasTriedPublicOpen, sharedData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleUnlock = async (event: React.FormEvent) => {
+    event.preventDefault();
+    openSharedGallery(password);
   };
 
   if (!sharedData) {
@@ -82,8 +93,10 @@ export default function PublicGallery() {
             <div className="mx-auto mb-2 rounded-full bg-secondary p-3">
               <Lock className="h-6 w-6" />
             </div>
-            <CardTitle>Shared Gallery</CardTitle>
-            <CardDescription>Enter the password to view this shared page.</CardDescription>
+            <CardTitle>{isLoading ? 'Opening Gallery' : 'Shared Gallery'}</CardTitle>
+            <CardDescription>
+              {isLoading ? 'Checking access...' : 'Enter the event password if this shared page requires one.'}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleUnlock} className="space-y-4">
@@ -91,7 +104,7 @@ export default function PublicGallery() {
                 <Label htmlFor="share-password">Password</Label>
                 <Input
                   id="share-password"
-                  type="password"
+                  type="text"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   autoFocus
@@ -103,7 +116,7 @@ export default function PublicGallery() {
                   <span>{error}</span>
                 </div>
               )}
-              <Button type="submit" className="w-full gap-2" disabled={!password || isLoading}>
+              <Button type="submit" className="w-full gap-2" disabled={isLoading}>
                 <Unlock className="h-4 w-4" />
                 {isLoading ? 'Opening...' : 'Open Gallery'}
               </Button>

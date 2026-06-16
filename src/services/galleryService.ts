@@ -20,6 +20,10 @@ export interface SharedGalleryData extends GalleryData {
   profile: PublicProfile;
 }
 
+export interface PhotographerDirectoryItem extends PublicProfile {
+  coverPhoto?: GalleryPhoto | null;
+}
+
 export type UploadImageSource =
   | {
       kind: 'file';
@@ -297,6 +301,47 @@ export async function uploadStereoPairPhoto({
   }
 }
 
+export async function uploadSbsPhoto({
+  albumId,
+  eventId,
+  ownerId,
+  file,
+  alt,
+}: {
+  albumId: string;
+  eventId: string;
+  ownerId: string;
+  file: File;
+  alt: string;
+}): Promise<void> {
+  const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-photo');
+  const photoId = crypto.randomUUID();
+  const storagePath = `${ownerId}/events/${eventId}/albums/${albumId}/photos/${photoId}/stereo.jpg`;
+
+  const uploadResult = await supabase.storage
+    .from(PHOTOS_BUCKET)
+    .upload(storagePath, file, {
+      cacheControl: '3600',
+      contentType: file.type || 'image/jpeg',
+      upsert: false,
+    });
+
+  if (uploadResult.error) {
+    throw uploadResult.error;
+  }
+
+  const insertResult = await supabase.from('photos').insert({
+    id: photoId,
+    album_id: albumId,
+    storage_path: storagePath,
+    alt: baseName,
+  });
+
+  if (insertResult.error) {
+    throw insertResult.error;
+  }
+}
+
 export async function createEvent({
   ownerId,
   title,
@@ -448,7 +493,7 @@ export async function createShareLink({
   profileId?: string | null;
   eventId?: string | null;
   albumId?: string | null;
-  password: string;
+  password?: string;
   expiresAt?: string | null;
 }): Promise<ShareLinkRecord> {
   const { data, error } = await supabase.rpc('create_share_link', {
@@ -456,7 +501,7 @@ export async function createShareLink({
     p_profile_id: profileId ?? null,
     p_event_id: eventId ?? null,
     p_album_id: albumId ?? null,
-    p_password: password,
+    p_password: password ?? '',
     p_expires_at: expiresAt ?? null,
   });
 
@@ -465,6 +510,20 @@ export async function createShareLink({
   }
 
   return data;
+}
+
+export async function createEventShareLink({
+  eventId,
+  password,
+}: {
+  eventId: string;
+  password?: string;
+}): Promise<ShareLinkRecord> {
+  return createShareLink({
+    scope: 'event',
+    eventId,
+    password,
+  });
 }
 
 export async function fetchShareLinks(): Promise<ShareLinkRecord[]> {
@@ -502,6 +561,17 @@ export async function verifySharePassword(token: string, password: string): Prom
   }
 
   return data;
+}
+
+export async function fetchPhotographerDirectory(): Promise<PhotographerDirectoryItem[]> {
+  const { data: profiles, error } = await supabase.rpc('get_public_photographers', {});
+
+  if (error) {
+    throw error;
+  }
+
+  const publicProfiles = profiles as PublicProfile[];
+  return publicProfiles.map((profile) => ({ ...profile, coverPhoto: null }));
 }
 
 async function removeStorageObjects(paths: string[]) {
