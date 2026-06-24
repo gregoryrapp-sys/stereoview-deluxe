@@ -6,6 +6,7 @@ export interface GalleryPhoto extends Photo {
   albumId?: string;
   eventId?: string;
   storagePath?: string;
+  rightSrc?: string; // For Dropbox pairs
 }
 
 export interface GalleryData {
@@ -217,6 +218,26 @@ export async function fetchGalleryData(): Promise<GalleryData> {
   return { events, albums, photos };
 }
 
+export async function fetchDropboxPhotos(folderUrl: string): Promise<{ url: string; name: string; path: string }[]> {
+  const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    body: { folderUrl },
+  });
+
+  if (error) {
+    // The edge function throws for various reasons (e.g., bad URL, Dropbox API error)
+    // We can inspect the error object if we need more specific messages.
+    if (error instanceof Error && error.message.includes('Function returned non-2xx status code')) {
+      // This is a bit of a hack to get the underlying error message from the function response
+      const match = error.message.match(/{.*}/);
+      const functionError = match ? JSON.parse(match[0]) : { error: 'Failed to fetch from Dropbox.' };
+      throw new Error(functionError.error || 'Failed to fetch from Dropbox.');
+    }
+    throw error;
+  }
+
+  return data;
+}
+
 interface SharedGalleryRpcData {
   profile: PublicProfile;
   events: EventRecord[];
@@ -376,11 +397,15 @@ export async function createAlbum({
   title,
   description,
   slug,
+  source_type,
+  dropbox_folder_url,
 }: {
   eventId: string;
   title: string;
   description?: string;
   slug?: string;
+  source_type?: 'upload' | 'dropbox';
+  dropbox_folder_url?: string | null;
 }): Promise<AlbumRecord> {
   const { data, error } = await supabase
     .from('albums')
@@ -389,6 +414,8 @@ export async function createAlbum({
       title,
       description: description || null,
       slug: slug ? makeSlug(slug) : undefined,
+      source_type: source_type ?? 'upload',
+      dropbox_folder_url: dropbox_folder_url ?? null,
     })
     .select('*')
     .single();
@@ -485,14 +512,12 @@ export async function createShareLink({
   scope,
   profileId,
   eventId,
-  albumId,
   password,
   expiresAt,
 }: {
-  scope: ShareScope;
+  scope: Exclude<ShareScope, 'album'>;
   profileId?: string | null;
   eventId?: string | null;
-  albumId?: string | null;
   password?: string;
   expiresAt?: string | null;
 }): Promise<ShareLinkRecord> {
@@ -500,7 +525,7 @@ export async function createShareLink({
     p_scope: scope,
     p_profile_id: profileId ?? null,
     p_event_id: eventId ?? null,
-    p_album_id: albumId ?? null,
+    p_album_id: null,
     p_password: password ?? '',
     p_expires_at: expiresAt ?? null,
   });

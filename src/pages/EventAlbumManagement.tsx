@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import {
+  Cloud,
   AlertCircle,
   ArrowLeft,
   Copy,
@@ -19,7 +20,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   createAlbum,
   createEvent,
-  createEventShareLink,
+  fetchDropboxPhotos,
+  createShareLink,
   deleteAlbumWithPhotos,
   deleteEventWithPhotos,
   fetchGalleryData,
@@ -47,6 +49,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 
@@ -159,12 +162,14 @@ export default function EventAlbumManagement() {
   const [newAlbumTitle, setNewAlbumTitle] = useState('');
   const [newAlbumDescription, setNewAlbumDescription] = useState('');
   const [newAlbumSlug, setNewAlbumSlug] = useState('');
+  const [newAlbumSourceType, setNewAlbumSourceType] = useState<'upload' | 'dropbox'>('upload');
+  const [newAlbumDropboxUrl, setNewAlbumDropboxUrl] = useState('');
   const [albumTitle, setAlbumTitle] = useState('');
   const [albumDescription, setAlbumDescription] = useState('');
   const [albumSlug, setAlbumSlug] = useState('');
   const [albumCoverPhotoId, setAlbumCoverPhotoId] = useState<string | null>(null);
-  const [sharePassword, setSharePassword] = useState('');
-  const [createdShareUrl, setCreatedShareUrl] = useState('');
+  const [sharePasswords, setSharePasswords] = useState<Record<string, string>>({});
+  const [createdShareUrls, setCreatedShareUrls] = useState<Record<string, string>>({});
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadNamePrefix, setUploadNamePrefix] = useState('');
   const [uploadProgress, setUploadProgress] = useState('');
@@ -258,17 +263,28 @@ export default function EventAlbumManagement() {
   const profileCover = getCoverPhoto(galleryData.photos, profileCoverPhotoId);
   const eventCover = selectedEvent ? getCoverPhoto(photosByEvent[selectedEvent.id] ?? [], eventCoverPhotoId) : null;
   const albumCover = selectedAlbum ? getCoverPhoto(albumPhotos, albumCoverPhotoId) : null;
+  const findActiveShareLink = useCallback(
+    (matchesScope: (shareLink: ShareLinkRecord) => boolean) =>
+      shareLinks.find((shareLink) => {
+        const isExpired = shareLink.expires_at ? Date.parse(shareLink.expires_at) <= Date.now() : false;
+        return shareLink.is_active && !isExpired && matchesScope(shareLink);
+      }) ?? null,
+    [shareLinks],
+  );
+  const activeProfileShareLink = useMemo(() => {
+    if (!profile) return null;
+
+    return findActiveShareLink((shareLink) => shareLink.scope === 'profile' && shareLink.profile_id === profile.id);
+  }, [findActiveShareLink, profile]);
   const activeEventShareLink = useMemo(() => {
     if (!selectedEvent) return null;
 
-    return (
-      shareLinks.find((shareLink) => {
-        const isExpired = shareLink.expires_at ? Date.parse(shareLink.expires_at) <= Date.now() : false;
-        return shareLink.scope === 'event' && shareLink.event_id === selectedEvent.id && shareLink.is_active && !isExpired;
-      }) ?? null
-    );
-  }, [selectedEvent, shareLinks]);
+    return findActiveShareLink((shareLink) => shareLink.scope === 'event' && shareLink.event_id === selectedEvent.id);
+  }, [findActiveShareLink, selectedEvent]);
+  const profileShareUrl = profileSlug ? buildPublicUrl(profileSlug) : '';
   const eventShareUrl = selectedEvent && profileSlug ? buildPublicUrl(profileSlug, selectedEvent.slug) : '';
+  const albumShareUrl =
+    selectedAlbum && selectedAlbumEvent && profileSlug ? buildPublicUrl(profileSlug, selectedAlbumEvent.slug, selectedAlbum.slug) : '';
 
   useEffect(() => {
     if (!selectedEvent) return;
@@ -378,10 +394,14 @@ export default function EventAlbumManagement() {
         title: newAlbumTitle,
         description: newAlbumDescription,
         slug: newAlbumSlug || undefined,
+        source_type: newAlbumSourceType,
+        dropbox_folder_url: newAlbumSourceType === 'dropbox' ? newAlbumDropboxUrl : undefined,
       });
       setNewAlbumTitle('');
       setNewAlbumDescription('');
       setNewAlbumSlug('');
+      setNewAlbumSourceType('upload');
+      setNewAlbumDropboxUrl('');
       setIsAlbumDialogOpen(false);
       toast({ title: 'Album created' });
       loadData();
@@ -405,6 +425,8 @@ export default function EventAlbumManagement() {
         title: albumTitle,
         description: albumDescription,
         slug: albumSlug,
+        // For now, we are not allowing to change the source type of an existing album
+        // to avoid complexity with existing photos. This could be a future enhancement.
         coverPhotoId: albumCoverPhotoId,
       });
       toast({ title: 'Album saved' });
@@ -420,19 +442,33 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const createShare = async () => {
-    if (!selectedEvent || !profileSlug) return;
+  const createShare = async ({
+    key,
+    profileId,
+    eventId,
+    url,
+  }: {
+    key: string;
+    profileId?: string | null;
+    eventId?: string | null;
+    url: string;
+  }) => {
+    if (!url) return;
     setIsSaving(true);
     try {
-      await createEventShareLink({
-        eventId: selectedEvent.id,
-        password: sharePassword,
+      const scope = eventId ? 'event' : 'profile';
+      const password = sharePasswords[key] ?? '';
+      await createShareLink({
+        scope,
+        profileId,
+        eventId,
+        password,
       });
       const links = await fetchShareLinks();
       setShareLinks(links);
-      setCreatedShareUrl(buildPublicUrl(profileSlug, selectedEvent.slug));
-      setSharePassword('');
-      toast({ title: sharePassword ? 'Protected event link created' : 'Public event link created' });
+      setCreatedShareUrls((current) => ({ ...current, [key]: url }));
+      setSharePasswords((current) => ({ ...current, [key]: '' }));
+      toast({ title: password ? 'Protected share link created' : 'Public share link created' });
     } catch (error) {
       toast({
         title: 'Could not create share link',
@@ -444,15 +480,15 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const revokeShare = async () => {
-    if (!activeEventShareLink) return;
+  const revokeShare = async (shareLink: ShareLinkRecord | null, key: string) => {
+    if (!shareLink) return;
     setIsSaving(true);
     try {
-      await revokeShareLink(activeEventShareLink.id);
+      await revokeShareLink(shareLink.id);
       const links = await fetchShareLinks();
       setShareLinks(links);
-      setCreatedShareUrl('');
-      toast({ title: 'Event share revoked' });
+      setCreatedShareUrls((current) => ({ ...current, [key]: '' }));
+      toast({ title: 'Share link revoked' });
     } catch (error) {
       toast({
         title: 'Could not revoke share link',
@@ -464,11 +500,110 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const copyShareUrl = async () => {
-    const url = createdShareUrl || eventShareUrl;
+  const copyShareUrl = async (url: string) => {
     if (!url) return;
     await navigator.clipboard.writeText(url);
     toast({ title: 'Share link copied' });
+  };
+
+  const renderSharePanel = ({
+    title,
+    keyName,
+    activeShareLink,
+    url,
+    profileId,
+    eventId,
+    compact = false,
+  }: {
+    title: string;
+    keyName: string;
+    activeShareLink: ShareLinkRecord | null;
+    url: string;
+    profileId?: string | null;
+    eventId?: string | null;
+    compact?: boolean;
+  }) => {
+    const createdShareUrl = createdShareUrls[keyName] ?? '';
+    const copyUrl = createdShareUrl || url;
+
+    return (
+      <div className={compact ? 'space-y-2' : 'space-y-3 border-t pt-3'}>
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <Link2 className="h-4 w-4" />
+          {title}
+        </div>
+        <div className={activeShareLink ? 'space-y-3' : `grid gap-3 ${compact ? '' : 'md:grid-cols-[1fr_auto]'}`}>
+          {activeShareLink ? (
+            <>
+              <div className="space-y-2 rounded-md border bg-secondary/40 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <Label>Active share link</Label>
+                  <span className="text-xs text-muted-foreground">
+                    {activeShareLink.password_hash ? 'Password protected' : 'No password required'}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <p className="min-w-0 flex-1 select-all break-all rounded-md bg-background px-3 py-2 text-sm text-muted-foreground">
+                    {url}
+                  </p>
+                  <Button className="gap-2" variant="secondary" onClick={() => copyShareUrl(url)} disabled={!url}>
+                    <Copy className="h-4 w-4" />
+                    Copy
+                  </Button>
+                  <Button variant="destructive" className="gap-2" onClick={() => revokeShare(activeShareLink, keyName)} disabled={isSaving}>
+                    <Trash2 className="h-4 w-4" />
+                    Revoke
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="space-y-2">
+                <Label htmlFor={`${keyName}-share-password`}>Visible password</Label>
+                <Input
+                  id={`${keyName}-share-password`}
+                  type="text"
+                  value={sharePasswords[keyName] ?? ''}
+                  placeholder="Leave blank for no password"
+                  onChange={(event) => setSharePasswords((current) => ({ ...current, [keyName]: event.target.value }))}
+                />
+              </div>
+              <Button
+                className="self-end bg-emerald-600 text-white hover:bg-emerald-500"
+                onClick={() => createShare({ key: keyName, profileId, eventId, url })}
+                disabled={isSaving || !url}
+              >
+                Create Share Link
+              </Button>
+            </>
+          )}
+          {!activeShareLink && createdShareUrl && (
+            <Button className="self-end gap-2" variant="secondary" onClick={() => copyShareUrl(copyUrl)}>
+              <Copy className="h-4 w-4" />
+              Copy
+            </Button>
+          )}
+          {!activeShareLink && createdShareUrl && <Input className="md:col-span-2" value={createdShareUrl} readOnly />}
+        </div>
+      </div>
+    );
+  };
+
+  const renderSharedUrlField = (url: string, className = '') => {
+    if (!url) return null;
+
+    return (
+      <div className={`flex min-w-0 items-center gap-2 ${className}`}>
+        <p className="min-w-0 flex-1 select-all truncate rounded-md bg-secondary px-2.5 py-1.5 text-xs text-muted-foreground">
+          {url}
+        </p>
+        <Button size="sm" variant="secondary" className="h-8 shrink-0 gap-1 px-2" onClick={() => copyShareUrl(url)}>
+          <Copy className="h-3.5 w-3.5" />
+          Copy
+        </Button>
+      </div>
+    );
   };
 
   const handleUploadSbsPhotos = async (event: React.FormEvent) => {
@@ -581,7 +716,7 @@ export default function EventAlbumManagement() {
   const isAlbumLevel = !!albumId;
 
   return (
-    <div className="min-h-screen px-4 py-6">
+    <div className="min-h-screen px-3 py-4 sm:px-4 sm:py-6">
       {isProfileLevel && renderHeader('Photographer Page', 'Add events and configure your public photographer page')}
       {isEventLevel && selectedEvent && renderHeader(selectedEvent.title, 'Add albums and configure this event', '/manage')}
       {isAlbumLevel &&
@@ -607,10 +742,10 @@ export default function EventAlbumManagement() {
                 </CardTitle>
                 <CardDescription>Visitors see this page at /{profileSlug || profile?.slug || 'name'}.</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-[180px_1fr_1fr]">
+              <CardContent className="grid gap-2 md:grid-cols-[104px_1fr_1fr]">
                 <button type="button" onClick={() => setCoverPicker('profile')} className="text-left">
                   <Label>Cover</Label>
-                  <CoverPreview photo={profileCover} icon={<User className="h-6 w-6" />} className="mt-2 aspect-[4/3] w-full" />
+                  <CoverPreview photo={profileCover} icon={<User className="h-6 w-6" />} className="mt-1 aspect-[4/3] w-full" />
                 </button>
                 <div className="space-y-2">
                   <Label htmlFor="profile-display-name">Display name</Label>
@@ -624,9 +759,16 @@ export default function EventAlbumManagement() {
                   <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={saveProfile} disabled={!profileSlug || isSaving}>
                     Save Photographer Page
                   </Button>
-                  <Button asChild variant="secondary" disabled={!profileSlug}>
-                    <Link to={`/${profileSlug}`}>View Public Page</Link>
-                  </Button>
+                </div>
+                {activeProfileShareLink && renderSharedUrlField(profileShareUrl, 'md:col-span-2 md:col-start-2')}
+                <div className="md:col-span-3">
+                  {renderSharePanel({
+                    title: 'Photographer Page Sharing',
+                    keyName: 'profile',
+                    activeShareLink: activeProfileShareLink,
+                    url: profileShareUrl,
+                    profileId: profile?.id,
+                  })}
                 </div>
               </CardContent>
             </Card>
@@ -639,7 +781,7 @@ export default function EventAlbumManagement() {
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
               {sortedEvents.map((eventRecord) => {
                 const eventPhotos = photosByEvent[eventRecord.id] ?? [];
                 const cover = getCoverPhoto(eventPhotos, eventRecord.cover_photo_id);
@@ -650,22 +792,22 @@ export default function EventAlbumManagement() {
                     <div className="aspect-[3/2] bg-secondary">
                       <CoverPreview photo={cover} icon={<FolderOpen className="h-6 w-6" />} className="h-full w-full rounded-none" />
                     </div>
-                    <CardContent className="space-y-3 p-4">
+                    <CardContent className="space-y-2 p-3">
                       <div>
-                        <h3 className="truncate text-lg font-medium">{eventRecord.title}</h3>
-                        <p className="text-sm text-muted-foreground">{albums.length} {albums.length === 1 ? 'album' : 'albums'}</p>
+                        <h3 className="truncate text-sm font-medium">{eventRecord.title}</h3>
+                        <p className="text-xs text-muted-foreground">{albums.length} {albums.length === 1 ? 'album' : 'albums'}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button asChild size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500">
                           <Link to={`/manage/events/${eventRecord.id}`}>Manage Event</Link>
                         </Button>
-                        <Button asChild variant="secondary" size="sm">
-                          <Link to={`/${profileSlug}/${eventRecord.slug}`}>View</Link>
-                        </Button>
                         <Button variant="destructive" size="sm" onClick={() => setDeletingEvent(eventRecord)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      {(findActiveShareLink((shareLink) => shareLink.scope === 'event' && shareLink.event_id === eventRecord.id) ||
+                        activeProfileShareLink) &&
+                        renderSharedUrlField(buildPublicUrl(profileSlug, eventRecord.slug))}
                     </CardContent>
                   </Card>
                 );
@@ -677,17 +819,17 @@ export default function EventAlbumManagement() {
         {isEventLevel && selectedEvent && (
           <>
             <Card>
-              <CardHeader>
+              <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <FolderOpen className="h-5 w-5" />
                   Event Settings
                 </CardTitle>
                 <CardDescription>Albums are added from this event page only.</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-[180px_1fr_1fr]">
+              <CardContent className="grid gap-2 md:grid-cols-[104px_1fr_1fr]">
                 <button type="button" onClick={() => setCoverPicker('event')} className="text-left">
                   <Label>Cover</Label>
-                  <CoverPreview photo={eventCover} icon={<FolderOpen className="h-6 w-6" />} className="mt-2 aspect-[4/3] w-full" />
+                  <CoverPreview photo={eventCover} icon={<FolderOpen className="h-6 w-6" />} className="mt-1 aspect-[4/3] w-full" />
                 </button>
                 <div className="space-y-2">
                   <Label htmlFor="event-title">Name</Label>
@@ -697,76 +839,26 @@ export default function EventAlbumManagement() {
                   <Label htmlFor="event-slug">Public URL slug</Label>
                   <Input id="event-slug" value={eventSlug} onChange={(event) => setEventSlug(makeSlug(event.target.value))} />
                 </div>
-                <div className="space-y-2 md:col-span-2 md:col-start-2">
+                <div className="space-y-2 md:col-start-2">
                   <Label htmlFor="event-description">Description</Label>
                   <Textarea id="event-description" value={eventDescription} onChange={(event) => setEventDescription(event.target.value)} />
+                </div>
+                <div>
+                  {renderSharePanel({
+                    title: 'Event Sharing',
+                    keyName: `event-${selectedEvent.id}`,
+                    activeShareLink: activeEventShareLink,
+                    url: eventShareUrl,
+                    eventId: selectedEvent.id,
+                    compact: true,
+                  })}
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-2">
                   <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={saveEvent} disabled={!eventTitle || !eventSlug || isSaving}>
                     Save Event
                   </Button>
-                  <Button asChild variant="secondary">
-                    <Link to={`/${profileSlug}/${selectedEvent.slug}`}>View Event</Link>
-                  </Button>
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Link2 className="h-5 w-5" />
-                  Event Sharing
-                </CardTitle>
-                <CardDescription>Albums under this event inherit event access. Password is optional.</CardDescription>
-              </CardHeader>
-              <CardContent className={activeEventShareLink ? 'space-y-3' : 'grid gap-3 md:grid-cols-[1fr_auto]'}>
-                {activeEventShareLink ? (
-                  <>
-                    <div className="space-y-2 rounded-md border bg-secondary/40 p-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <Label>Active event share link</Label>
-                        <span className="text-xs text-muted-foreground">
-                          {activeEventShareLink.password_hash ? 'Password protected' : 'No password required'}
-                        </span>
-                      </div>
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        <Input value={eventShareUrl} readOnly />
-                        <Button className="gap-2" variant="secondary" onClick={copyShareUrl} disabled={!eventShareUrl}>
-                          <Copy className="h-4 w-4" />
-                          Copy
-                        </Button>
-                      </div>
-                    </div>
-                    <Button variant="destructive" className="gap-2" onClick={revokeShare} disabled={isSaving}>
-                      <Trash2 className="h-4 w-4" />
-                      Revoke Share
-                    </Button>
-                  </>
-                ) : (
-                  <>
-                    <div className="space-y-2">
-                      <Label htmlFor="event-share-password">Visible password</Label>
-                      <Input
-                        id="event-share-password"
-                        type="text"
-                        value={sharePassword}
-                        placeholder="Leave blank for no password"
-                        onChange={(event) => setSharePassword(event.target.value)}
-                      />
-                    </div>
-                    <Button className="self-end bg-emerald-600 text-white hover:bg-emerald-500" onClick={createShare} disabled={isSaving}>
-                      Create Share Link
-                    </Button>
-                  </>
-                )}
-                {!activeEventShareLink && createdShareUrl && (
-                  <Button className="self-end gap-2" variant="secondary" onClick={copyShareUrl}>
-                    <Copy className="h-4 w-4" />
-                    Copy
-                  </Button>
-                )}
-                {!activeEventShareLink && createdShareUrl && <Input className="md:col-span-2" value={createdShareUrl} readOnly />}
+                {(activeEventShareLink || activeProfileShareLink) && renderSharedUrlField(eventShareUrl, 'md:col-span-2 md:col-start-2')}
               </CardContent>
             </Card>
 
@@ -778,7 +870,7 @@ export default function EventAlbumManagement() {
               </Button>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
               {eventAlbums.map((album) => {
                 const photos = photosByAlbum[album.id] ?? [];
                 const cover = getCoverPhoto(photos, album.cover_photo_id);
@@ -788,22 +880,21 @@ export default function EventAlbumManagement() {
                     <div className="aspect-[3/2] bg-secondary">
                       <CoverPreview photo={cover} icon={<Images className="h-6 w-6" />} className="h-full w-full rounded-none" />
                     </div>
-                    <CardContent className="space-y-3 p-4">
+                    <CardContent className="space-y-2 p-3">
                       <div>
-                        <h3 className="truncate text-lg font-medium">{album.title}</h3>
-                        <p className="text-sm text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
+                        <h3 className="truncate text-sm font-medium">{album.title}</h3>
+                        <p className="text-xs text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
                       </div>
                       <div className="flex flex-wrap gap-2">
                         <Button asChild size="sm" className="bg-emerald-600 text-white hover:bg-emerald-500">
                           <Link to={`/manage/events/${selectedEvent.id}/albums/${album.id}`}>Manage Album</Link>
                         </Button>
-                        <Button asChild variant="secondary" size="sm">
-                          <Link to={`/${profileSlug}/${selectedEvent.slug}/${album.slug}`}>View</Link>
-                        </Button>
                         <Button variant="destructive" size="sm" onClick={() => setDeletingAlbum(album)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
+                      {(activeEventShareLink || activeProfileShareLink) &&
+                        renderSharedUrlField(buildPublicUrl(profileSlug, selectedEvent.slug, album.slug))}
                     </CardContent>
                   </Card>
                 );
@@ -815,17 +906,17 @@ export default function EventAlbumManagement() {
         {isAlbumLevel && selectedAlbum && selectedAlbumEvent && (
           <>
             <Card>
-              <CardHeader>
+              <CardHeader className="pb-3">
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <Images className="h-5 w-5" />
                   Album Settings
                 </CardTitle>
                 <CardDescription>Photos are uploaded from this album page only.</CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-4 md:grid-cols-[180px_1fr_1fr]">
+              <CardContent className="grid gap-2 md:grid-cols-[104px_1fr_1fr]">
                 <button type="button" onClick={() => setCoverPicker('album')} className="text-left">
                   <Label>Cover</Label>
-                  <CoverPreview photo={albumCover} icon={<Images className="h-6 w-6" />} className="mt-2 aspect-[4/3] w-full" />
+                  <CoverPreview photo={albumCover} icon={<Images className="h-6 w-6" />} className="mt-1 aspect-[4/3] w-full" />
                 </button>
                 <div className="space-y-2">
                   <Label htmlFor="album-title">Name</Label>
@@ -835,7 +926,7 @@ export default function EventAlbumManagement() {
                   <Label htmlFor="album-slug">Public URL slug</Label>
                   <Input id="album-slug" value={albumSlug} onChange={(event) => setAlbumSlug(makeSlug(event.target.value))} />
                 </div>
-                <div className="space-y-2 md:col-span-2 md:col-start-2">
+                <div className="space-y-2 md:col-start-2">
                   <Label htmlFor="album-description">Description</Label>
                   <Textarea id="album-description" value={albumDescription} onChange={(event) => setAlbumDescription(event.target.value)} />
                 </div>
@@ -843,58 +934,82 @@ export default function EventAlbumManagement() {
                   <Button className="bg-emerald-600 text-white hover:bg-emerald-500" onClick={saveAlbum} disabled={!albumTitle || !albumSlug || isSaving}>
                     Save Album
                   </Button>
-                  <Button asChild variant="secondary">
-                    <Link to={`/${profileSlug}/${selectedAlbumEvent.slug}/${selectedAlbum.slug}`}>View Album</Link>
-                  </Button>
+                </div>
+                {selectedAlbum.source_type === 'dropbox' && (
+                  <div className="space-y-3 border-t pt-3 md:col-span-3">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <Cloud className="h-4 w-4" />
+                        Dropbox Sync
+                      </div>
+                      <p className="text-xs text-muted-foreground">Manually sync with the linked Dropbox folder to check for new photos.</p>
+                    </div>
+                    <Button
+                      onClick={async () => {
+                        if (!selectedAlbum.dropbox_folder_url) return;
+                        setIsSaving(true);
+                        try {
+                          const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url);
+                          // The Edge Function already filters for valid image types.
+                          toast({ title: 'Sync complete', description: `Found ${files.length} image files.` });
+                        } catch (error) {
+                          toast({ title: 'Sync failed', description: error instanceof Error ? error.message : 'Could not fetch from Dropbox.', variant: 'destructive' });
+                        } finally {
+                          setIsSaving(false);
+                        }
+                      }}
+                      disabled={isSaving}
+                    >
+                      <RefreshCw className="mr-2 h-4 w-4" /> Sync with Dropbox
+                    </Button>
+                  </div>
+                )}
+                {(activeEventShareLink || activeProfileShareLink) && renderSharedUrlField(albumShareUrl, 'md:col-span-2 md:col-start-2')}
+                <div className="space-y-3 border-t pt-3 md:col-span-3">
+                  <div>
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Upload className="h-4 w-4" />
+                      Upload SBS Stereo Photos
+                    </div>
+                    <p className="text-xs text-muted-foreground">Select already-created side-by-side stereo image files for this album.</p>
+                  </div>
+                  <form onSubmit={handleUploadSbsPhotos} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                    <div className="space-y-2">
+                      <Label htmlFor="sbs-files">SBS image files</Label>
+                      <Input
+                        id="sbs-files"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        multiple
+                        onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="upload-prefix">Name prefix</Label>
+                      <Input
+                        id="upload-prefix"
+                        value={uploadNamePrefix}
+                        placeholder="Optional"
+                        onChange={(event) => setUploadNamePrefix(event.target.value)}
+                      />
+                    </div>
+                    <Button type="submit" className="self-end gap-2 bg-emerald-600 text-white hover:bg-emerald-500" disabled={uploadFiles.length === 0 || isSaving}>
+                      <ImagePlus className="h-4 w-4" />
+                      {isSaving ? uploadProgress || 'Uploading...' : 'Upload'}
+                    </Button>
+                  </form>
                 </div>
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  <Upload className="h-5 w-5" />
-                  Add SBS Stereo Photos
-                </CardTitle>
-                <CardDescription>Select already-created side-by-side stereo image files for this album.</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <form onSubmit={handleUploadSbsPhotos} className="grid gap-4 md:grid-cols-[1fr_1fr_auto]">
-                  <div className="space-y-2">
-                    <Label htmlFor="sbs-files">SBS image files</Label>
-                    <Input
-                      id="sbs-files"
-                      type="file"
-                      accept="image/jpeg,image/png,image/webp"
-                      multiple
-                      onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="upload-prefix">Name prefix</Label>
-                    <Input
-                      id="upload-prefix"
-                      value={uploadNamePrefix}
-                      placeholder="Optional"
-                      onChange={(event) => setUploadNamePrefix(event.target.value)}
-                    />
-                  </div>
-                  <Button type="submit" className="self-end gap-2 bg-emerald-600 text-white hover:bg-emerald-500" disabled={uploadFiles.length === 0 || isSaving}>
-                    <ImagePlus className="h-4 w-4" />
-                    {isSaving ? uploadProgress || 'Uploading...' : 'Upload'}
-                  </Button>
-                </form>
-              </CardContent>
-            </Card>
-
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               {albumPhotos.map((photo) => (
                 <Card key={photo.id} className="overflow-hidden">
                   <div className="aspect-[2/1] bg-secondary">
                     <StereoThumbnail photo={photo} />
                   </div>
-                  <CardContent className="flex items-center justify-between gap-3 p-3">
-                    <p className="truncate text-sm text-muted-foreground">{photo.alt || 'Untitled photo'}</p>
+                  <CardContent className="flex items-center justify-between gap-2 p-2">
+                    <p className="truncate text-xs text-muted-foreground">{photo.alt || 'Untitled photo'}</p>
                     <Button className="bg-emerald-600 text-white hover:bg-emerald-500" size="sm" onClick={() => setAlbumCoverPhotoId(photo.id)}>
                       Use as cover
                     </Button>
@@ -959,7 +1074,7 @@ export default function EventAlbumManagement() {
           </DialogHeader>
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground">
-              Type <span className="font-medium text-foreground">{deleteTargetName}</span> to confirm.
+            Type <span className="font-medium text-foreground break-all">{deleteTargetName}</span> to confirm.
             </p>
             <Input value={deleteConfirmationText} onChange={(event) => setDeleteConfirmationText(event.target.value)} />
           </div>
@@ -1033,6 +1148,30 @@ export default function EventAlbumManagement() {
             <div className="space-y-2">
               <Label htmlFor="new-album-description">Description</Label>
               <Textarea id="new-album-description" value={newAlbumDescription} onChange={(event) => setNewAlbumDescription(event.target.value)} />
+            </div>
+            <div className="space-y-3 rounded-md border p-3">
+              <Label>Photo Source</Label>
+              <RadioGroup value={newAlbumSourceType} onValueChange={(value) => setNewAlbumSourceType(value as 'upload' | 'dropbox')}>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="upload" id="source-upload" />
+                  <Label htmlFor="source-upload">Direct Uploads</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <RadioGroupItem value="dropbox" id="source-dropbox" />
+                  <Label htmlFor="source-dropbox">Dropbox Folder</Label>
+                </div>
+              </RadioGroup>
+              {newAlbumSourceType === 'dropbox' && (
+                <div className="space-y-2 pl-2 pt-2">
+                  <Label htmlFor="new-album-dropbox-url">Dropbox Folder URL</Label>
+                  <Input
+                    id="new-album-dropbox-url"
+                    value={newAlbumDropboxUrl}
+                    onChange={(e) => setNewAlbumDropboxUrl(e.target.value)}
+                    placeholder="Paste a public Dropbox folder link"
+                  />
+                </div>
+              )}
             </div>
             <DialogFooter>
               <Button type="submit" className="bg-emerald-600 text-white hover:bg-emerald-500" disabled={!newAlbumTitle || isSaving}>

@@ -29,6 +29,8 @@ export interface AlbumRecord {
   slug: string;
   cover_photo_id: string | null;
   created_at: string;
+  source_type: 'upload' | 'dropbox';
+  dropbox_folder_url: string | null;
 }
 
 export interface PhotoRecord {
@@ -92,6 +94,8 @@ export interface Database {
           description?: string | null;
           slug?: string;
           cover_photo_id?: string | null;
+          source_type?: 'upload' | 'dropbox';
+          dropbox_folder_url?: string | null;
           created_at?: string;
         };
         Update: Partial<Omit<AlbumRecord, 'id' | 'created_at'>>;

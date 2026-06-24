@@ -358,6 +358,11 @@ export default function UploadPhoto() {
     () => galleryData.albums.find((album) => album.id === selectedAlbumId) ?? null,
     [galleryData.albums, selectedAlbumId],
   );
+  
+  const isUploadDisabledForAlbum = useMemo(
+    () => selectedAlbum?.source_type === 'dropbox',
+    [selectedAlbum]
+  );
 
   const loadData = useCallback(() => {
     let cancelled = false;
@@ -781,7 +786,7 @@ export default function UploadPhoto() {
           <Button
             type="submit"
             className="gap-2"
-            disabled={
+              disabled={isUploadDisabledForAlbum ||
               isSubmitting ||
               matchedPairs.length === 0 ||
               !selectedEvent ||
@@ -791,6 +796,11 @@ export default function UploadPhoto() {
             <Upload className="h-4 w-4" />
             {isSubmitting ? uploadProgress || 'Uploading...' : 'Upload Photos'}
           </Button>
+            {isUploadDisabledForAlbum && (
+              <p className="text-sm text-destructive">
+                This album is linked to a Dropbox folder. Uploads are disabled.
+              </p>
+            )}
         </div>
       </form>
     </div>
