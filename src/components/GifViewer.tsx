@@ -3,11 +3,13 @@ import { Photo } from '@/data/photos';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { X, ChevronLeft, ChevronRight, Loader2, Pause, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { AlbumRecord } from '@/types/database';
 
 interface GifViewerProps {
   photo: Photo;
   photos: Photo[];
   photoIndex: number;
+  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -22,6 +24,7 @@ export default function GifViewer({
   photo,
   photos,
   photoIndex,
+  album,
   onClose,
   onPrevious,
   onNext,
@@ -35,21 +38,21 @@ export default function GifViewer({
   const touchStartY = useRef<number>(0);
 
   // Process the stereo image into left/right halves
-  const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
+  const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo, album);
 
   // Preload adjacent images for smoother navigation
-  const adjacentSrcs = useMemo(() => {
-    const srcs: string[] = [];
+  const adjacentPhotos = useMemo(() => {
+    const result: Photo[] = [];
     if (photoIndex > 0) {
-      srcs.push(photos[photoIndex - 1].src);
+      result.push(photos[photoIndex - 1]);
     }
     if (photoIndex < photos.length - 1) {
-      srcs.push(photos[photoIndex + 1].src);
+      result.push(photos[photoIndex + 1]);
     }
-    return srcs;
+    return result;
   }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentSrcs);
+  usePreloadImages(adjacentPhotos, album);
 
   // Animate between left and right frames (wiggle effect)
   useEffect(() => {

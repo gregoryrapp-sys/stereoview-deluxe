@@ -4,11 +4,13 @@ import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { X, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { AlbumRecord } from '@/types/database';
 
 interface StereoViewerProps {
   photo: Photo;
   photos: Photo[];
   photoIndex: number;
+  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -20,6 +22,7 @@ export default function StereoViewer({
   photo,
   photos,
   photoIndex,
+  album,
   onClose,
   onPrevious,
   onNext,
@@ -30,21 +33,21 @@ export default function StereoViewer({
   const touchStartYRef = useRef<number | null>(null);
 
   // Process the stereo image into left/right halves
-  const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo.src);
+  const { leftUrl, rightUrl, isLoading, error, dimensions } =  useProcessedImage(photo, album);
 
   // Preload adjacent images for smoother navigation
-  const adjacentSrcs = useMemo(() => {
-    const srcs: string[] = [];
+  const adjacentPhotos = useMemo(() => {
+    const result: Photo[] = [];
     if (photoIndex > 0) {
-      srcs.push(photos[photoIndex - 1].src);
+      result.push(photos[photoIndex - 1]);
     }
     if (photoIndex < photos.length - 1) {
-      srcs.push(photos[photoIndex + 1].src);
+      result.push(photos[photoIndex + 1]);
     }
-    return srcs;
+    return result;
   }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentSrcs);
+  usePreloadImages(adjacentPhotos, album);
 
   // Update container size on mount and resize
   useEffect(() => {

@@ -21,6 +21,7 @@ import {
   createAlbum,
   createEvent,
   fetchDropboxPhotos,
+  // pairDropboxItems, // This seems to be unused, we can remove it.
   createShareLink,
   deleteAlbumWithPhotos,
   deleteEventWithPhotos,
@@ -168,6 +169,7 @@ export default function EventAlbumManagement() {
   const [albumDescription, setAlbumDescription] = useState('');
   const [albumSlug, setAlbumSlug] = useState('');
   const [albumCoverPhotoId, setAlbumCoverPhotoId] = useState<string | null>(null);
+  const [albumDropboxUrl, setAlbumDropboxUrl] = useState('');
   const [sharePasswords, setSharePasswords] = useState<Record<string, string>>({});
   const [createdShareUrls, setCreatedShareUrls] = useState<Record<string, string>>({});
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -300,6 +302,7 @@ export default function EventAlbumManagement() {
     setAlbumDescription(selectedAlbum.description ?? '');
     setAlbumSlug(selectedAlbum.slug);
     setAlbumCoverPhotoId(selectedAlbum.cover_photo_id);
+    setAlbumDropboxUrl(selectedAlbum.dropbox_folder_url ?? '');
   }, [selectedAlbum]);
 
   if (isAuthLoading) {
@@ -395,7 +398,7 @@ export default function EventAlbumManagement() {
         description: newAlbumDescription,
         slug: newAlbumSlug || undefined,
         source_type: newAlbumSourceType,
-        dropbox_folder_url: newAlbumSourceType === 'dropbox' ? newAlbumDropboxUrl : undefined,
+        dropbox_folder_url: newAlbumSourceType === 'dropbox' ? newAlbumDropboxUrl : null,
       });
       setNewAlbumTitle('');
       setNewAlbumDescription('');
@@ -406,6 +409,7 @@ export default function EventAlbumManagement() {
       toast({ title: 'Album created' });
       loadData();
     } catch (error) {
+      console.error('Album creation failed:', error);
       toast({
         title: 'Could not create album',
         description: error instanceof Error ? error.message : 'Create failed',
@@ -428,6 +432,7 @@ export default function EventAlbumManagement() {
         // For now, we are not allowing to change the source type of an existing album
         // to avoid complexity with existing photos. This could be a future enhancement.
         coverPhotoId: albumCoverPhotoId,
+        dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null
       });
       toast({ title: 'Album saved' });
       loadData();
@@ -926,6 +931,12 @@ export default function EventAlbumManagement() {
                   <Label htmlFor="album-slug">Public URL slug</Label>
                   <Input id="album-slug" value={albumSlug} onChange={(event) => setAlbumSlug(makeSlug(event.target.value))} />
                 </div>
+                <div className={`space-y-2 ${selectedAlbum.source_type === 'dropbox' ? '' : 'hidden'}`}>
+                  <Label htmlFor="album-dropbox-url">Dropbox Folder URL</Label>
+                  <Input id="album-dropbox-url" value={albumDropboxUrl} onChange={(event) => setAlbumDropboxUrl(event.target.value)}
+                    placeholder="Paste a public Dropbox folder link"
+                  />
+                </div>
                 <div className="space-y-2 md:col-start-2">
                   <Label htmlFor="album-description">Description</Label>
                   <Textarea id="album-description" value={albumDescription} onChange={(event) => setAlbumDescription(event.target.value)} />
@@ -958,7 +969,7 @@ export default function EventAlbumManagement() {
                           setIsSaving(false);
                         }
                       }}
-                      disabled={isSaving}
+                      disabled={isSaving || !albumDropboxUrl}
                     >
                       <RefreshCw className="mr-2 h-4 w-4" /> Sync with Dropbox
                     </Button>
@@ -973,31 +984,37 @@ export default function EventAlbumManagement() {
                     </div>
                     <p className="text-xs text-muted-foreground">Select already-created side-by-side stereo image files for this album.</p>
                   </div>
-                  <form onSubmit={handleUploadSbsPhotos} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                    <div className="space-y-2">
-                      <Label htmlFor="sbs-files">SBS image files</Label>
-                      <Input
-                        id="sbs-files"
-                        type="file"
-                        accept="image/jpeg,image/png,image/webp"
-                        multiple
-                        onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
-                      />
+                  {selectedAlbum.source_type === 'upload' ? (
+                    <form onSubmit={handleUploadSbsPhotos} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                      <div className="space-y-2">
+                        <Label htmlFor="sbs-files">SBS image files</Label>
+                        <Input
+                          id="sbs-files"
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          multiple
+                          onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="upload-prefix">Name prefix</Label>
+                        <Input
+                          id="upload-prefix"
+                          value={uploadNamePrefix}
+                          placeholder="Optional"
+                          onChange={(event) => setUploadNamePrefix(event.target.value)}
+                        />
+                      </div>
+                      <Button type="submit" className="self-end gap-2 bg-emerald-600 text-white hover:bg-emerald-500" disabled={uploadFiles.length === 0 || isSaving}>
+                        <ImagePlus className="h-4 w-4" />
+                        {isSaving ? uploadProgress || 'Uploading...' : 'Upload'}
+                      </Button>
+                    </form>
+                  ) : (
+                    <div className="rounded-md border border-dashed p-4 text-center text-sm text-muted-foreground">
+                      This album is linked to a Dropbox folder. Photos are synced automatically.
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="upload-prefix">Name prefix</Label>
-                      <Input
-                        id="upload-prefix"
-                        value={uploadNamePrefix}
-                        placeholder="Optional"
-                        onChange={(event) => setUploadNamePrefix(event.target.value)}
-                      />
-                    </div>
-                    <Button type="submit" className="self-end gap-2 bg-emerald-600 text-white hover:bg-emerald-500" disabled={uploadFiles.length === 0 || isSaving}>
-                      <ImagePlus className="h-4 w-4" />
-                      {isSaving ? uploadProgress || 'Uploading...' : 'Upload'}
-                    </Button>
-                  </form>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -1174,7 +1191,11 @@ export default function EventAlbumManagement() {
               )}
             </div>
             <DialogFooter>
-              <Button type="submit" className="bg-emerald-600 text-white hover:bg-emerald-500" disabled={!newAlbumTitle || isSaving}>
+              <Button
+                type="submit"
+                className="bg-emerald-600 text-white hover:bg-emerald-500"
+                disabled={!newAlbumTitle || isSaving || (newAlbumSourceType === 'dropbox' && !newAlbumDropboxUrl)}
+              >
                 Create Album
               </Button>
             </DialogFooter>

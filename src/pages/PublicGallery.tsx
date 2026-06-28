@@ -244,6 +244,7 @@ export default function PublicGallery() {
       {selectedPhotoIndex !== null && (
         <div className="fixed inset-0 z-50 bg-black">
           <StereoViewer
+            album={selectedAlbum}
             photo={albumPhotos[selectedPhotoIndex]}
             photos={albumPhotos}
             photoIndex={selectedPhotoIndex}

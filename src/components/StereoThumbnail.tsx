@@ -1,13 +1,16 @@
 import { Loader2 } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { useProcessedImage } from '@/hooks/useProcessedImage';
+import type { AlbumRecord } from '@/types/database';
+
 
 interface StereoThumbnailProps {
   photo: Photo;
+  album: AlbumRecord | null;
 }
 
-export default function StereoThumbnail({ photo }: StereoThumbnailProps) {
-  const { leftUrl, isLoading } = useProcessedImage(photo.src);
+export default function StereoThumbnail({ photo,album }: StereoThumbnailProps) {
+  const { leftUrl, isLoading } = useProcessedImage(photo, album);
 
   if (isLoading) {
     return (

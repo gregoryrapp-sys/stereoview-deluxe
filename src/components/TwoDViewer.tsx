@@ -3,11 +3,13 @@ import { ChevronLeft, ChevronRight, Loader2, X } from 'lucide-react';
 import { Photo } from '@/data/photos';
 import { usePreloadImages, useProcessedImage } from '@/hooks/useProcessedImage';
 import { cn } from '@/lib/utils';
+import type { AlbumRecord } from '@/types/database';
 
 interface TwoDViewerProps {
   photo: Photo;
   photos: Photo[];
   photoIndex: number;
+  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -18,6 +20,7 @@ interface TwoDViewerProps {
 export default function TwoDViewer({
   photo,
   photos,
+  album,
   photoIndex,
   onClose,
   onPrevious,
@@ -28,16 +31,16 @@ export default function TwoDViewer({
   const [showControls, setShowControls] = useState(true);
   const touchStartX = useRef(0);
   const touchStartY = useRef(0);
-  const { leftUrl, isLoading, error } = useProcessedImage(photo.src);
+  const { leftUrl, isLoading, error } = useProcessedImage(photo, album);
 
-  const adjacentSrcs = useMemo(() => {
-    const srcs: string[] = [];
-    if (photoIndex > 0) srcs.push(photos[photoIndex - 1].src);
-    if (photoIndex < photos.length - 1) srcs.push(photos[photoIndex + 1].src);
-    return srcs;
+  const adjacentPhotos = useMemo(() => {
+    const result: Photo[] = [];
+    if (photoIndex > 0) result.push(photos[photoIndex - 1]);
+    if (photoIndex < photos.length - 1) result.push(photos[photoIndex + 1]);
+    return result;
   }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentSrcs);
+  usePreloadImages(adjacentPhotos, album);
 
   useEffect(() => {
     setShowControls(true);

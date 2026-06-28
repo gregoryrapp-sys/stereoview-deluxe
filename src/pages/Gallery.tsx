@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
+  DropboxFile,
   fetchDropboxPhotos,
   fetchGalleryData,
   GalleryData,
@@ -30,6 +31,8 @@ type WebKitFullscreenElement = HTMLElement & {
 function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
   return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
 }
+
+
 
 export default function Gallery() {
   const { isAuthenticated, isAdmin, isLoading: isAuthLoading, logout, profile } = useAuth();
@@ -77,7 +80,7 @@ export default function Gallery() {
     [galleryData.albums, selectedEventId],
   );
 
-  const [dropboxPhotos, setDropboxPhotos] = useState<GalleryPhoto[]>([]);
+  const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
 
   const selectedAlbum = useMemo(
@@ -88,48 +91,61 @@ export default function Gallery() {
   const isDropboxAlbum = selectedAlbum?.source_type === 'dropbox';
 
   useEffect(() => {
-    if (!isDropboxAlbum || !selectedAlbum.dropbox_folder_url) {
+  if (!selectedAlbum?.dropbox_folder_url) {
+    setDropboxPhotos([]);
+    return;
+  }
+
+  let cancelled = false;
+
+  const run = async () => {
+    setIsDropboxLoading(true);
+
+    try {
+      const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url);
+
+      if (cancelled) return;
+
+      setDropboxPhotos(files);
+    } catch (error) {
+      toast({
+        title: 'Could not load Dropbox photos',
+        description: error instanceof Error ? error.message : 'Unknown error',
+        variant: 'destructive',
+      });
+
       setDropboxPhotos([]);
-      return;
+    } finally {
+      if (!cancelled) setIsDropboxLoading(false);
     }
+  };
 
-    let cancelled = false;
-    const run = async () => {
-      setIsDropboxLoading(true);
-      try {
-        const files = await fetchDropboxPhotos(selectedAlbum!.dropbox_folder_url!);
-        if (cancelled) return;
+  run();
 
-        // Each image file from Dropbox is an SBS photo.
-        // We create temporary `GalleryPhoto` objects for display.
-        const tempPhotos: GalleryPhoto[] = files.map((file) => ({
-          id: file.path, // Use the unique path as an ID
-          src: file.url,
-          alt: file.name.replace(/\.(jpg|jpeg|png|webp)$/i, ''),
-          // No rightSrc is needed, as `src` is the full SBS image
-        }));
+  return () => {
+    cancelled = true;
+  };
+}, [isDropboxAlbum, selectedAlbum?.dropbox_folder_url]);
 
-        setDropboxPhotos(tempPhotos);
-      } catch (error) {
-        toast({
-          title: 'Could not load Dropbox photos',
-          description: error instanceof Error ? error.message : 'An unknown error occurred.',
-          variant: 'destructive',
-        });
-        setDropboxPhotos([]);
-      } finally {
-        if (!cancelled) setIsDropboxLoading(false);
-      }
-    };
-
-    run();
-    return () => { cancelled = true; };
-  }, [isDropboxAlbum, selectedAlbum]);
-
-  const activePhotos = useMemo(
-    () => (isDropboxAlbum ? dropboxPhotos : galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId)),
-    [galleryData.photos, selectedAlbumId, isDropboxAlbum, dropboxPhotos],
-  );
+  const activePhotos = useMemo(() => {
+  if (isDropboxAlbum) {
+    return dropboxPhotos.map((file: any) => {
+      // DEBUG: Log the incoming file object to see if 'src' exists here
+      console.log("Mapping file:", file);
+      
+      return {
+        id: file.id,
+        // Ensure we explicitly grab 'src' from the file object
+        // If file.src is undefined here, your Edge Function isn't returning it
+        src: file.src || '', 
+        alt: file.name,
+        albumId: selectedAlbumId,
+        eventId: selectedEventId,
+      };
+    });
+  }
+  return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
+}, [isDropboxAlbum, dropboxPhotos, galleryData.photos, selectedAlbumId, selectedEventId]);
 
   const photoCountsByAlbum = useMemo(() => {
     const counts = galleryData.photos.reduce<Record<string, number>>((counts, photo) => {
@@ -433,7 +449,7 @@ export default function Gallery() {
                   >
                     <span className="block aspect-[3/2] bg-secondary">
                       {eventCover ? (
-                        <StereoThumbnail photo={eventCover} />
+                        <StereoThumbnail photo={eventCover} album={null} />
                       ) : (
                         <span className="flex h-full w-full items-center justify-center">
                           <FolderOpen className="h-6 w-6 text-muted-foreground" />
@@ -471,7 +487,7 @@ export default function Gallery() {
                   >
                     <span className="block aspect-[3/2] bg-secondary">
                       {albumCover ? (
-                        <StereoThumbnail photo={albumCover} />
+                        <StereoThumbnail photo={albumCover} album={selectedAlbum} />
                       ) : (
                         <span className="flex h-full w-full items-center justify-center">
                           <Images className="h-6 w-6 text-muted-foreground" />
@@ -515,7 +531,7 @@ export default function Gallery() {
                   onClick={() => handlePhotoClick(index)}
                   className="group relative aspect-[2/1] overflow-hidden rounded-md bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
                 >
-                  <StereoThumbnail photo={photo} />
+                <StereoThumbnail photo={photo} album={selectedAlbum} />
                 </button>
               ))}
             </div>
@@ -536,6 +552,7 @@ export default function Gallery() {
         {isViewerOpen && viewMode === 'stereo' && (
           <StereoViewer
             photo={activePhotos[selectedPhotoIndex]}
+            album={selectedAlbum}
             photos={activePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
@@ -548,6 +565,7 @@ export default function Gallery() {
         {isViewerOpen && viewMode === '2d' && (
           <TwoDViewer
             photo={activePhotos[selectedPhotoIndex]}
+            album={selectedAlbum}
             photos={activePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
@@ -560,6 +578,7 @@ export default function Gallery() {
         {isViewerOpen && viewMode === 'gif' && (
           <GifViewer
             photo={activePhotos[selectedPhotoIndex]}
+            album={selectedAlbum}
             photos={activePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}

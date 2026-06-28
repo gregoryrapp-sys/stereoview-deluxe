@@ -2,6 +2,7 @@
  * Client-side image processing utilities for stereo photos
  * Handles splitting raw stereo images into left/right halves
  */
+import { fetchDropboxFileBlob, type DropboxFile, type GalleryPhoto } from '@/services/galleryService';
 
 export interface ProcessedStereoImage {
   leftUrl: string;
@@ -47,14 +48,47 @@ export function loadImage(src: string): Promise<HTMLImageElement> {
  * Split a stereo image into left and right halves
  * Returns blob URLs for each half
  */
-export async function splitStereoImage(src: string): Promise<ProcessedStereoImage> {
+export async function splitStereoImage(
+  photo: DropboxFile | GalleryPhoto, // eslint-disable-line
+  folderUrl?: string, // Optional: only for Dropbox images
+): Promise<ProcessedStereoImage> {
   // Check cache first
-  const cached = processedImageCache.get(src);
+  const cacheKey = photo.src;
+  const cached = processedImageCache.get(cacheKey);
   if (cached) {
     return cached;
   }
 
-  const img = await loadImage(src);
+  let img: HTMLImageElement;
+
+  // Distinguish between Dropbox and other image sources
+  if (folderUrl) {
+    // It's a Dropbox file, fetch via proxy to handle CORS
+    const imageBlob = await fetchDropboxFileBlob({
+      folderUrl,
+      fileName: photo.alt,
+    });
+
+    // Load the blob into an Image element by creating a temporary Data URL.
+    // This is more robust than creating a blob: URL with createObjectURL(), which can
+    // be garbage-collected by the browser during resource-intensive operations like
+    // entering fullscreen, causing "Failed to load image" errors.
+    img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('The source image could not be decoded.'));
+        image.src = e.target?.result as string;
+      };
+      reader.onerror = () => reject(new Error('The image blob could not be read.'));
+      reader.readAsDataURL(imageBlob);
+    });
+  } else {
+    // It's a Supabase Storage URL (or other direct URL).
+    // Use the simple and robust loadImage function which handles caching and crossOrigin.
+    img = await loadImage(photo.src);
+  }
 
   const halfWidth = Math.floor(img.width / 2);
   const height = img.height;
@@ -83,53 +117,36 @@ export async function splitStereoImage(src: string): Promise<ProcessedStereoImag
 
   rightCtx.drawImage(img, halfWidth, 0, halfWidth, height, 0, 0, halfWidth, height);
 
-  // Convert canvases to blob URLs
-  const [leftBlob, rightBlob] = await Promise.all([
-    canvasToBlob(leftCanvas),
-    canvasToBlob(rightCanvas),
-  ]);
-
+  // Convert canvases to Data URLs. This is more stable than blob URLs, which can be
+  // garbage collected by the browser during resource-intensive operations like
+  // entering fullscreen, causing "Failed to load image" errors.
   const result: ProcessedStereoImage = {
-    leftUrl: URL.createObjectURL(leftBlob),
-    rightUrl: URL.createObjectURL(rightBlob),
+    leftUrl: canvasToDataUrl(leftCanvas),
+    rightUrl: canvasToDataUrl(rightCanvas),
     width: halfWidth,
     height: height,
   };
 
   // Cache the result
-  processedImageCache.set(src, result);
+  processedImageCache.set(cacheKey, result);
 
   return result;
 }
 
 /**
- * Convert a canvas to a Blob
+ * Convert a canvas to a Data URL string.
  */
-function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          resolve(blob);
-        } else {
-          reject(new Error('Failed to convert canvas to blob'));
-        }
-      },
-      'image/jpeg',
-      0.9 // 90% quality to match original preprocessing
-    );
-  });
+function canvasToDataUrl(canvas: HTMLCanvasElement): string {
+  return canvas.toDataURL('image/jpeg', 0.9);
 }
 
 /**
- * Clear the processed image cache and revoke all blob URLs
+ * Clear the processed image cache.
  * Call this when you want to free up memory
  */
 export function clearImageCache(): void {
-  processedImageCache.forEach((processed) => {
-    URL.revokeObjectURL(processed.leftUrl);
-    URL.revokeObjectURL(processed.rightUrl);
-  });
+  // Data URLs are strings and are garbage collected normally.
+  // Unlike blob URLs, they don't need to be explicitly revoked.
   processedImageCache.clear();
   imageElementCache.clear();
 }
@@ -145,6 +162,12 @@ export async function getStereoImageElement(src: string): Promise<HTMLImageEleme
  * Preload and process multiple stereo images
  * Useful for preloading adjacent images in a gallery
  */
-export async function preloadStereoImages(srcs: string[]): Promise<void> {
-  await Promise.all(srcs.map(src => splitStereoImage(src).catch(() => {})));
+export async function preloadStereoImages(
+  files: (DropboxFile | GalleryPhoto)[], // eslint-disable-line
+  folderUrl?: string,
+): Promise<void> {
+  await Promise.all(
+    // Errors are ignored during preload
+    files.map((file) => splitStereoImage(file, folderUrl).catch(() => {})),
+  );
 }

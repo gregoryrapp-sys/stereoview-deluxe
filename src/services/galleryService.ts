@@ -9,6 +9,13 @@ export interface GalleryPhoto extends Photo {
   rightSrc?: string; // For Dropbox pairs
 }
 
+export interface DropboxFile {
+  name: string;
+  path_lower: string;
+  id: string; // Dropbox ID
+  src: string; // Direct download URL for <img> tags
+}
+
 export interface GalleryData {
   events: EventRecord[];
   albums: AlbumRecord[];
@@ -218,20 +225,27 @@ export async function fetchGalleryData(): Promise<GalleryData> {
   return { events, albums, photos };
 }
 
-export async function fetchDropboxPhotos(folderUrl: string): Promise<{ url: string; name: string; path: string }[]> {
+export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile[]> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
     body: { folderUrl },
   });
+  if (error) {
+    throw new Error(error.message || 'Failed to fetch Dropbox files');
+  }
+  // The edge function now returns entries with a direct 'src' URL.
+  return data as DropboxFile[];
+}
+
+/**
+ * Fetches the binary content (blob) of a single Dropbox file via our proxy edge function.
+ * This is used for operations that need pixel data, like image processing, to avoid CORS issues.
+ */
+export async function fetchDropboxFileBlob({folderUrl,fileName,}: {folderUrl: string;  fileName: string;}): Promise<Blob> {
+  const { data, error } = await supabase.functions.invoke('dropbox-file', {
+    body: { folderUrl, fileName },
+  });
 
   if (error) {
-    // The edge function throws for various reasons (e.g., bad URL, Dropbox API error)
-    // We can inspect the error object if we need more specific messages.
-    if (error instanceof Error && error.message.includes('Function returned non-2xx status code')) {
-      // This is a bit of a hack to get the underlying error message from the function response
-      const match = error.message.match(/{.*}/);
-      const functionError = match ? JSON.parse(match[0]) : { error: 'Failed to fetch from Dropbox.' };
-      throw new Error(functionError.error || 'Failed to fetch from Dropbox.');
-    }
     throw error;
   }
 
@@ -413,7 +427,7 @@ export async function createAlbum({
       event_id: eventId,
       title,
       description: description || null,
-      slug: slug ? makeSlug(slug) : undefined,
+      slug: slug ? makeSlug(slug) : null,
       source_type: source_type ?? 'upload',
       dropbox_folder_url: dropbox_folder_url ?? null,
     })
@@ -461,20 +475,23 @@ export async function updateAlbum({
   description,
   slug,
   coverPhotoId,
+  dropbox_folder_url,
 }: {
   albumId: string;
   title: string;
   description?: string;
   slug?: string;
   coverPhotoId?: string | null;
+  dropbox_folder_url?: string | null;
 }): Promise<void> {
   const { error } = await supabase
     .from('albums')
     .update({
-      title,
+      title: title,
       description: description || null,
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
       ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
+      ...(dropbox_folder_url !== undefined ? { dropbox_folder_url: dropbox_folder_url } : {}),
     })
     .eq('id', albumId);
 
@@ -482,6 +499,7 @@ export async function updateAlbum({
     throw error;
   }
 }
+
 
 export async function updateProfilePresentation({
   profileId,
