@@ -3,13 +3,39 @@ import { corsHeaders } from "../_shared/cors.ts";
 //import{ getDropboxToken } from "../_shared/getDropboxToken.ts";
 
 //const DROPBOX_TOKEN = Deno.env.get("DROPBOX_ACCESS_TOKEN")!;
-const DROPBOX_TOKEN = await getDropboxToken()!;
+const DROPBOX_TOKEN = await getDropboxToken();
+async function getDropboxToken() {
+  try{
+    console.log(`Check the environment variables: DROPBOX_REFRESH_TOKEN=${Deno.env.get("DROPBOX_REFRESH_TOKEN")}, DROPBOX_APP_KEY=${Deno.env.get("DROPBOX_APP_KEY")}, DROPBOX_SECRET_KEY=${Deno.env.get("DROPBOX_SECRET_KEY")}`);
+    // 2. Request a new Access Token from Dropbox
+    const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: Deno.env.get("DROPBOX_REFRESH_TOKEN")!,
+        client_id: Deno.env.get("DROPBOX_APP_KEY"),
+        client_secret: Deno.env.get("DROPBOX_SECRET_KEY")
+      })
+    });
+    const result = await response.json();
+    console.log("Dropbox token response:", result);
+    return result.access_token; // Use this to make your API call
+
+  }  catch(err){
+    console.error("Error fetching Dropbox token:", err);
+    throw err;
+  }
+
+  
+}
+
 async function handler(req: Request) {
   // Handle preflight requests
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
-
+  console.log("list-dropbox-files DROPBOX_TOKEN:", DROPBOX_TOKEN);
   try {
     // Invoked via supabase.functions.invoke, so expect POST with JSON body
     const { folderUrl, fileName } = await req.json();
@@ -58,20 +84,3 @@ async function handler(req: Request) {
 
 serve(handler);
 
-export async function getDropboxToken() {
-  
-  // 2. Request a new Access Token from Dropbox
-  const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: Deno.env.get("DROPBOX_REFRESH_TOKEN")!,
-      client_id: Deno.env.get("DROPBOX_APP_ID"),
-      client_secret: Deno.env.get("DROPBOX_SECRET_SECRET")
-    })
-  });
-
-  const result = await response.json();
-  return result.access_token; // Use this to make your API call
-}

@@ -28,6 +28,7 @@ export interface AlbumRecord {
   description: string | null;
   slug: string;
   cover_photo_id: string | null;
+  dropbox_cover_image_name: string | null;
   created_at: string;
   source_type: 'upload' | 'dropbox';
   dropbox_folder_url: string | null;
@@ -94,6 +95,7 @@ export interface Database {
           description?: string | null;
           slug?: string;
           cover_photo_id?: string | null;
+          dropbox_cover_image_name?: string | null;
           source_type?: 'upload' | 'dropbox';
           dropbox_folder_url?: string | null;
           created_at?: string;

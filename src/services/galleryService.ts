@@ -236,6 +236,18 @@ export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile
   return data as DropboxFile[];
 }
 
+export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Promise<DropboxFile> {
+  const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    body: { folderUrl, fileName },
+  });
+  if (error) {
+    throw new Error(error.message || 'Failed to fetch Dropbox file data');
+  }
+  // The edge function returns a single file object when fileName is provided
+  return data as DropboxFile;
+}
+
+
 /**
  * Fetches the binary content (blob) of a single Dropbox file via our proxy edge function.
  * This is used for operations that need pixel data, like image processing, to avoid CORS issues.
@@ -475,6 +487,7 @@ export async function updateAlbum({
   description,
   slug,
   coverPhotoId,
+  dropboxCoverImageName,
   dropbox_folder_url,
 }: {
   albumId: string;
@@ -482,16 +495,26 @@ export async function updateAlbum({
   description?: string;
   slug?: string;
   coverPhotoId?: string | null;
+  dropboxCoverImageName?: string | null;
   dropbox_folder_url?: string | null;
 }): Promise<void> {
+  const coverUpdate: { cover_photo_id?: string | null; dropbox_cover_image_name?: string | null } = {};
+  if (dropboxCoverImageName !== undefined) {
+    coverUpdate.dropbox_cover_image_name = dropboxCoverImageName;
+    coverUpdate.cover_photo_id = null;
+  } else if (coverPhotoId !== undefined) {
+    coverUpdate.cover_photo_id = coverPhotoId;
+    coverUpdate.dropbox_cover_image_name = null;
+  }
+
   const { error } = await supabase
     .from('albums')
     .update({
       title: title,
       description: description || null,
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
-      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
       ...(dropbox_folder_url !== undefined ? { dropbox_folder_url: dropbox_folder_url } : {}),
+      ...coverUpdate,
     })
     .eq('id', albumId);
 

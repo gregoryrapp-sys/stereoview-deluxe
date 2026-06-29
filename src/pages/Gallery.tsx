@@ -3,6 +3,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   DropboxFile,
+  fetchDropboxPhoto,
   fetchDropboxPhotos,
   fetchGalleryData,
   GalleryData,
@@ -43,6 +44,7 @@ export default function Gallery() {
   const [selectedAlbumId, setSelectedAlbumId] = useState('');
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
   const albumCountsByEvent = useMemo(() => {
@@ -79,6 +81,81 @@ export default function Gallery() {
     () => galleryData.albums.filter((album) => album.event_id === selectedEventId),
     [galleryData.albums, selectedEventId],
   );
+
+  useEffect(() => {
+    if (!activeAlbums || activeAlbums.length === 0) return;
+
+    const fetchCovers = async () => {
+      const coversToFetch = activeAlbums.filter(
+        (album) =>
+          album.source_type === 'dropbox' &&
+          album.dropbox_cover_image_name &&
+          album.dropbox_folder_url &&
+          !dropboxCoverUrls[album.id]
+      );
+
+      if (coversToFetch.length === 0) return;
+
+      const results = await Promise.allSettled(
+        coversToFetch.map(async (album) => {
+          const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, album.dropbox_cover_image_name!);
+          return { albumId: album.id, src: photo.src, name: photo.name };
+        })
+      );
+
+      const newCoverUrls: Record<string, { src: string; name: string }> = {};
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.src) {
+          newCoverUrls[result.value.albumId] = { src: result.value.src, name: result.value.name };
+        }
+      });
+
+      if (Object.keys(newCoverUrls).length > 0) {
+        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
+      }
+    };
+
+    fetchCovers();
+  }, [activeAlbums, dropboxCoverUrls]);
+
+  useEffect(() => {
+    if (!galleryData.events || galleryData.events.length === 0) return;
+
+    const fetchEventCovers = async () => {
+      const coversToFetch = galleryData.events.filter(
+        (event) => !event.cover_photo_id && !dropboxCoverUrls[`event:${event.id}`],
+      );
+
+      if (coversToFetch.length === 0) return;
+
+      const results = await Promise.allSettled(
+        coversToFetch.map(async (event) => {
+          const dropboxAlbum = galleryData.albums.find(
+            (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
+          );
+          if (!dropboxAlbum) return null;
+          const photos = await fetchDropboxPhotos(dropboxAlbum.dropbox_folder_url!);
+          if (photos.length > 0) {
+            return { eventId: event.id, src: photos[0].src, name: photos[0].name };
+          }
+          return null;
+        }),
+      );
+
+      const newCoverUrls: Record<string, { src: string; name: string }> = {};
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value?.src) {
+          newCoverUrls[`event:${result.value.eventId}`] = { src: result.value.src, name: result.value.name };
+        }
+      });
+
+      if (Object.keys(newCoverUrls).length > 0) {
+        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
+      }
+    };
+
+    fetchEventCovers();
+  }, [galleryData.events, galleryData.albums, dropboxCoverUrls]);
 
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
@@ -439,7 +516,26 @@ export default function Gallery() {
           galleryData.events.length > 0 ? (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               {galleryData.events.map((event) => {
-                const eventCover = getCoverPhoto(photosByEvent[event.id] ?? [], event.cover_photo_id);
+                let eventCover: GalleryPhoto | null = null;
+                let coverAlbum: AlbumRecord | null = null;
+
+                if (!event.cover_photo_id) {
+                  const coverInfo = dropboxCoverUrls[`event:${event.id}`];
+                  if (coverInfo) {
+                    eventCover = {
+                      id: `event-cover-${event.id}`,
+                      src: coverInfo.src,
+                      alt: coverInfo.name,
+                      eventId: event.id,
+                    };
+                    coverAlbum =
+                      galleryData.albums.find(
+                        (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
+                      ) ?? null;
+                  }
+                } else {
+                  eventCover = getCoverPhoto(photosByEvent[event.id] ?? [], event.cover_photo_id);
+                }
 
                 return (
                   <button
@@ -449,7 +545,7 @@ export default function Gallery() {
                   >
                     <span className="block aspect-[3/2] bg-secondary">
                       {eventCover ? (
-                        <StereoThumbnail photo={eventCover} album={null} />
+                        <StereoThumbnail photo={eventCover} album={coverAlbum} />
                       ) : (
                         <span className="flex h-full w-full items-center justify-center">
                           <FolderOpen className="h-6 w-6 text-muted-foreground" />
@@ -477,7 +573,23 @@ export default function Gallery() {
           activeAlbums.length > 0 ? (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               {activeAlbums.map((album) => {
-                const albumCover = getCoverPhoto(photosByAlbum[album.id] ?? [], album.cover_photo_id);
+                const photos = photosByAlbum[album.id] ?? [];
+                let albumCover: GalleryPhoto | null = null;
+
+                if (album.source_type === 'dropbox' && album.dropbox_cover_image_name) {
+                  const coverInfo = dropboxCoverUrls[album.id];
+                  if (coverInfo) {
+                    albumCover = {
+                      id: `${album.id}-${album.dropbox_cover_image_name}`,
+                      src: coverInfo.src,
+                      alt: coverInfo.name,
+                      albumId: album.id,
+                      eventId: album.event_id,
+                    };
+                  }
+                } else {
+                  albumCover = getCoverPhoto(photos, album.cover_photo_id);
+                }
 
                 return (
                   <button
@@ -487,7 +599,7 @@ export default function Gallery() {
                   >
                     <span className="block aspect-[3/2] bg-secondary">
                       {albumCover ? (
-                        <StereoThumbnail photo={albumCover} album={selectedAlbum} />
+                        <StereoThumbnail photo={albumCover} album={album} />
                       ) : (
                         <span className="flex h-full w-full items-center justify-center">
                           <Images className="h-6 w-6 text-muted-foreground" />

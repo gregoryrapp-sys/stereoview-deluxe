@@ -1,129 +1,182 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { corsHeaders } from "../_shared/cors.ts";
-//import{ getDropboxToken } from "../_shared/getDropboxToken.ts";
-
-//const DROPBOX_TOKEN = Deno.env.get("DROPBOX_ACCESS_TOKEN")!;
-const DROPBOX_TOKEN  = await getDropboxToken()!;
 
 async function getDropboxToken() {
   try{
-    console.log(`Check the environment variables: DROPBOX_REFRESH_TOKEN=${Deno.env.get("DROPBOX_REFRESH_TOKEN")}, DROPBOX_APP_KEY=${Deno.env.get("DROPBOX_APP_KEY")}, DROPBOX_SECRET_KEY=${Deno.env.get("DROPBOX_SECRET_KEY")}`);
-    // 2. Request a new Access Token from Dropbox
     const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: Deno.env.get("DROPBOX_REFRESH_TOKEN")!,
-        client_id: Deno.env.get("DROPBOX_APP_KEY"),
-        client_secret: Deno.env.get("DROPBOX_SECRET_KEY")
+        client_id: Deno.env.get("DROPBOX_APP_KEY")!,
+        client_secret: Deno.env.get("DROPBOX_SECRET_KEY")!,
       })
     });
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error("Dropbox token refresh failed:", errorBody);
+        throw new Error(`Dropbox token refresh failed: ${response.statusText}`);
+    }
     const result = await response.json();
-    console.log("Dropbox token response:", result);
-    return result.access_token; // Use this to make your API call
-
+    return result.access_token;
   }  catch(err){
     console.error("Error fetching Dropbox token:", err);
     throw err;
   }
-
-  
 }
 
+const DROPBOX_TOKEN = await getDropboxToken();
+const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
 
-async function dropboxFetch(url: string, body: any) {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${DROPBOX_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
+function getDirectLink(url: string): string {
+  const urlObj = new URL(url);
+  urlObj.searchParams.set('raw', '1');
+  return urlObj.toString();
+}
 
-  const text = await res.text();
-
-  if (!res.ok) {
-    console.error("DROPBOX API ERROR:", text);
-    throw new Error(text);
+async function handler(req: Request) {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  return JSON.parse(text);
-}
-
-
-
-async function handler(req: Request): Promise<Response> {
-  console.log("list-dropbox-files DROPBOX_TOKEN:", DROPBOX_TOKEN);
-  
   try {
-    const { folderUrl } = await req.json();
-    console.log("Received folderUrl:", folderUrl);
+    const { folderUrl, fileName } = await req.json();
+
     if (!folderUrl) {
-      return new Response(JSON.stringify({ error: "folderUrl required" }), {
+      return new Response(JSON.stringify({ error: "folderUrl is required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Determine the base URL of your Supabase functions dynamically 
-    // e.g., https://<your-project-ref>.supabase.co/functions/v1
-    let data = await dropboxFetch(
-      "https://api.dropboxapi.com/2/files/list_folder",
-      {
-        path: "",
-        shared_link: { url: folderUrl },
-      }
-    );
-    let unfilteredEntries = data.entries;
-    let cursor = data.cursor;
-    while (data.has_more) {
-      data = await dropboxFetch(
-        "https://api.dropboxapi.com/2/files/list_folder/continue",
-        { cursor }
-      );
-      unfilteredEntries.push(...(data.entries || []));
-      cursor = data.cursor;
+    if (!DROPBOX_TOKEN) {
+      return new Response(JSON.stringify({ error: "Dropbox token not available" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
-    // Filter for files and images
-    const imageEntries = unfilteredEntries.filter((f: any) => f[".tag"] === "file" && /\.(jpg|jpeg|png|webp)$/i.test(f.name));
-    console.log(`Found ${imageEntries.length} image files in folder ${folderUrl}`);
-    // For each image, get the direct download link. This is for <img> tags.
-    const entriesWithLinks = await Promise.all(
-      imageEntries.map(async (file: any) => {
-        try {
-          // This API call gets metadata including a temporary direct link.
-          const response = await fetch("https://content.dropboxapi.com/2/sharing/get_shared_link_file", {
+/*
+    const folderMetaResponse = await fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${DROPBOX_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url: folderUrl }),
+    });
+
+    if (!folderMetaResponse.ok) {
+      const errorBody = await folderMetaResponse.text();
+      console.error('Dropbox API error (get_shared_link_metadata for folder):', errorBody);
+      throw new Error(`Could not get shared folder metadata: ${folderMetaResponse.statusText}`);
+    }
+    const folderMeta = await folderMetaResponse.json();
+    const basePath = folderMeta.path_lower;
+    if (folderMeta['.tag'] !== 'folder' || !basePath) {
+      throw new Error('The provided URL is not a valid Dropbox folder link.');
+    }
+*/
+    let listResponse = await fetch("https://api.dropboxapi.com/2/files/list_folder", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${DROPBOX_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            path: "", // An empty path with a shared_link lists the root of the shared folder
+            shared_link: { url: folderUrl },
+        }),
+    });
+
+    if (!listResponse.ok) {
+        const errorBody = await listResponse.text();
+        console.error("Dropbox API error (list_folder):", errorBody);
+        throw new Error(`Dropbox API error: ${listResponse.statusText}`);
+    }
+
+    let listData = await listResponse.json();
+    let allEntries = listData.entries;
+
+    while (listData.has_more) {
+        listResponse = await fetch("https://api.dropboxapi.com/2/files/list_folder/continue", {
             method: "POST",
             headers: {
-              "Authorization": `Bearer ${DROPBOX_TOKEN}`,
-              "Dropbox-API-Arg": JSON.stringify({
-                url: folderUrl,
-                path: "/"+file.name
-              })
-            }
-          });
+              Authorization: `Bearer ${DROPBOX_TOKEN}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ cursor: listData.cursor }),
+        });
+        listData = await listResponse.json();
+        allEntries.push(...(listData.entries || []));
+    }
 
-          if (!response.ok) {
-            console.error(`Error fetching direct link for ${file.name}:`, await response.text());
-            return { ...file, src: '' }; // Fallback
-          }
-
-          const resultHeader = response.headers.get("dropbox-api-result") || '{}';
-          const result = JSON.parse(resultHeader);
-          return { ...file, src: result.url.replace("dl=0", "dl=1") };
-        } catch (e) {
-          console.error(`Error processing file ${file.name}:`, e);
-          return { ...file, src: '' }; // Fallback
-        }
-      })
+    const imageFiles = allEntries.filter(entry =>
+      entry['.tag'] === 'file' && IMAGE_EXTENSIONS.some(ext => entry.name.toLowerCase().endsWith(ext))
     );
 
-    return new Response(JSON.stringify(entriesWithLinks), {
-      status: 200,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    if (fileName) {
+      const fileEntry = imageFiles.find(entry => entry.name === fileName);
+      if (!fileEntry) {
+        throw new Error(`File "${fileName}" not found in shared folder.`);
+      }
+      //const relativePath = fileEntry.path_lower.substring(basePath.length);
+      const fileMetaResponse = await fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${DROPBOX_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: folderUrl, path: "/"+fileName }),
+      });
+
+      if (!fileMetaResponse.ok) {
+        throw new Error(`Could not get metadata for ${fileName}: ${fileMetaResponse.statusText}`);
+      }
+
+      const fileMeta = await fileMetaResponse.json();
+      const fileData = {
+        name: fileMeta.name,
+        path_lower: fileMeta.path_lower,
+        id: fileMeta.id,
+        src: getDirectLink(fileMeta.url.replace("dl=0", "dl=1") ),
+      };
+
+      return new Response(JSON.stringify(fileData), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      });
+    }
+
+    const metaPromises = imageFiles.map(file => {
+      //const relativePath = file.path_lower.substring(basePath.length);
+      return fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${DROPBOX_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ url: folderUrl, path: "/"+file.name }),
+      })
+      .then(res => res.ok ? res.json() : null);
     });
+
+    const metaResults = await Promise.all(metaPromises);
+
+    const filesWithSrc = metaResults
+      .filter(meta => meta !== null)
+      .map(meta => ({
+        name: meta.name,
+        path_lower: meta.path_lower,
+        id: meta.id,
+        src: getDirectLink(meta.url.replace("dl=0", "dl=1") ),
+      }));
+
+    return new Response(JSON.stringify(filesWithSrc), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      status: 200,
+    });
+
   }catch (err: any) {
     console.error("Error in handler:", err);
     return new Response(JSON.stringify({ error: err.message }), {
@@ -133,10 +186,4 @@ async function handler(req: Request): Promise<Response> {
   }
 }
 
-serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
-  return handler(req);
-});
-
+serve(handler);
