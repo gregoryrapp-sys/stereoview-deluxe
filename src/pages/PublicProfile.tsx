@@ -1,0 +1,441 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useParams } from 'react-router-dom';
+import { AlertCircle, ArrowLeft, ArrowDown, ArrowUp, Cloud, FolderOpen, Images , User} from 'lucide-react';
+import StereoViewer from '@/components/StereoViewer';
+import StereoThumbnail from '@/components/StereoThumbnail';
+import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData , fetchDropboxPhotos} from '@/services/galleryService';
+import ThumbnailGrid from '@/components/ThumbnailGrid';
+
+
+function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
+  return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
+}
+
+export default function PublicProfile() {
+  const { profileSlug = '', eventSlug = null, albumSlug = null } = useParams();
+  const [data, setData] = useState<SharedGalleryData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [photoSortKey, setPhotoSortKey] = useState<'alt'>('alt');
+  const [photoSortDirection, setPhotoSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
+  const [isDropboxLoading, setIsDropboxLoading] = useState(false);
+  const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
+  const [dropboxProfileCover, setDropboxProfileCover] = useState<GalleryPhoto | null>(null);
+
+  useEffect(() => {
+    async function loadPublicData() {
+      if (!profileSlug) return;
+      setIsLoading(true);
+      setError('');
+      try {
+        const result = await fetchPublicProfileBySlug(profileSlug);
+        if (!result) {
+          setError('Profile not found or is not public.');
+        } else {
+          setData(result);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load gallery.');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    loadPublicData();
+  }, [profileSlug]);
+
+  useEffect(() => {
+    if (!data?.profile) return;
+
+    const profile = data.profile as any;
+    if (profile.dropbox_cover_album_id && profile.dropbox_cover_image_name) {
+      const album = data.albums.find(a => a.id === profile.dropbox_cover_album_id);
+      if (album?.dropbox_folder_url) {
+        let cancelled = false;
+        const fetchCover = async () => {
+          try {
+            const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, profile.dropbox_cover_image_name);
+            if (!cancelled) {
+              setDropboxProfileCover({ id: photo.id, src: photo.src, alt: photo.name });
+            }
+          } catch (e) {
+            console.error("Failed to fetch dropbox profile cover", e);
+          }
+        };
+        fetchCover();
+        return () => { cancelled = true; };
+      }
+    }
+  }, [data]);
+
+  useEffect(() => {
+    if (!data) return;
+
+    const fetchCovers = async () => {
+      const coversToFetch: { id: string; folderUrl: string; imageName: string }[] = [];
+
+      // Event covers
+      data.events.forEach(event => {
+        const e = event as any;
+        if (e.dropbox_cover_album_id && e.dropbox_cover_image_name) {
+          const album = data.albums.find(a => a.id === e.dropbox_cover_album_id);
+          if (album?.dropbox_folder_url) {
+            coversToFetch.push({
+              id: `event:${e.id}`,
+              folderUrl: album.dropbox_folder_url,
+              imageName: e.dropbox_cover_image_name,
+            });
+          }
+        }
+      });
+
+      // Album covers
+      data.albums.forEach(album => {
+        const a = album as any;
+        if (a.source_type === 'dropbox' && a.dropbox_cover_image_name && a.dropbox_folder_url) {
+          coversToFetch.push({
+            id: `album:${a.id}`,
+            folderUrl: a.dropbox_folder_url,
+            imageName: a.dropbox_cover_image_name,
+          });
+        }
+      });
+
+      if (coversToFetch.length === 0) return;
+
+      const results = await Promise.allSettled(
+        coversToFetch.map(async (item) => {
+          const photo = await fetchDropboxPhoto(item.folderUrl, item.imageName);
+          return { id: item.id, src: photo.src, name: photo.name };
+        })
+      );
+
+      const newCoverUrls: Record<string, { src: string; name: string }> = {};
+      results.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.src) {
+          newCoverUrls[result.value.id] = { src: result.value.src, name: result.value.name };
+        }
+      });
+
+      if (Object.keys(newCoverUrls).length > 0) {
+        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
+      }
+    };
+
+    fetchCovers();
+  }, [data]);
+
+  const selectedEvent = useMemo(
+    () => data?.events.find((event) => event.slug === eventSlug) ?? null,
+    [eventSlug, data?.events],
+  );
+
+  const selectedAlbum = useMemo(
+    () => data?.albums.find((album) => album.slug === albumSlug && album.event_id === selectedEvent?.id) ?? null,
+    [albumSlug, selectedEvent, data?.albums],
+  );
+
+  useEffect(() => {
+    if (selectedAlbum?.source_type !== 'dropbox' || !selectedAlbum.dropbox_folder_url) {
+      setDropboxAlbumPhotos([]);
+      return;
+    }
+
+    let cancelled = false;
+    const fetchAlbumPhotos = async () => {
+      setIsDropboxLoading(true);
+      try {
+        const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
+        if (!cancelled) {
+          setDropboxAlbumPhotos(files.map(f => ({ id: f.id, src: f.src, alt: f.name })));
+        }
+      } catch (e) {
+        console.error('Failed to fetch dropbox album photos', e);
+        if (!cancelled) {
+          setError('Could not load photos for this Dropbox album.');
+        }
+      } finally {
+        if (!cancelled) {
+          setIsDropboxLoading(false);
+        }
+      }
+    };
+
+    fetchAlbumPhotos();
+    return () => { cancelled = true; };
+  }, [selectedAlbum]);
+
+  const photosByAlbum = useMemo(() => {
+    return (data?.photos ?? []).reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {
+      if (!photo.albumId) return groups;
+      groups[photo.albumId] = [...(groups[photo.albumId] ?? []), photo];
+      return groups;
+    }, {});
+  }, [data?.photos]);
+
+  const photosByEvent = useMemo(() => {
+    return (data?.photos ?? []).reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {
+      if (!photo.eventId) return groups;
+      groups[photo.eventId] = [...(groups[photo.eventId] ?? []), photo];
+      return groups;
+    }, {});
+  }, [data?.photos]);
+
+  const activeAlbums = useMemo(
+    () => (data?.albums ?? []).filter((album) => album.event_id === selectedEvent?.id),
+    [data?.albums, selectedEvent],
+  );
+
+  const activePhotos = useMemo(() => {
+    if (!selectedAlbum) return [];
+    if (selectedAlbum.source_type === 'dropbox') {
+      return dropboxAlbumPhotos;
+    }
+    return photosByAlbum[selectedAlbum.id] ?? [];
+  }, [selectedAlbum, photosByAlbum, dropboxAlbumPhotos]);
+
+  const sortedActivePhotos = useMemo(() => {
+    return [...activePhotos].sort((a, b) => {
+      const comparison = (a.alt || '').localeCompare(b.alt || '', undefined, { numeric: true });
+      return photoSortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [activePhotos, photoSortKey, photoSortDirection]);
+
+  const isAlbumPage = !!albumSlug;
+  const isEventPage = !!eventSlug && !albumSlug;
+  const isProfilePage = !eventSlug;
+  
+  const headerCover = useMemo(() => {
+    if (!data) return null;
+
+    if (isAlbumPage && selectedAlbum) {
+      const album = selectedAlbum as any;
+      if (album.dropbox_cover_image_name) {
+        // For dropbox albums, activePhotos are already fetched. Find cover by name.
+        return activePhotos.find(p => p.alt === album.dropbox_cover_image_name) ?? null;
+      }
+      if (album.cover_photo_id) {
+        // For upload albums, find cover by id.
+        return activePhotos.find(p => p.id === album.cover_photo_id) ?? null;
+      }
+      return null; // No explicit cover
+    }
+
+    if (isEventPage && selectedEvent) {
+      const event = selectedEvent as any;
+      if (event.dropbox_cover_album_id && event.dropbox_cover_image_name) {
+        const coverInfo = dropboxCoverUrls[`event:${event.id}`];
+        if (coverInfo) {
+          return { id: `event-cover-${event.id}`, src: coverInfo.src, alt: coverInfo.name };
+        }
+        return null; // wait for fetch
+      }
+      if (event.cover_photo_id) {
+        const eventPhotos = photosByEvent[selectedEvent.id] ?? [];
+        return eventPhotos.find(p => p.id === event.cover_photo_id) ?? null;
+      }
+      return null; // No explicit cover
+    }
+    
+    // Profile page logic
+    const profile = data.profile as any;
+    if (profile.dropbox_cover_album_id && profile.dropbox_cover_image_name) {
+      return dropboxProfileCover;
+    }
+    if (profile.cover_photo_id) {
+      return data.photos.find(p => p.id === profile.cover_photo_id) ?? null;
+    }
+    return null;
+  }, [data, selectedAlbum, selectedEvent, activePhotos, photosByEvent, isAlbumPage, isEventPage, dropboxProfileCover, dropboxCoverUrls]);
+
+  if (isLoading) {
+    return <div className="flex min-h-screen items-center justify-center">Loading...</div>;
+  }
+
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return null; // Should be covered by error state
+  }
+
+  return (
+    <div className="min-h-screen px-4 py-6">
+      <header className="mx-auto mb-6 max-w-6xl">
+        {headerCover && (
+          <div className="mb-5 aspect-[4/1] overflow-hidden rounded-md bg-secondary">
+            <StereoThumbnail photo={headerCover} />
+          </div>
+        )}
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2 text-xl font-light md:text-2xl">
+            <Link to={`/${profileSlug}`} className="hover:underline">
+              {data.profile.display_name ?? data.profile.slug}
+            </Link>
+            {selectedEvent && (
+              <>
+                <span className="text-muted-foreground">/</span>
+                {selectedAlbum ? (
+                  <Link to={`/${profileSlug}/${selectedEvent.slug}`} className="hover:underline">
+                    {selectedEvent.title}
+                  </Link>
+                ) : (
+                  <span>{selectedEvent.title}</span>
+                )}
+              </>
+            )}
+            {selectedAlbum && (
+              <>
+                <span className="text-muted-foreground">/</span>
+                <span>{selectedAlbum.title}</span>
+              </>
+            )}
+          </div>
+          <Button asChild variant="secondary" className="gap-2">
+              <Link to="/">
+                <User className="h-4 w-4" />
+                All Photographers
+              </Link>
+            </Button>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-6xl">
+        {isProfilePage && (
+          <ThumbnailGrid
+            items={data.events}
+            sortOptions={[{ value: 'created_at', label: 'Date' }, { value: 'title', label: 'Name' }]}
+            emptyMessage="This photographer has no public events."
+            renderItem={(event) => {
+              const eventPhotos = photosByEvent[event.id] ?? [];
+              let cover: GalleryPhoto | null = null;
+              const e = event as any;
+
+              if (e.dropbox_cover_album_id && e.dropbox_cover_image_name) {
+                const coverInfo = dropboxCoverUrls[`event:${e.id}`];
+                if (coverInfo) {
+                  cover = { id: `event-cover-${e.id}`, src: coverInfo.src, alt: coverInfo.name };
+                }
+              } else {
+                cover = getCoverPhoto(eventPhotos, event.cover_photo_id);
+              }
+
+              return (
+                <Link key={event.id} to={`/${profileSlug}/${event.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
+                  <div className="aspect-[3/2] bg-secondary">
+                    {cover ? <StereoThumbnail photo={cover} /> : <div className="flex h-full w-full items-center justify-center"><FolderOpen className="h-6 w-6 text-muted-foreground" /></div>}
+                  </div>
+                  <div className="p-3">
+                    <h2 className="truncate text-sm font-medium">{event.title}</h2>
+                  </div>
+                </Link>
+              );
+            }}
+          />
+        )}
+
+        {isEventPage && selectedEvent && (
+          <ThumbnailGrid
+            items={activeAlbums}
+            sortOptions={[{ value: 'created_at', label: 'Date' }, { value: 'title', label: 'Name' }]}
+            emptyMessage="This event has no public albums."
+            renderItem={(album) => {
+              const photos = photosByAlbum[album.id] ?? [];
+              let cover: GalleryPhoto | null = null;
+              const a = album as any;
+
+              if (a.source_type === 'dropbox' && a.dropbox_cover_image_name) {
+                const coverInfo = dropboxCoverUrls[`album:${a.id}`];
+                if (coverInfo) {
+                  cover = { id: `album-cover-${a.id}`, src: coverInfo.src, alt: coverInfo.name };
+                }
+              } else {
+                cover = getCoverPhoto(photos, album.cover_photo_id);
+              }
+
+              return (
+                <Link key={album.id} to={`/${profileSlug}/${selectedEvent.slug}/${album.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
+                  <div className="aspect-[3/2] bg-secondary">
+                    {cover ? <StereoThumbnail photo={cover} /> : <div className="flex h-full w-full items-center justify-center"><Images className="h-6 w-6 text-muted-foreground" /></div>}
+                  </div>
+                  <div className="p-3">
+                    <h2 className="truncate text-sm font-medium">{album.title}</h2>
+                    <p className="mt-1 text-xs text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
+                  </div>
+                </Link>
+              );
+            }}
+          />
+        )}
+
+        {isAlbumPage && selectedAlbum && (
+          <section className="space-y-4">
+            <div>
+              <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
+              <p className="text-sm text-muted-foreground">{activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}</p>
+            </div>
+            {activePhotos.length > 1 && (
+              <div className="flex items-center justify-start gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+                <Select value={photoSortKey} onValueChange={(v) => setPhotoSortKey(v as 'alt')}>
+                  <SelectTrigger className="w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="alt">Name</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" size="icon" onClick={() => setPhotoSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
+                  {photoSortDirection === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+                </Button>
+              </div>
+            )}
+            {isDropboxLoading ? (
+              <div className="flex items-center justify-center rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+                <Cloud className="mr-2 h-4 w-4 animate-pulse" />
+                Loading photos from Dropbox...
+              </div>
+            ) : sortedActivePhotos.length > 0 ? (
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                {sortedActivePhotos.map((photo) => (
+                  <button key={photo.id} onClick={() => setSelectedPhotoIndex(index)} className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
+                    <StereoThumbnail photo={photo} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">This album is empty.</div>
+            )}
+          </section>
+        )}
+      </main>
+
+      {selectedPhotoIndex !== null && (
+        <div className="fixed inset-0 z-50 bg-black">
+          <StereoViewer
+            album={selectedAlbum}
+            photo={activePhotos[selectedPhotoIndex]}
+            photos={activePhotos}
+            photoIndex={selectedPhotoIndex}
+            onClose={() => setSelectedPhotoIndex(null)}
+            onPrevious={() => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index))}
+            onNext={() => setSelectedPhotoIndex((index) => (index !== null && index < activePhotos.length - 1 ? index + 1 : index))}
+            hasPrevious={selectedPhotoIndex > 0}
+            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+          />
+        </div>
+      )}
+    </div>
+  );
+}

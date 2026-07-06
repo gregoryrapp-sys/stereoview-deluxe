@@ -291,7 +291,7 @@ function SinglePairImagePicker({ id, label, file, disabled, onChange }: SinglePa
                   onChange(null);
                 }
               }}
-              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-background/90 text-foreground shadow-sm transition-colors hover:bg-destructive hover:text-destructive-foreground"
+              className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded bg-background/90 text-foreground shadow-sm transition-colors hover:bg-muted"
             >
               <X className="h-4 w-4" />
             </span>
@@ -637,7 +637,7 @@ export default function UploadPhoto() {
                     type="button"
                     onClick={() => handleMethodChange(method.value as UploadMethod)}
                     className={`flex items-center justify-center gap-2 rounded-md border px-3 py-3 text-sm transition-colors ${
-                      isActive ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-secondary hover:bg-accent'
+                      isActive ? 'border-foreground bg-foreground text-background' : 'border-border bg-secondary hover:bg-accent'
                     }`}
                   >
                     <Icon className="h-4 w-4" />
@@ -785,6 +785,7 @@ export default function UploadPhoto() {
         <div className="flex justify-end">
           <Button
             type="submit"
+            variant="secondary"
             className="gap-2"
               disabled={isUploadDisabledForAlbum ||
               isSubmitting ||

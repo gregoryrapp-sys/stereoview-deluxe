@@ -257,7 +257,7 @@ export default function Admin() {
                   onChange={(e) => setEventDescription(e.target.value)}
                 />
               </div>
-              <Button type="submit" disabled={!selectedOwnerId || !eventTitle}>
+              <Button type="submit" variant="secondary" disabled={!selectedOwnerId || !eventTitle}>
                 Create Event
               </Button>
             </form>
@@ -290,7 +290,7 @@ export default function Admin() {
                   onChange={(e) => setAlbumDescription(e.target.value)}
                 />
               </div>
-              <Button type="submit" disabled={!selectedEventId || !albumTitle}>
+              <Button type="submit" variant="secondary" disabled={!selectedEventId || !albumTitle}>
                 Create Album
               </Button>
             </form>
@@ -335,7 +335,7 @@ export default function Admin() {
                   onChange={(e) => setSelectedFile(e.target.files?.[0] ?? null)}
                 />
               </div>
-              <Button type="submit" disabled={!selectedAlbumId || !selectedFile} className="gap-2">
+              <Button type="submit" variant="secondary" disabled={!selectedAlbumId || !selectedFile} className="gap-2">
                 <Upload className="h-4 w-4" />
                 Upload Photo
               </Button>

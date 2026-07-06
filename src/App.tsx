@@ -5,13 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, HashRouter, Routes, Route } from "react-router-dom";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { isNativeMobileApp } from "@/lib/platform";
-import Landing from "./pages/Landing";
+import Login from "./pages/Login";
 import Gallery from "./pages/Gallery";
 import Admin from "./pages/Admin";
 import UploadPhoto from "./pages/UploadPhoto";
 import EventAlbumManagement from "./pages/EventAlbumManagement";
-import PublicGallery from "./pages/PublicGallery";
-import Photographers from "./pages/Photographers";
+import PublicProfile from "./pages/PublicProfile";
+import Home from "./pages/Home";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -25,17 +25,22 @@ const App = () => (
         <Sonner />
         <Router>
           <Routes>
-            <Route path="/" element={<Landing />} />
+             {/* Public Routes */}
+            <Route path="/" element={<Home />} />
+            <Route path="/login" element={<Login />} />
+            <Route path="/:profileSlug" element={<PublicProfile />} />
+            <Route path="/:profileSlug/:eventSlug" element={<PublicProfile />} />
+            <Route path="/:profileSlug/:eventSlug/:albumSlug" element={<PublicProfile />} />
+            
+            {/* Private/Authenticated Routes */ }
+            
             <Route path="/gallery" element={<Gallery />} />
             <Route path="/upload" element={<UploadPhoto />} />
             <Route path="/manage" element={<EventAlbumManagement />} />
             <Route path="/manage/events/:eventId" element={<EventAlbumManagement />} />
             <Route path="/manage/events/:eventId/albums/:albumId" element={<EventAlbumManagement />} />
             <Route path="/admin" element={<Admin />} />
-            <Route path="/photographers" element={<Photographers />} />
-            <Route path="/:profileSlug" element={<PublicGallery />} />
-            <Route path="/:profileSlug/:eventSlug" element={<PublicGallery />} />
-            <Route path="/:profileSlug/:eventSlug/:albumSlug" element={<PublicGallery />} />
+            
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

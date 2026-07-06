@@ -11,9 +11,11 @@ import {
 } from '@/services/galleryService';
 import StereoViewer from '@/components/StereoViewer';
 import GifViewer from '@/components/GifViewer';
+import ThumbnailGrid from '@/components/ThumbnailGrid';
 import TwoDViewer from '@/components/TwoDViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
+import type { AlbumRecord } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
@@ -81,6 +83,16 @@ export default function Gallery() {
     () => galleryData.albums.filter((album) => album.event_id === selectedEventId),
     [galleryData.albums, selectedEventId],
   );
+
+  const manageLink = useMemo(() => {
+    if (selectedAlbumId && selectedEventId) {
+      return `/manage/events/${selectedEventId}/albums/${selectedAlbumId}`;
+    }
+    if (selectedEventId) {
+      return `/manage/events/${selectedEventId}`;
+    }
+    return '/manage';
+  }, [selectedEventId, selectedAlbumId]);
 
   useEffect(() => {
     if (!activeAlbums || activeAlbums.length === 0) return;
@@ -155,6 +167,39 @@ export default function Gallery() {
     };
 
     fetchEventCovers();
+  }, [galleryData.events, galleryData.albums, dropboxCoverUrls]);
+
+  // Fetch specific dropbox covers for all events in the list
+  useEffect(() => {
+    if (!galleryData.events.length) return;
+
+    const coversToFetch = galleryData.events.filter(
+      (event) =>
+        event.dropbox_cover_album_id &&
+        event.dropbox_cover_image_name &&
+        !dropboxCoverUrls[`event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`]
+    );
+
+    if (coversToFetch.length === 0) return;
+
+    const fetchCovers = async () => {
+      const results = await Promise.allSettled(
+        coversToFetch.map(async (event) => {
+          const album = galleryData.albums.find((a) => a.id === event.dropbox_cover_album_id);
+          if (!album || !album.dropbox_folder_url) return null;
+          const photo = await fetchDropboxPhoto(album.dropbox_folder_url, event.dropbox_cover_image_name!);
+          return { key: `event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`, src: photo.src, name: photo.name };
+        })
+      );
+
+      const newCoverUrls: Record<string, { src: string; name: string }> = {};
+      results.forEach((result) => { if (result.status === 'fulfilled' && result.value) { newCoverUrls[result.value.key] = { src: result.value.src, name: result.value.name }; } });
+      if (Object.keys(newCoverUrls).length > 0) {
+        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
+      }
+    };
+
+    fetchCovers();
   }, [galleryData.events, galleryData.albums, dropboxCoverUrls]);
 
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
@@ -391,22 +436,19 @@ export default function Gallery() {
   return (
     <div className="min-h-screen">
       {/* Header */}
-      <header className="sticky top-0 z-10 flex items-center justify-between bg-background/80 px-4 py-4 backdrop-blur-sm">
-        <h1 className="text-xl font-light tracking-wide">Greg's Photos</h1>
-        <div className="flex items-center gap-2">
+      <header className="sticky top-0 z-10 flex items-center justify-between bg-background/80 px-20 py-4  backdrop-blur-sm">
+        <h1 className="text-xl font-light tracking-wide"> {profile ? profile.display_name : ''}'s Photos</h1>
+        <div className="flex items-center gap-2 text-md font-medium text-muted-foreground">
           {profile?.role && (
             <Badge variant="outline" className="hidden sm:inline-flex">
-              {profile.role}
+              {profile.display_name} {profile.role ? `(${profile.role})` : ''   }
             </Badge>
           )}
-          <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-            <Link to="/manage">
-              <Settings className="h-5 w-5" />
-            </Link>
-          </Button>
-          <Button asChild variant="ghost" size="icon" className="text-muted-foreground hover:text-foreground">
-            <Link to="/photographers">
+          
+          <Button asChild  variant="secondary" className=" text:muted-foreground hover:text-foreground ">
+            <Link to="/">
               <User className="h-5 w-5" />
+              All Photographers Gallery
             </Link>
           </Button>
           {isAdmin && (
@@ -416,39 +458,7 @@ export default function Gallery() {
               </Link>
             </Button>
           )}
-          {/* View Mode Toggle */}
-          <div className="flex rounded-lg bg-secondary p-1">
-            <button
-              onClick={() => setViewMode('stereo')}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === 'stereo'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Stereo
-            </button>
-            <button
-              onClick={() => setViewMode('2d')}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === '2d'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              2D
-            </button>
-            <button
-              onClick={() => setViewMode('gif')}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === 'gif'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              GIF
-            </button>
-          </div>
+          
           <Button
             variant="ghost"
             size="icon"
@@ -497,137 +507,171 @@ export default function Gallery() {
             <p className="text-sm text-muted-foreground">{gallerySubtitle}</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button asChild variant="secondary" className="gap-2">
-              <Link to="/manage">
-                <FolderOpen className="h-4 w-4" />
-                Manage
+            <Button asChild variant="secondary" size="icon" title="Manage Current View">
+              <Link to={manageLink}>
+                <Settings className="h-4 w-4" />
               </Link>
             </Button>
-            <Button asChild variant="secondary" className="gap-2">
-              <Link to="/photographers">
-                <User className="h-4 w-4" />
-                Photographers
-              </Link>
-            </Button>
+            
+            {/* View Mode Toggle */}
+          <div className="flex rounded-lg bg-secondary p-1">
+            <button
+              onClick={() => setViewMode('stereo')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === 'stereo'
+                  ? 'bg-foreground text-background'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Stereo
+            </button>
+            <button
+              onClick={() => setViewMode('2d')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === '2d'
+                  ? 'bg-foreground text-background'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              2D
+            </button>
+            <button
+              onClick={() => setViewMode('gif')}
+              className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                viewMode === 'gif'
+                  ? 'bg-foreground text-background'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              GIF
+            </button>
+          </div>
           </div>
         </div>
 
         {galleryLevel === 'events' && (
-          galleryData.events.length > 0 ? (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-              {galleryData.events.map((event) => {
-                let eventCover: GalleryPhoto | null = null;
-                let coverAlbum: AlbumRecord | null = null;
+          <ThumbnailGrid
+            items={galleryData.events}
+            sortOptions={[
+              { value: 'created_at', label: 'Creation Date' },
+              { value: 'title', label: 'Name' },
+            ]}
+            emptyMessage="No events yet."
+            renderItem={(event) => {
+              const eventPhotos = photosByEvent[event.id] ?? [];
+              let eventCover: GalleryPhoto | null = null;
 
-                if (!event.cover_photo_id) {
-                  const coverInfo = dropboxCoverUrls[`event:${event.id}`];
-                  if (coverInfo) {
-                    eventCover = {
-                      id: `event-cover-${event.id}`,
-                      src: coverInfo.src,
-                      alt: coverInfo.name,
-                      eventId: event.id,
-                    };
-                    coverAlbum =
-                      galleryData.albums.find(
-                        (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
-                      ) ?? null;
-                  }
-                } else {
-                  eventCover = getCoverPhoto(photosByEvent[event.id] ?? [], event.cover_photo_id);
+              // 1. Check for explicitly set Dropbox cover
+              if (event.dropbox_cover_album_id && event.dropbox_cover_image_name) {
+                const coverKey = `event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`;
+                const coverInfo = dropboxCoverUrls[coverKey];
+                if (coverInfo) {
+                  eventCover = {
+                    id: coverKey,
+                    src: coverInfo.src,
+                    alt: coverInfo.name,
+                    eventId: event.id,
+                    albumId: event.dropbox_cover_album_id,
+                  };
                 }
+              }
 
-                return (
-                  <button
-                    key={event.id}
-                    onClick={() => handleSelectEvent(event.id)}
-                    className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <span className="block aspect-[3/2] bg-secondary">
-                      {eventCover ? (
-                        <StereoThumbnail photo={eventCover} album={coverAlbum} />
-                      ) : (
-                        <span className="flex h-full w-full items-center justify-center">
-                          <FolderOpen className="h-6 w-6 text-muted-foreground" />
-                        </span>
-                      )}
-                    </span>
-                    <span className="block min-w-0 p-2">
-                      <span className="block truncate text-sm font-medium">{event.title}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {albumCountsByEvent[event.id] ?? 0} albums
+              // 2. If no explicit Dropbox cover, check for uploaded cover (explicit or fallback to first)
+              if (!eventCover) {
+                eventCover = getCoverPhoto(eventPhotos, event.cover_photo_id);
+              }
+
+              // 3. If still no cover, check for a default fetched Dropbox cover (first photo of first dropbox album)
+              if (!eventCover) {
+                const coverInfo = dropboxCoverUrls[`event:${event.id}`];
+                if (coverInfo) {
+                  eventCover = { id: `event-cover-${event.id}`, src: coverInfo.src, alt: coverInfo.name, eventId: event.id };
+                }
+              }
+
+              return (
+                <button
+                  key={event.id}
+                  onClick={() => handleSelectEvent(event.id)}
+                  className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <span className="block aspect-[3/2] bg-secondary">
+                    {eventCover ? <StereoThumbnail photo={eventCover} /> : (
+                      <span className="flex h-full w-full items-center justify-center">
+                        <FolderOpen className="h-6 w-6 text-muted-foreground" />
                       </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-md border border-border p-6 text-center text-sm text-muted-foreground">
-              No events yet.
-            </div>
-          )
+                    )}
+                  </span>
+                  <span className="block min-w-0 p-2">
+                    <span className="block truncate text-sm font-medium">{event.title}</span>
+                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>{albumCountsByEvent[event.id] ?? 0} albums</span>
+                      <span className="font-mono">{new Date(event.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </span>
+                </button>
+              );
+            }}
+          />
         )}
 
         {galleryLevel === 'albums' && selectedEvent && (
-          activeAlbums.length > 0 ? (
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-              {activeAlbums.map((album) => {
-                const photos = photosByAlbum[album.id] ?? [];
-                let albumCover: GalleryPhoto | null = null;
+          <ThumbnailGrid
+            items={activeAlbums}
+            sortOptions={[
+              { value: 'created_at', label: 'Creation Date' },
+              { value: 'title', label: 'Name' },
+            ]}
+            emptyMessage="This event does not have albums yet."
+            renderItem={(album) => {
+              const photos = photosByAlbum[album.id] ?? [];
+              let albumCover: GalleryPhoto | null = null;
 
-                if (album.source_type === 'dropbox' && album.dropbox_cover_image_name) {
-                  const coverInfo = dropboxCoverUrls[album.id];
-                  if (coverInfo) {
-                    albumCover = {
-                      id: `${album.id}-${album.dropbox_cover_image_name}`,
-                      src: coverInfo.src,
-                      alt: coverInfo.name,
-                      albumId: album.id,
-                      eventId: album.event_id,
-                    };
-                  }
-                } else {
-                  albumCover = getCoverPhoto(photos, album.cover_photo_id);
+              if (album.source_type === 'dropbox' && album.dropbox_cover_image_name) {
+                const coverInfo = dropboxCoverUrls[album.id];
+                if (coverInfo) {
+                  albumCover = {
+                    id: `${album.id}-${album.dropbox_cover_image_name}`,
+                    src: coverInfo.src,
+                    alt: coverInfo.name,
+                    albumId: album.id,
+                    eventId: album.event_id,
+                  };
                 }
+              } else {
+                albumCover = getCoverPhoto(photos, album.cover_photo_id);
+              }
 
-                return (
-                  <button
-                    key={album.id}
-                    onClick={() => handleSelectAlbum(album.id)}
-                    className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
-                  >
-                    <span className="block aspect-[3/2] bg-secondary">
-                      {albumCover ? (
-                        <StereoThumbnail photo={albumCover} album={album} />
-                      ) : (
-                        <span className="flex h-full w-full items-center justify-center">
-                          <Images className="h-6 w-6 text-muted-foreground" />
+              return (
+                <button
+                  key={album.id}
+                  onClick={() => handleSelectAlbum(album.id)}
+                  className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <span className="block aspect-[3/2] bg-secondary">
+                    {albumCover ? <StereoThumbnail photo={albumCover} /> : (
+                      <span className="flex h-full w-full items-center justify-center">
+                        <Images className="h-6 w-6 text-muted-foreground" />
+                      </span>
+                    )}
+                  </span>
+                  <span className="block min-w-0 p-2">
+                    <span className="block truncate text-sm font-medium">{album.title}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {album.source_type === 'dropbox' ? (
+                        <span className="flex items-center gap-1.5">
+                          <Cloud className="h-3 w-3" />
+                          {photoCountsByAlbum[album.id] === -1 ? '? photos' : `${photoCountsByAlbum[album.id]} photos`}
                         </span>
+                      ) : (
+                        `${photoCountsByAlbum[album.id] ?? 0} photos`
                       )}
                     </span>
-                    <span className="block min-w-0 p-2">
-                      <span className="block truncate text-sm font-medium">{album.title}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {album.source_type === 'dropbox' ? (
-                          <span className="flex items-center gap-1.5">
-                            <Cloud className="h-3 w-3" />
-                            {photoCountsByAlbum[album.id] === -1 ? '? photos' : `${photoCountsByAlbum[album.id]} photos`}
-                          </span>
-                        ) : (
-                          `${photoCountsByAlbum[album.id] ?? 0} photos`
-                        )}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="rounded-md border border-border p-6 text-center text-sm text-muted-foreground">
-              This event does not have albums yet.
-            </div>
-          )
+                  </span>
+                </button>
+              );
+            }}
+          />
         )}
 
         {galleryLevel === 'photos' && (isDropboxLoading ? (
@@ -643,7 +687,7 @@ export default function Gallery() {
                   onClick={() => handlePhotoClick(index)}
                   className="group relative aspect-[2/1] overflow-hidden rounded-md bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
                 >
-                <StereoThumbnail photo={photo} album={selectedAlbum} />
+                <StereoThumbnail photo={photo} />
                 </button>
               ))}
             </div>

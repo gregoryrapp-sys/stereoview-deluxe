@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Camera, User } from 'lucide-react';
+import { Camera, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { fetchPhotographerDirectory, PhotographerDirectoryItem } from '@/services/galleryService';
+import { fetchPublicPhotographers, PhotographerDirectoryItem } from '@/services/galleryService';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
 
-export default function Photographers() {
-  const { profile } = useAuth();
+export default function Home() {
+  const { isAuthenticated } = useAuth();
   const [photographers, setPhotographers] = useState<PhotographerDirectoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -19,7 +19,7 @@ export default function Photographers() {
     async function run() {
       setIsLoading(true);
       try {
-        const data = await fetchPhotographerDirectory();
+        const data = await fetchPublicPhotographers();
         if (!cancelled) setPhotographers(data);
       } catch (error) {
         toast({
@@ -38,36 +38,40 @@ export default function Photographers() {
     };
   }, []);
 
-  const visiblePhotographers = useMemo(
-    () => photographers.filter((photographer) => photographer.id !== profile?.id),
-    [photographers, profile?.id],
-  );
-
   return (
     <div className="min-h-screen px-4 py-6">
       <header className="mx-auto mb-6 flex max-w-6xl flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-light tracking-wide">Photographers</h1>
+          <h1 className="text-3xl font-light tracking-wide">Stereo Photos</h1>
           <p className="text-sm text-muted-foreground">
-            {isLoading ? 'Loading public pages...' : 'Browse other photographer pages'}
+            {isLoading ? 'Loading public pages...' : 'Browse public photographer pages'}
           </p>
         </div>
-        <Button asChild variant="secondary" className="gap-2">
-          <Link to="/gallery">
-            <ArrowLeft className="h-4 w-4" />
-            Private Gallery
-          </Link>
-        </Button>
+        {isAuthenticated ? (
+          <Button asChild variant="secondary" className="gap-2">
+            <Link to="/gallery">
+              <User className="h-4 w-4" />
+              My Private Gallery
+            </Link>
+          </Button>
+        ) : (
+          <Button asChild variant="secondary" className="gap-2">
+            <Link to="/login">
+              <User className="h-4 w-4" />
+              Photographer Login
+            </Link>
+          </Button>
+        )}
       </header>
 
       <main className="mx-auto grid max-w-6xl gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {!isLoading && visiblePhotographers.length === 0 && (
+        {!isLoading && photographers.length === 0 && (
           <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">
-            No other photographers are available yet.
+            No public photographer pages are available yet.
           </div>
         )}
 
-        {visiblePhotographers.map((photographer) => (
+        {photographers.map((photographer) => (
           <Link key={photographer.id} to={`/${photographer.slug}`}>
             <Card className="overflow-hidden transition-colors hover:bg-accent">
               <div className="aspect-[3/2] bg-secondary">

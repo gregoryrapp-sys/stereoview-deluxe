@@ -179,10 +179,12 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
   );
 }
 
-export async function fetchGalleryData(): Promise<GalleryData> {
-  const { data: events, error: eventsError } = await supabase
+export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
+  let query = supabase
     .from('events')
-    .select('*')
+    .select('*');
+  if (ownerId) query = query.eq('owner_id', ownerId);
+  const { data: events, error: eventsError } = await query
     .order('created_at', { ascending: false });
 
   if (eventsError) {
@@ -247,7 +249,6 @@ export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Pr
   return data as DropboxFile;
 }
 
-
 /**
  * Fetches the binary content (blob) of a single Dropbox file via our proxy edge function.
  * This is used for operations that need pixel data, like image processing, to avoid CORS issues.
@@ -262,46 +263,6 @@ export async function fetchDropboxFileBlob({folderUrl,fileName,}: {folderUrl: st
   }
 
   return data;
-}
-
-interface SharedGalleryRpcData {
-  profile: PublicProfile;
-  events: EventRecord[];
-  albums: AlbumRecord[];
-  photos: PhotoRecord[];
-}
-
-export async function fetchSharedGalleryBySlugs({
-  profileSlug,
-  eventSlug,
-  albumSlug,
-  password,
-}: {
-  profileSlug: string;
-  eventSlug?: string | null;
-  albumSlug?: string | null;
-  password: string;
-}): Promise<SharedGalleryData> {
-  const { data, error } = await supabase.rpc('get_shared_gallery_by_slugs', {
-    p_profile_slug: profileSlug,
-    p_event_slug: eventSlug ?? null,
-    p_album_slug: albumSlug ?? null,
-    p_password: password,
-  });
-
-  if (error) {
-    throw error;
-  }
-
-  const sharedData = data as SharedGalleryRpcData;
-  const photos = await mapPhotoRowsToGalleryPhotos(sharedData.photos, sharedData.albums);
-
-  return {
-    profile: sharedData.profile,
-    events: sharedData.events,
-    albums: sharedData.albums,
-    photos,
-  };
 }
 
 export async function uploadStereoPairPhoto({
@@ -459,20 +420,54 @@ export async function updateEvent({
   description,
   slug,
   coverPhotoId,
+  dropboxCoverAlbumId,
+  dropboxCoverImageName,
+  isPublic,
+  password,
 }: {
   eventId: string;
   title: string;
   description?: string;
   slug?: string;
   coverPhotoId?: string | null;
+  dropboxCoverAlbumId?: string | null;
+  dropboxCoverImageName?: string | null;
+  isPublic?: boolean;
+  password?: string | null;
 }): Promise<void> {
+  const coverUpdate: {
+    cover_photo_id?: string | null;
+    dropbox_cover_album_id?: string | null;
+    dropbox_cover_image_name?: string | null;
+  } = {};
+  if (dropboxCoverImageName) {
+    coverUpdate.dropbox_cover_album_id = dropboxCoverAlbumId;
+    coverUpdate.dropbox_cover_image_name = dropboxCoverImageName;
+    coverUpdate.cover_photo_id = null;
+  } else if (coverPhotoId !== undefined) {
+    coverUpdate.cover_photo_id = coverPhotoId;
+    coverUpdate.dropbox_cover_album_id = null;
+    coverUpdate.dropbox_cover_image_name = null;
+  }
+
+  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  if (isPublic !== undefined) {
+    privacyUpdate.is_public = isPublic;
+  }
+  if (password) {
+    privacyUpdate.password = await hashPassword(password);
+  } else if (password === null) {
+    privacyUpdate.password = null;
+  }
+
   const { error } = await supabase
     .from('events')
     .update({
       title,
       description: description || null,
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
-      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
+      ...coverUpdate,
+      ...privacyUpdate,
     })
     .eq('id', eventId);
 
@@ -489,6 +484,8 @@ export async function updateAlbum({
   coverPhotoId,
   dropboxCoverImageName,
   dropbox_folder_url,
+  isPublic,
+  password,
 }: {
   albumId: string;
   title: string;
@@ -497,14 +494,26 @@ export async function updateAlbum({
   coverPhotoId?: string | null;
   dropboxCoverImageName?: string | null;
   dropbox_folder_url?: string | null;
+  isPublic?: boolean;
+  password?: string | null;
 }): Promise<void> {
   const coverUpdate: { cover_photo_id?: string | null; dropbox_cover_image_name?: string | null } = {};
-  if (dropboxCoverImageName !== undefined) {
+  if (dropboxCoverImageName) {
     coverUpdate.dropbox_cover_image_name = dropboxCoverImageName;
     coverUpdate.cover_photo_id = null;
   } else if (coverPhotoId !== undefined) {
     coverUpdate.cover_photo_id = coverPhotoId;
     coverUpdate.dropbox_cover_image_name = null;
+  }
+
+  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  if (isPublic !== undefined) {
+    privacyUpdate.is_public = isPublic;
+  }
+  if (password) {
+    privacyUpdate.password = await hashPassword(password);
+  } else if (password === null) {
+    privacyUpdate.password = null;
   }
 
   const { error } = await supabase
@@ -515,6 +524,7 @@ export async function updateAlbum({
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
       ...(dropbox_folder_url !== undefined ? { dropbox_folder_url: dropbox_folder_url } : {}),
       ...coverUpdate,
+      ...privacyUpdate,
     })
     .eq('id', albumId);
 
@@ -529,18 +539,58 @@ export async function updateProfilePresentation({
   displayName,
   slug,
   coverPhotoId,
+  dropboxCoverAlbumId,
+  dropboxCoverImageName,
+  isPublic,
+  password,
 }: {
   profileId: string;
   displayName?: string | null;
   slug?: string;
   coverPhotoId?: string | null;
+  dropboxCoverAlbumId?: string | null;
+  dropboxCoverImageName?: string | null;
+  isPublic?: boolean;
+  password?: string | null;
 }): Promise<void> {
+  const coverUpdate: {
+    cover_photo_id?: string | null;
+    dropbox_cover_album_id?: string | null;
+    dropbox_cover_image_name?: string | null;
+  } = {};
+  if (dropboxCoverImageName) {
+    coverUpdate.dropbox_cover_album_id = dropboxCoverAlbumId;
+    coverUpdate.dropbox_cover_image_name = dropboxCoverImageName;
+    coverUpdate.cover_photo_id = null;
+  } else if (coverPhotoId) {
+    // A specific uploaded photo is chosen
+    coverUpdate.cover_photo_id = coverPhotoId;
+    coverUpdate.dropbox_cover_album_id = null;
+    coverUpdate.dropbox_cover_image_name = null;
+  } else if (coverPhotoId === null) {
+    // "Automatic" is chosen, clear all cover fields
+    coverUpdate.cover_photo_id = null;
+    coverUpdate.dropbox_cover_album_id = null;
+    coverUpdate.dropbox_cover_image_name = null;
+  }
+
+  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  if (isPublic !== undefined) {
+    privacyUpdate.is_public = isPublic;
+  }
+  if (password) {
+    privacyUpdate.password = await hashPassword(password);
+  } else if (password === null) {
+    privacyUpdate.password = null;
+  }
+
   const { error } = await supabase
     .from('profiles')
     .update({
       ...(displayName !== undefined ? { display_name: displayName || null } : {}),
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
-      ...(coverPhotoId !== undefined ? { cover_photo_id: coverPhotoId } : {}),
+      ...coverUpdate,
+      ...privacyUpdate,
     })
     .eq('id', profileId);
 
@@ -549,101 +599,101 @@ export async function updateProfilePresentation({
   }
 }
 
-export async function createShareLink({
-  scope,
-  profileId,
-  eventId,
-  password,
-  expiresAt,
-}: {
-  scope: Exclude<ShareScope, 'album'>;
-  profileId?: string | null;
-  eventId?: string | null;
-  password?: string;
-  expiresAt?: string | null;
-}): Promise<ShareLinkRecord> {
-  const { data, error } = await supabase.rpc('create_share_link', {
-    p_scope: scope,
-    p_profile_id: profileId ?? null,
-    p_event_id: eventId ?? null,
-    p_album_id: null,
-    p_password: password ?? '',
-    p_expires_at: expiresAt ?? null,
+export async function hashPassword(password: string): Promise<string> {
+  const { data, error } = await supabase.functions.invoke('password-service', {
+    body: { type: 'hash', password: password },
   });
 
   if (error) {
-    throw error;
+    throw new Error(`Password hashing failed: ${error.message}`);
   }
-
-  return data;
-}
-
-export async function createEventShareLink({
-  eventId,
-  password,
-}: {
-  eventId: string;
-  password?: string;
-}): Promise<ShareLinkRecord> {
-  return createShareLink({
-    scope: 'event',
-    eventId,
-    password,
-  });
-}
-
-export async function fetchShareLinks(): Promise<ShareLinkRecord[]> {
-  const { data, error } = await supabase
-    .from('share_links')
-    .select('*')
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    throw error;
+  if (!data || !data.hash) {
+    throw new Error('Password service did not return a hash.');
   }
-
-  return data;
+  return data.hash;
 }
 
-export async function revokeShareLink(shareLinkId: string): Promise<void> {
-  const { error } = await supabase
-    .from('share_links')
-    .update({ is_active: false })
-    .eq('id', shareLinkId);
-
-  if (error) {
-    throw error;
-  }
-}
-
-export async function verifySharePassword(token: string, password: string): Promise<boolean> {
-  const { data, error } = await supabase.rpc('verify_share_password', {
-    p_token: token,
-    p_password: password,
+export async function verifyPassword(password: string, hash: string): Promise<boolean> {
+  const { data, error } = await supabase.functions.invoke('password-service', {
+    body: { type: 'verify', password: password, hash: hash },
   });
 
   if (error) {
-    throw error;
+    throw new Error(`Password verification failed: ${error.message}`);
   }
-
-  return data;
+  return data.valid === true;
 }
 
-export async function fetchPhotographerDirectory(): Promise<PhotographerDirectoryItem[]> {
-  const { data: profiles, error } = await supabase.rpc('get_public_photographers', {});
+export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryItem[]> {
+  const { data: profiles, error: profilesError } = await supabase
+    .from('profiles')
+    .select('*, cover_photo_id, dropbox_cover_album_id, dropbox_cover_image_name')
+    .eq('is_public', true);
+
+  if (profilesError) throw profilesError;
+
+  // To avoid fetching all photos/albums, we'll fetch only what's needed for covers.
+  const photoIds = profiles.map((p) => p.cover_photo_id).filter((id): id is string => !!id);
+  const albumIds = profiles.map((p) => (p as any).dropbox_cover_album_id).filter((id): id is string => !!id);
+
+  const { data: photos, error: photosError } = await supabase.from('photos').select('*').in('id', photoIds);
+  if (photosError) throw photosError;
+
+  const { data: albums, error: albumsError } = await supabase.from('albums').select('*').in('id', albumIds);
+  if (albumsError) throw albumsError;
+
+  const photoMap = new Map((await mapPhotoRowsToGalleryPhotos(photos, albums)).map((p) => [p.id, p]));
+
+  const photographers = await Promise.all(
+    profiles.map(async (profile) => {
+      let coverPhoto: GalleryPhoto | null = null;
+      if ((profile as any).dropbox_cover_album_id && (profile as any).dropbox_cover_image_name) {
+        const album = albums.find((a) => a.id === (profile as any).dropbox_cover_album_id);
+        if (album?.dropbox_folder_url) {
+          try {
+            // This is still a potential performance issue if many have dropbox covers.
+            const dropboxPhoto = await fetchDropboxPhoto(album.dropbox_folder_url, (profile as any).dropbox_cover_image_name);
+            coverPhoto = { id: dropboxPhoto.id, src: dropboxPhoto.src, alt: dropboxPhoto.name };
+          } catch (e) {
+            console.error(`Failed to fetch dropbox cover for profile ${profile.id}`, e);
+          }
+        }
+      } else if (profile.cover_photo_id) {
+        coverPhoto = photoMap.get(profile.cover_photo_id) ?? null;
+      }
+      return { ...profile, coverPhoto };
+    })
+  );
+
+  return photographers;
+}
+
+export async function fetchPublicProfileBySlug(slug: string): Promise<SharedGalleryData | null> {
+  const { data: profile, error } = await supabase.from('profiles').select('*').eq('slug', slug).single();
 
   if (error) {
+    if (error.code === 'PGRST116') return null; // Not found
     throw error;
   }
 
-  const publicProfiles = profiles as PublicProfile[];
-  return publicProfiles.map((profile) => ({ ...profile, coverPhoto: null }));
+  // The RLS policies will ensure only public data is returned.
+  const galleryData = await fetchGalleryData(profile.id);
+  return { ...galleryData, profile };
 }
-
 async function removeStorageObjects(paths: string[]) {
   if (paths.length === 0) return;
 
   const { error } = await supabase.storage.from(PHOTOS_BUCKET).remove(paths);
+
+  if (error) {
+    throw error;
+  }
+}
+
+export async function deletePhoto(photoId: string, storagePath: string): Promise<void> {
+  await removeStorageObjects([storagePath]);
+
+  const { error } = await supabase.from('photos').delete().eq('id', photoId);
 
   if (error) {
     throw error;
@@ -698,5 +748,58 @@ export async function deleteEventWithPhotos(eventId: string): Promise<void> {
 
   if (error) {
     throw error;
+  }
+}
+
+export async function movePhotos({
+  photoIds,
+  destinationAlbumId,
+}: {
+  photoIds: string[];
+  destinationAlbumId: string;
+}): Promise<void> {
+  if (photoIds.length === 0) return;
+
+  // 1. Get destination album details to find destination event and owner
+  const { data: destAlbum, error: destAlbumError } = await supabase
+    .from('albums')
+    .select('id, event_id, events(owner_id)')
+    .eq('id', destinationAlbumId)
+    .single();
+
+  if (destAlbumError) throw destAlbumError;
+  if (!destAlbum) throw new Error('Destination album not found.');
+
+  const destinationEventId = destAlbum.event_id;
+  const ownerId = (destAlbum.events as any)?.owner_id; // type assertion needed due to Supabase join typing
+
+  if (!ownerId) throw new Error('Could not determine owner of photos.');
+
+  // 2. Get source photo details
+  const { data: photos, error: photosError } = await supabase.from('photos').select('id, storage_path').in('id', photoIds);
+
+  if (photosError) throw photosError;
+  if (photos.length === 0) return;
+
+  // 3. Move each photo
+  for (const photo of photos) {
+    if (!photo.storage_path) continue;
+
+    const newStoragePath = `${ownerId}/events/${destinationEventId}/albums/${destinationAlbumId}/photos/${photo.id}/stereo.jpg`;
+
+    // 3a. Move file in storage
+    const { error: moveError } = await supabase.storage.from(PHOTOS_BUCKET).move(photo.storage_path, newStoragePath);
+
+    if (moveError) {
+      throw new Error(`Failed to move file ${photo.id}: ${moveError.message}`);
+    }
+
+    // 3b. Update database record
+    const { error: updateError } = await supabase.from('photos').update({ album_id: destinationAlbumId, storage_path: newStoragePath }).eq('id', photo.id);
+
+    if (updateError) {
+      await supabase.storage.from(PHOTOS_BUCKET).move(newStoragePath, photo.storage_path);
+      throw new Error(`Failed to update database for photo ${photo.id}: ${updateError.message}`);
+    }
   }
 }

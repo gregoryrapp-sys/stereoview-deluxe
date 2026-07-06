@@ -9,6 +9,10 @@ export interface Profile {
   slug: string;
   cover_photo_id: string | null;
   created_at: string;
+  is_public: boolean;
+  password: string | null;
+  dropbox_cover_album_id: string | null;
+  dropbox_cover_image_name: string | null;
 }
 
 export interface EventRecord {
@@ -19,6 +23,10 @@ export interface EventRecord {
   slug: string;
   cover_photo_id: string | null;
   created_at: string;
+  dropbox_cover_album_id: string | null;
+  dropbox_cover_image_name: string | null;
+  is_public: boolean;
+  password: string | null;
 }
 
 export interface AlbumRecord {
@@ -32,6 +40,8 @@ export interface AlbumRecord {
   created_at: string;
   source_type: 'upload' | 'dropbox';
   dropbox_folder_url: string | null;
+  is_public: boolean;
+  password: string | null;
 }
 
 export interface PhotoRecord {
