@@ -5,6 +5,7 @@ import StereoViewer from '@/components/StereoViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAuth } from '@/contexts/AuthContext';
 import { fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData , fetchDropboxPhotos} from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 
@@ -14,6 +15,7 @@ function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
 }
 
 export default function PublicProfile() {
+  const { isAuthenticated } = useAuth();
   const { profileSlug = '', eventSlug = null, albumSlug = null } = useParams();
   const [data, setData] = useState<SharedGalleryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -302,12 +304,29 @@ export default function PublicProfile() {
               </>
             )}
           </div>
-          <Button asChild variant="secondary" className="gap-2">
+          <div className="flex flex-wrap gap-2">
+            {isAuthenticated ? (
+              <Button asChild variant="secondary" className="gap-2">
+                <Link to="/gallery">
+                  <Images className="h-4 w-4" />
+                  My Gallery
+                </Link>
+              </Button>
+            ) : (
+              <Button asChild variant="secondary" className="gap-2">
+                <Link to="/login">
+                  <User className="h-4 w-4" />
+                  Login
+                </Link>
+              </Button>
+            )}
+            <Button asChild variant="secondary" className="gap-2">
               <Link to="/">
                 <User className="h-4 w-4" />
                 All Photographers
               </Link>
             </Button>
+          </div>
         </div>
       </header>
 
@@ -315,7 +334,7 @@ export default function PublicProfile() {
         {isProfilePage && (
           <ThumbnailGrid
             items={data.events}
-            sortOptions={[{ value: 'created_at', label: 'Date' }, { value: 'title', label: 'Name' }]}
+            sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
             emptyMessage="This photographer has no public events."
             renderItem={(event) => {
               const eventPhotos = photosByEvent[event.id] ?? [];
@@ -348,7 +367,7 @@ export default function PublicProfile() {
         {isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
-            sortOptions={[{ value: 'created_at', label: 'Date' }, { value: 'title', label: 'Name' }]}
+            sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
             emptyMessage="This event has no public albums."
             renderItem={(album) => {
               const photos = photosByAlbum[album.id] ?? [];
@@ -371,7 +390,14 @@ export default function PublicProfile() {
                   </div>
                   <div className="p-3">
                     <h2 className="truncate text-sm font-medium">{album.title}</h2>
-                    <p className="mt-1 text-xs text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
+                    {album.source_type === 'dropbox' ? (
+                      <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-sky-600 dark:text-sky-400">
+                        <Cloud className="h-3 w-3" />
+                        Dropbox Live
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
+                    )}
                   </div>
                 </Link>
               );
@@ -383,7 +409,14 @@ export default function PublicProfile() {
           <section className="space-y-4">
             <div>
               <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
-              <p className="text-sm text-muted-foreground">{activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}</p>
+              <p className="text-sm text-muted-foreground">
+                {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
+                {selectedAlbum.source_type === 'dropbox' && (
+                  <span className="font-medium text-sky-600 dark:text-sky-400">
+                    {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
+                  </span>
+                )}
+              </p>
             </div>
             {activePhotos.length > 1 && (
               <div className="flex items-center justify-start gap-2">
@@ -408,7 +441,7 @@ export default function PublicProfile() {
               </div>
             ) : sortedActivePhotos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-                {sortedActivePhotos.map((photo) => (
+                {sortedActivePhotos.map((photo, index) => (
                   <button key={photo.id} onClick={() => setSelectedPhotoIndex(index)} className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
                     <StereoThumbnail photo={photo} />
                   </button>
@@ -425,14 +458,14 @@ export default function PublicProfile() {
         <div className="fixed inset-0 z-50 bg-black">
           <StereoViewer
             album={selectedAlbum}
-            photo={activePhotos[selectedPhotoIndex]}
-            photos={activePhotos}
+            photo={sortedActivePhotos[selectedPhotoIndex]}
+            photos={sortedActivePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={() => setSelectedPhotoIndex(null)}
             onPrevious={() => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index))}
-            onNext={() => setSelectedPhotoIndex((index) => (index !== null && index < activePhotos.length - 1 ? index + 1 : index))}
+            onNext={() => setSelectedPhotoIndex((index) => (index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index))}
             hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
           />
         </div>
       )}

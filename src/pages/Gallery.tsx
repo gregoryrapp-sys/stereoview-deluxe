@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Link, Navigate } from 'react-router-dom';
+import { ArrowDown, ArrowUp } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   DropboxFile,
@@ -15,6 +16,7 @@ import ThumbnailGrid from '@/components/ThumbnailGrid';
 import TwoDViewer from '@/components/TwoDViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { AlbumRecord } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -46,6 +48,8 @@ export default function Gallery() {
   const [selectedAlbumId, setSelectedAlbumId] = useState('');
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [photoSortKey, setPhotoSortKey] = useState<'alt'>('alt');
+  const [photoSortDirection, setPhotoSortDirection] = useState<'asc' | 'desc'>('asc');
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
@@ -269,6 +273,13 @@ export default function Gallery() {
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
 }, [isDropboxAlbum, dropboxPhotos, galleryData.photos, selectedAlbumId, selectedEventId]);
 
+  const sortedActivePhotos = useMemo(() => {
+    return [...activePhotos].sort((a, b) => {
+      const comparison = (a.alt || '').localeCompare(b.alt || '', undefined, { numeric: true });
+      return photoSortDirection === 'asc' ? comparison : -comparison;
+    });
+  }, [activePhotos, photoSortKey, photoSortDirection]);
+
   const photoCountsByAlbum = useMemo(() => {
     const counts = galleryData.photos.reduce<Record<string, number>>((counts, photo) => {
       if (!photo.albumId) return counts;
@@ -401,7 +412,7 @@ export default function Gallery() {
 
     if (direction === 'prev' && selectedPhotoIndex > 0) {
       setSelectedPhotoIndex(selectedPhotoIndex - 1);
-    } else if (direction === 'next' && selectedPhotoIndex < activePhotos.length - 1) {
+    } else if (direction === 'next' && selectedPhotoIndex < sortedActivePhotos.length - 1) {
       setSelectedPhotoIndex(selectedPhotoIndex + 1);
     }
   };
@@ -504,7 +515,14 @@ export default function Gallery() {
               {selectedAlbum && <span>{selectedAlbum.title}</span>}
             </div>
             <h2 className="truncate text-xl font-light">{galleryTitle}</h2>
-            <p className="text-sm text-muted-foreground">{gallerySubtitle}</p>
+            <p className="text-sm text-muted-foreground">
+              {gallerySubtitle}
+              {galleryLevel === 'photos' && isDropboxAlbum && (
+                <span className="font-medium text-sky-600 dark:text-sky-400">
+                  {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
+                </span>
+              )}
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="secondary" size="icon" title="Manage Current View">
@@ -549,12 +567,29 @@ export default function Gallery() {
           </div>
         </div>
 
+        {galleryLevel === 'photos' && activePhotos.length > 1 && (
+          <div className="mb-4 flex items-center justify-start gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+            <Select value={photoSortKey} onValueChange={(v) => setPhotoSortKey(v as 'alt')}>
+              <SelectTrigger className="w-[120px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="alt">Name</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button variant="outline" size="icon" onClick={() => setPhotoSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
+              {photoSortDirection === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
+            </Button>
+          </div>
+        )}
+
         {galleryLevel === 'events' && (
           <ThumbnailGrid
             items={galleryData.events}
             sortOptions={[
-              { value: 'created_at', label: 'Creation Date' },
               { value: 'title', label: 'Name' },
+            { value: 'created_at', label: 'Creation Date' },
             ]}
             emptyMessage="No events yet."
             renderItem={(event) => {
@@ -619,8 +654,8 @@ export default function Gallery() {
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={[
-              { value: 'created_at', label: 'Creation Date' },
               { value: 'title', label: 'Name' },
+            { value: 'created_at', label: 'Creation Date' },
             ]}
             emptyMessage="This event does not have albums yet."
             renderItem={(album) => {
@@ -659,9 +694,9 @@ export default function Gallery() {
                     <span className="block truncate text-sm font-medium">{album.title}</span>
                     <span className="block text-xs text-muted-foreground">
                       {album.source_type === 'dropbox' ? (
-                        <span className="flex items-center gap-1.5">
+                        <span className="flex items-center gap-1.5 font-medium text-sky-600 dark:text-sky-400">
                           <Cloud className="h-3 w-3" />
-                          {photoCountsByAlbum[album.id] === -1 ? '? photos' : `${photoCountsByAlbum[album.id]} photos`}
+                          Dropbox Live
                         </span>
                       ) : (
                         `${photoCountsByAlbum[album.id] ?? 0} photos`
@@ -679,9 +714,9 @@ export default function Gallery() {
               <Cloud className="mr-2 h-4 w-4 animate-pulse" />
               Loading photos from Dropbox...
             </div>
-          ) : activePhotos.length > 0 ? (
+          ) : sortedActivePhotos.length > 0 ? (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-              {activePhotos.map((photo, index) => (
+              {sortedActivePhotos.map((photo, index) => (
                 <button
                   key={photo.id}
                   onClick={() => handlePhotoClick(index)}
@@ -707,41 +742,41 @@ export default function Gallery() {
       >
         {isViewerOpen && viewMode === 'stereo' && (
           <StereoViewer
-            photo={activePhotos[selectedPhotoIndex]}
+            photo={sortedActivePhotos[selectedPhotoIndex]}
             album={selectedAlbum}
-            photos={activePhotos}
+            photos={sortedActivePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
             onPrevious={() => handleNavigate('prev')}
             onNext={() => handleNavigate('next')}
             hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
           />
         )}
         {isViewerOpen && viewMode === '2d' && (
           <TwoDViewer
-            photo={activePhotos[selectedPhotoIndex]}
+            photo={sortedActivePhotos[selectedPhotoIndex]}
             album={selectedAlbum}
-            photos={activePhotos}
+            photos={sortedActivePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
             onPrevious={() => handleNavigate('prev')}
             onNext={() => handleNavigate('next')}
             hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
           />
         )}
         {isViewerOpen && viewMode === 'gif' && (
           <GifViewer
-            photo={activePhotos[selectedPhotoIndex]}
+            photo={sortedActivePhotos[selectedPhotoIndex]}
             album={selectedAlbum}
-            photos={activePhotos}
+            photos={sortedActivePhotos}
             photoIndex={selectedPhotoIndex}
             onClose={handleCloseViewer}
             onPrevious={() => handleNavigate('prev')}
             onNext={() => handleNavigate('next')}
             hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < activePhotos.length - 1}
+            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
           />
         )}
       </div>

@@ -23,12 +23,15 @@ export default function ThumbnailGrid<T extends { id: string; title: string; cre
   items,
   renderItem,
   sortOptions,
-  initialSortKey = 'created_at',
-  initialSortDirection = 'desc',
+  initialSortKey,
+  initialSortDirection,
   emptyMessage,
 }: ThumbnailGridProps<T>) {
-  const [sortKey, setSortKey] = useState(initialSortKey);
-  const [sortDirection, setSortDirection] = useState<SortDirection>(initialSortDirection);
+  const defaultSortKey = sortOptions[0]?.value ?? 'created_at';
+  const [sortKey, setSortKey] = useState(initialSortKey ?? defaultSortKey);
+  const [sortDirection, setSortDirection] = useState<SortDirection>(
+    initialSortDirection ?? (sortKey === 'title' ? 'asc' : 'desc'),
+  );
 
   const sortedItems = useMemo(() => {
     if (!items) return [];

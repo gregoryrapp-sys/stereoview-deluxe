@@ -187,8 +187,8 @@ export function ProfileCoverPhotoPicker({
           <ThumbnailGrid
             items={galleryData.events}
             sortOptions={[
-              { value: 'created_at', label: 'Creation Date' },
               { value: 'title', label: 'Name' },
+              { value: 'created_at', label: 'Creation Date' },
             ]}
             emptyMessage="No events found."
             renderItem={(event) => {
@@ -252,8 +252,8 @@ export function ProfileCoverPhotoPicker({
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={[
-              { value: 'created_at', label: 'Creation Date' },
               { value: 'title', label: 'Name' },
+              { value: 'created_at', label: 'Creation Date' },
             ]}
             emptyMessage="This event has no albums."
             renderItem={(album) => {

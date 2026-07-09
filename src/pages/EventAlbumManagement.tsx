@@ -1089,8 +1089,8 @@ export default function EventAlbumManagement() {
             <ThumbnailGrid
               items={galleryData.events}
               sortOptions={[
-                { value: 'created_at', label: 'Creation Date' },
                 { value: 'title', label: 'Name' },
+                { value: 'created_at', label: 'Creation Date' },
               ]}
               emptyMessage="No events yet. Click 'Add Event' to create one."
               renderItem={(eventRecord) => {
@@ -1221,8 +1221,8 @@ export default function EventAlbumManagement() {
             <ThumbnailGrid
               items={eventAlbums}
               sortOptions={[
-                { value: 'created_at', label: 'Creation Date' },
                 { value: 'title', label: 'Name' },
+                { value: 'created_at', label: 'Creation Date' },
               ]}
               emptyMessage="This event has no albums yet. Click 'Add Album' to create one."
               renderItem={(album) => {
@@ -1256,8 +1256,15 @@ export default function EventAlbumManagement() {
                       <CardContent className="space-y-2 p-3">
                         <div>
                           <h3 className="truncate text-sm font-medium">{album.title}</h3>
-                          <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            <span>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</span>
+                          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                            {album.source_type === 'dropbox' ? (
+                              <span className="flex items-center gap-1.5 font-medium text-sky-600 dark:text-sky-400">
+                                <Cloud className="h-3 w-3" />
+                                Dropbox Live
+                              </span>
+                            ) : (
+                              <span>{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</span>
+                            )}
                             <span className="font-mono">{new Date(album.created_at).toLocaleDateString()}</span>
                           </div>
                         </div>
@@ -1368,7 +1375,17 @@ export default function EventAlbumManagement() {
             </Card>
 
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-xl font-light">Photos in this album</h2>
+              <div>
+                <h2 className="text-xl font-light">Photos in this album</h2>
+                <p className="text-sm text-muted-foreground">
+                  {displayPhotos.length} {displayPhotos.length === 1 ? 'photo' : 'photos'}
+                  {isDropboxAlbum && (
+                    <span className="font-medium text-sky-600 dark:text-sky-400">
+                      {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
+                    </span>
+                  )}
+                </p>
+              </div>
               {albumPhotos.length > 0 && selectedAlbum.source_type === 'upload' && (
                 <div className="flex gap-2">
                   <Button variant="outline" onClick={handleSelectAllPhotos} disabled={isSaving || selectablePhotoIds.length === 0}>
