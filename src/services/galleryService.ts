@@ -653,7 +653,11 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
           try {
             // This is still a potential performance issue if many have dropbox covers.
             const dropboxPhoto = await fetchDropboxPhoto(album.dropbox_folder_url, (profile as any).dropbox_cover_image_name);
-            coverPhoto = { id: dropboxPhoto.id, src: dropboxPhoto.src, alt: dropboxPhoto.name };
+            const blob = await fetchDropboxFileBlob({
+              folderUrl: album.dropbox_folder_url,
+              fileName: dropboxPhoto.name,
+            });
+            coverPhoto = { id: dropboxPhoto.id, src: URL.createObjectURL(blob), alt: dropboxPhoto.name };
           } catch (e) {
             console.error(`Failed to fetch dropbox cover for profile ${profile.id}`, e);
           }

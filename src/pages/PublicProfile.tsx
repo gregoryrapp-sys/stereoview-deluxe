@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, ArrowDown, ArrowUp, Cloud, FolderOpen, Images , User} from 'lucide-react';
-import StereoViewer from '@/components/StereoViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
-import { fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData , fetchDropboxPhotos} from '@/services/galleryService';
+import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData , fetchDropboxPhotos} from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
+import StereoViewer from '@/components/StereoViewer';
+import TwoDViewer from '@/components/TwoDViewer';
+import GifViewer from '@/components/GifViewer';
+import { getSmartViewerMode } from '@/lib/viewerMode';
 
 
 function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
   return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
 }
+
+type ViewMode = 'stereo' | '2d' | 'gif';
 
 export default function PublicProfile() {
   const { isAuthenticated } = useAuth();
@@ -21,6 +26,8 @@ export default function PublicProfile() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('stereo');
+  const [hasManualViewMode, setHasManualViewMode] = useState(false);
   const [photoSortKey, setPhotoSortKey] = useState<'alt'>('alt');
   const [photoSortDirection, setPhotoSortDirection] = useState<'asc' | 'desc'>('asc');
   const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
@@ -57,18 +64,29 @@ export default function PublicProfile() {
       const album = data.albums.find(a => a.id === profile.dropbox_cover_album_id);
       if (album?.dropbox_folder_url) {
         let cancelled = false;
+        let objectUrl: string | null = null;
         const fetchCover = async () => {
           try {
             const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, profile.dropbox_cover_image_name);
+            const blob = await fetchDropboxFileBlob({
+              folderUrl: album.dropbox_folder_url!,
+              fileName: photo.name,
+            });
+            objectUrl = URL.createObjectURL(blob);
             if (!cancelled) {
-              setDropboxProfileCover({ id: photo.id, src: photo.src, alt: photo.name });
+              setDropboxProfileCover({ id: photo.id, src: objectUrl, alt: photo.name });
+            } else if (objectUrl) {
+              URL.revokeObjectURL(objectUrl);
             }
           } catch (e) {
             console.error("Failed to fetch dropbox profile cover", e);
           }
         };
         fetchCover();
-        return () => { cancelled = true; };
+        return () => {
+          cancelled = true;
+          if (objectUrl) URL.revokeObjectURL(objectUrl);
+        };
       }
     }
   }, [data]);
@@ -108,10 +126,17 @@ export default function PublicProfile() {
 
       if (coversToFetch.length === 0) return;
 
+      const objectUrls: string[] = [];
       const results = await Promise.allSettled(
         coversToFetch.map(async (item) => {
           const photo = await fetchDropboxPhoto(item.folderUrl, item.imageName);
-          return { id: item.id, src: photo.src, name: photo.name };
+          const blob = await fetchDropboxFileBlob({
+            folderUrl: item.folderUrl,
+            fileName: photo.name,
+          });
+          const src = URL.createObjectURL(blob);
+          objectUrls.push(src);
+          return { id: item.id, src, name: photo.name };
         })
       );
 
@@ -122,12 +147,29 @@ export default function PublicProfile() {
         }
       });
 
-      if (Object.keys(newCoverUrls).length > 0) {
+      if (!cancelled && Object.keys(newCoverUrls).length > 0) {
         setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
       }
+
+      return objectUrls;
     };
 
-    fetchCovers();
+    let cancelled = false;
+    let objectUrls: string[] = [];
+
+    fetchCovers().then((urls) => {
+      if (!urls) return;
+      if (cancelled) {
+        urls.forEach((url) => URL.revokeObjectURL(url));
+      } else {
+        objectUrls = urls;
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
   }, [data]);
 
   const selectedEvent = useMemo(
@@ -147,12 +189,26 @@ export default function PublicProfile() {
     }
 
     let cancelled = false;
+    let objectUrls: string[] = [];
     const fetchAlbumPhotos = async () => {
       setIsDropboxLoading(true);
       try {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
+        const photos = await Promise.all(
+          files.map(async (file) => {
+            const blob = await fetchDropboxFileBlob({
+              folderUrl: selectedAlbum.dropbox_folder_url!,
+              fileName: file.name,
+            });
+            const src = URL.createObjectURL(blob);
+            objectUrls.push(src);
+            return { id: file.id, src, alt: file.name };
+          }),
+        );
         if (!cancelled) {
-          setDropboxAlbumPhotos(files.map(f => ({ id: f.id, src: f.src, alt: f.name })));
+          setDropboxAlbumPhotos(photos);
+        } else {
+          objectUrls.forEach((url) => URL.revokeObjectURL(url));
         }
       } catch (e) {
         console.error('Failed to fetch dropbox album photos', e);
@@ -167,7 +223,10 @@ export default function PublicProfile() {
     };
 
     fetchAlbumPhotos();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
   }, [selectedAlbum]);
 
   const photosByAlbum = useMemo(() => {
@@ -205,6 +264,33 @@ export default function PublicProfile() {
       return photoSortDirection === 'asc' ? comparison : -comparison;
     });
   }, [activePhotos, photoSortKey, photoSortDirection]);
+
+  useEffect(() => {
+    if (!selectedAlbum?.id) return;
+
+    setHasManualViewMode(false);
+    setViewMode(getSmartViewerMode());
+  }, [selectedAlbum?.id]);
+
+  useEffect(() => {
+    if (!selectedAlbum?.id || hasManualViewMode || selectedPhotoIndex !== null) return;
+
+    const handleResize = () => {
+      setViewMode(getSmartViewerMode());
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, [hasManualViewMode, selectedAlbum?.id, selectedPhotoIndex]);
+
+  const handlePhotoClick = (index: number) => {
+    setSelectedPhotoIndex(index);
+  };
 
   const isAlbumPage = !!albumSlug;
   const isEventPage = !!eventSlug && !albumSlug;
@@ -407,16 +493,53 @@ export default function PublicProfile() {
 
         {isAlbumPage && selectedAlbum && (
           <section className="space-y-4">
-            <div>
-              <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
-              <p className="text-sm text-muted-foreground">
-                {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
-                {selectedAlbum.source_type === 'dropbox' && (
-                  <span className="font-medium text-sky-600 dark:text-sky-400">
-                    {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
-                  </span>
-                )}
-              </p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
+                <p className="text-sm text-muted-foreground">
+                  {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
+                  {selectedAlbum.source_type === 'dropbox' && (
+                    <span className="font-medium text-sky-600 dark:text-sky-400">
+                      {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
+                    </span>
+                  )}
+                </p>
+              </div>
+              <div className="flex rounded-lg bg-secondary p-1">
+                <button
+                  onClick={() => {
+                    setHasManualViewMode(true);
+                    setViewMode('stereo');
+                  }}
+                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                    viewMode === 'stereo' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Stereo
+                </button>
+                <button
+                  onClick={() => {
+                    setHasManualViewMode(true);
+                    setViewMode('2d');
+                  }}
+                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                    viewMode === '2d' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  2D
+                </button>
+                <button
+                  onClick={() => {
+                    setHasManualViewMode(true);
+                    setViewMode('gif');
+                  }}
+                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
+                    viewMode === 'gif' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  GIF
+                </button>
+              </div>
             </div>
             {activePhotos.length > 1 && (
               <div className="flex items-center justify-start gap-2">
@@ -442,7 +565,7 @@ export default function PublicProfile() {
             ) : sortedActivePhotos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {sortedActivePhotos.map((photo, index) => (
-                  <button key={photo.id} onClick={() => setSelectedPhotoIndex(index)} className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
+                  <button key={photo.id} onClick={() => handlePhotoClick(index)} className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
                     <StereoThumbnail photo={photo} />
                   </button>
                 ))}
@@ -454,21 +577,26 @@ export default function PublicProfile() {
         )}
       </main>
 
-      {selectedPhotoIndex !== null && (
-        <div className="fixed inset-0 z-50 bg-black">
-          <StereoViewer
-            album={selectedAlbum}
-            photo={sortedActivePhotos[selectedPhotoIndex]}
-            photos={sortedActivePhotos}
-            photoIndex={selectedPhotoIndex}
-            onClose={() => setSelectedPhotoIndex(null)}
-            onPrevious={() => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index))}
-            onNext={() => setSelectedPhotoIndex((index) => (index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index))}
-            hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
-          />
-        </div>
-      )}
+      {selectedPhotoIndex !== null && (() => {
+        const viewerProps = {
+          album: selectedAlbum,
+          photo: sortedActivePhotos[selectedPhotoIndex],
+          photos: sortedActivePhotos,
+          photoIndex: selectedPhotoIndex,
+          onClose: () => setSelectedPhotoIndex(null),
+          onPrevious: () => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index)),
+          onNext: () => setSelectedPhotoIndex((index) => (index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index)),
+          hasPrevious: selectedPhotoIndex > 0,
+          hasNext: selectedPhotoIndex < sortedActivePhotos.length - 1,
+        };
+        return (
+          <div className="fixed inset-0 z-50 bg-black">
+            {viewMode === 'stereo' && <StereoViewer {...viewerProps} />}
+            {viewMode === '2d' && <TwoDViewer {...viewerProps} />}
+            {viewMode === 'gif' && <GifViewer {...viewerProps} />}
+          </div>
+        );
+      })()}
     </div>
   );
 }

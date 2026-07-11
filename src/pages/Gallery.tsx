@@ -21,6 +21,7 @@ import type { AlbumRecord } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
+import { getSmartViewerMode } from '@/lib/viewerMode';
 
 type ViewMode = 'stereo' | '2d' | 'gif';
 
@@ -43,6 +44,7 @@ export default function Gallery() {
   const { isAuthenticated, isAdmin, isLoading: isAuthLoading, logout, profile } = useAuth();
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('stereo');
+  const [hasManualViewMode, setHasManualViewMode] = useState(false);
   const [galleryData, setGalleryData] = useState<GalleryData>({ events: [], albums: [], photos: [] });
   const [selectedEventId, setSelectedEventId] = useState('');
   const [selectedAlbumId, setSelectedAlbumId] = useState('');
@@ -319,6 +321,29 @@ export default function Gallery() {
     setSelectedPhotoIndex(null);
   }, []);
 
+  useEffect(() => {
+    if (!selectedAlbumId) return;
+
+    setHasManualViewMode(false);
+    setViewMode(getSmartViewerMode());
+  }, [selectedAlbumId]);
+
+  useEffect(() => {
+    if (!selectedAlbumId || hasManualViewMode || selectedPhotoIndex !== null) return;
+
+    const handleResize = () => {
+      setViewMode(getSmartViewerMode());
+    };
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, [hasManualViewMode, selectedAlbumId, selectedPhotoIndex]);
+
   // Listen for fullscreen exit (user presses back/escape)
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -534,7 +559,10 @@ export default function Gallery() {
             {/* View Mode Toggle */}
           <div className="flex rounded-lg bg-secondary p-1">
             <button
-              onClick={() => setViewMode('stereo')}
+              onClick={() => {
+                setHasManualViewMode(true);
+                setViewMode('stereo');
+              }}
               className={`rounded-md px-3 py-1 text-sm transition-colors ${
                 viewMode === 'stereo'
                   ? 'bg-foreground text-background'
@@ -544,7 +572,10 @@ export default function Gallery() {
               Stereo
             </button>
             <button
-              onClick={() => setViewMode('2d')}
+              onClick={() => {
+                setHasManualViewMode(true);
+                setViewMode('2d');
+              }}
               className={`rounded-md px-3 py-1 text-sm transition-colors ${
                 viewMode === '2d'
                   ? 'bg-foreground text-background'
@@ -554,7 +585,10 @@ export default function Gallery() {
               2D
             </button>
             <button
-              onClick={() => setViewMode('gif')}
+              onClick={() => {
+                setHasManualViewMode(true);
+                setViewMode('gif');
+              }}
               className={`rounded-md px-3 py-1 text-sm transition-colors ${
                 viewMode === 'gif'
                   ? 'bg-foreground text-background'

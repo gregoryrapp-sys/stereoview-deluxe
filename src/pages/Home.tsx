@@ -15,12 +15,16 @@ export default function Home() {
 
   useEffect(() => {
     let cancelled = false;
+    let loadedPhotographers: PhotographerDirectoryItem[] = [];
 
     async function run() {
       setIsLoading(true);
       try {
         const data = await fetchPublicPhotographers();
-        if (!cancelled) setPhotographers(data);
+        if (!cancelled) {
+          loadedPhotographers = data;
+          setPhotographers(data);
+        }
       } catch (error) {
         toast({
           title: 'Could not load photographers',
@@ -35,6 +39,10 @@ export default function Home() {
     run();
     return () => {
       cancelled = true;
+      loadedPhotographers.forEach((photographer) => {
+        const src = photographer.coverPhoto?.src;
+        if (src?.startsWith('blob:')) URL.revokeObjectURL(src);
+      });
     };
   }, []);
 
