@@ -3,7 +3,12 @@ import { Link } from 'react-router-dom';
 import { Camera, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { fetchPublicPhotographers, PhotographerDirectoryItem } from '@/services/galleryService';
+import {
+  fetchDropboxFileBlob,
+  fetchDropboxPhoto,
+  fetchPublicPhotographers,
+  PhotographerDirectoryItem,
+} from '@/services/galleryService';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { toast } from '@/hooks/use-toast';
 import { useAuth } from '@/contexts/AuthContext';
@@ -24,6 +29,36 @@ export default function Home() {
         if (!cancelled) {
           loadedPhotographers = data;
           setPhotographers(data);
+
+          data.forEach(async (photographer) => {
+            if (!photographer.dropboxCoverFolderUrl || !photographer.dropboxCoverImageName) return;
+
+            try {
+              const photo = await fetchDropboxPhoto(
+                photographer.dropboxCoverFolderUrl,
+                photographer.dropboxCoverImageName,
+              );
+              const blob = await fetchDropboxFileBlob({
+                folderUrl: photographer.dropboxCoverFolderUrl,
+                fileName: photo.name,
+              });
+              const src = URL.createObjectURL(blob);
+
+              if (cancelled) {
+                URL.revokeObjectURL(src);
+                return;
+              }
+
+              loadedPhotographers = loadedPhotographers.map((item) =>
+                item.id === photographer.id
+                  ? { ...item, coverPhoto: { id: photo.id, src, alt: photo.name } }
+                  : item,
+              );
+              setPhotographers(loadedPhotographers);
+            } catch (error) {
+              console.error(`Failed to fetch Dropbox cover for photographer ${photographer.id}`, error);
+            }
+          });
         }
       } catch (error) {
         toast({
@@ -83,7 +118,7 @@ export default function Home() {
           <Link key={photographer.id} to={`/${photographer.slug}`}>
             <Card className="overflow-hidden transition-colors hover:bg-accent">
               <div className="aspect-[3/2] bg-secondary">
-                {photographer.coverPhoto ? (
+                {photographer.coverPhoto?.src ? (
                   <StereoThumbnail photo={photographer.coverPhoto} />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-muted-foreground">

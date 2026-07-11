@@ -30,6 +30,8 @@ export interface SharedGalleryData extends GalleryData {
 
 export interface PhotographerDirectoryItem extends PublicProfile {
   coverPhoto?: GalleryPhoto | null;
+  dropboxCoverFolderUrl?: string | null;
+  dropboxCoverImageName?: string | null;
 }
 
 export type UploadImageSource =
@@ -644,30 +646,28 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
 
   const photoMap = new Map((await mapPhotoRowsToGalleryPhotos(photos, albums)).map((p) => [p.id, p]));
 
-  const photographers = await Promise.all(
-    profiles.map(async (profile) => {
-      let coverPhoto: GalleryPhoto | null = null;
-      if ((profile as any).dropbox_cover_album_id && (profile as any).dropbox_cover_image_name) {
-        const album = albums.find((a) => a.id === (profile as any).dropbox_cover_album_id);
-        if (album?.dropbox_folder_url) {
-          try {
-            // This is still a potential performance issue if many have dropbox covers.
-            const dropboxPhoto = await fetchDropboxPhoto(album.dropbox_folder_url, (profile as any).dropbox_cover_image_name);
-            const blob = await fetchDropboxFileBlob({
-              folderUrl: album.dropbox_folder_url,
-              fileName: dropboxPhoto.name,
-            });
-            coverPhoto = { id: dropboxPhoto.id, src: URL.createObjectURL(blob), alt: dropboxPhoto.name };
-          } catch (e) {
-            console.error(`Failed to fetch dropbox cover for profile ${profile.id}`, e);
-          }
-        }
-      } else if (profile.cover_photo_id) {
-        coverPhoto = photoMap.get(profile.cover_photo_id) ?? null;
+  const photographers = profiles.map((profile) => {
+    let coverPhoto: GalleryPhoto | null = null;
+    let dropboxCoverFolderUrl: string | null = null;
+    let dropboxCoverImageName: string | null = null;
+
+    if ((profile as any).dropbox_cover_album_id && (profile as any).dropbox_cover_image_name) {
+      const album = albums.find((a) => a.id === (profile as any).dropbox_cover_album_id);
+      if (album?.dropbox_folder_url) {
+        dropboxCoverFolderUrl = album.dropbox_folder_url;
+        dropboxCoverImageName = (profile as any).dropbox_cover_image_name;
+        coverPhoto = {
+          id: `dropbox-cover-${profile.id}`,
+          src: '',
+          alt: dropboxCoverImageName,
+        };
       }
-      return { ...profile, coverPhoto };
-    })
-  );
+    } else if (profile.cover_photo_id) {
+      coverPhoto = photoMap.get(profile.cover_photo_id) ?? null;
+    }
+
+    return { ...profile, coverPhoto, dropboxCoverFolderUrl, dropboxCoverImageName };
+  });
 
   return photographers;
 }

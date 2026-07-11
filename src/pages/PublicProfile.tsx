@@ -194,22 +194,31 @@ export default function PublicProfile() {
       setIsDropboxLoading(true);
       try {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
-        const photos = await Promise.all(
-          files.map(async (file) => {
+        if (cancelled) return;
+
+        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name })));
+        setIsDropboxLoading(false);
+
+        files.forEach(async (file) => {
+          try {
             const blob = await fetchDropboxFileBlob({
               folderUrl: selectedAlbum.dropbox_folder_url!,
               fileName: file.name,
             });
             const src = URL.createObjectURL(blob);
+            if (cancelled) {
+              URL.revokeObjectURL(src);
+              return;
+            }
+
             objectUrls.push(src);
-            return { id: file.id, src, alt: file.name };
-          }),
-        );
-        if (!cancelled) {
-          setDropboxAlbumPhotos(photos);
-        } else {
-          objectUrls.forEach((url) => URL.revokeObjectURL(url));
-        }
+            setDropboxAlbumPhotos((photos) =>
+              photos.map((photo) => (photo.id === file.id ? { ...photo, src } : photo)),
+            );
+          } catch (e) {
+            console.error(`Failed to fetch dropbox photo ${file.name}`, e);
+          }
+        });
       } catch (e) {
         console.error('Failed to fetch dropbox album photos', e);
         if (!cancelled) {
@@ -339,24 +348,7 @@ export default function PublicProfile() {
     return null;
   }, [data, selectedAlbum, selectedEvent, activePhotos, photosByEvent, isAlbumPage, isEventPage, dropboxProfileCover, dropboxCoverUrls]);
 
-  if (isLoading) {
-    return <div className="flex min-h-screen items-center justify-center">Loading...</div>;
-  }
-
-  if (error) {
-    return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!data) {
-    return null; // Should be covered by error state
-  }
+  const profileLabel = data?.profile.display_name ?? data?.profile.slug ?? profileSlug;
 
   return (
     <div className="min-h-screen px-4 py-6">
@@ -369,7 +361,7 @@ export default function PublicProfile() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-xl font-light md:text-2xl">
             <Link to={`/${profileSlug}`} className="hover:underline">
-              {data.profile.display_name ?? data.profile.slug}
+              {profileLabel}
             </Link>
             {selectedEvent && (
               <>
@@ -417,7 +409,26 @@ export default function PublicProfile() {
       </header>
 
       <main className="mx-auto max-w-6xl">
-        {isProfilePage && (
+        {error && (
+          <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        {isLoading && !data && !error && (
+          <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+            Loading public gallery...
+          </div>
+        )}
+
+        {!isLoading && !data && !error && (
+          <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">
+            Profile not found or is not public.
+          </div>
+        )}
+
+        {data && isProfilePage && (
           <ThumbnailGrid
             items={data.events}
             sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
@@ -450,7 +461,7 @@ export default function PublicProfile() {
           />
         )}
 
-        {isEventPage && selectedEvent && (
+        {data && isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
@@ -491,7 +502,7 @@ export default function PublicProfile() {
           />
         )}
 
-        {isAlbumPage && selectedAlbum && (
+        {data && isAlbumPage && selectedAlbum && (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -565,8 +576,21 @@ export default function PublicProfile() {
             ) : sortedActivePhotos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {sortedActivePhotos.map((photo, index) => (
-                  <button key={photo.id} onClick={() => handlePhotoClick(index)} className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background">
-                    <StereoThumbnail photo={photo} />
+                  <button
+                    key={photo.id}
+                    onClick={() => {
+                      if (photo.src) handlePhotoClick(index);
+                    }}
+                    disabled={!photo.src}
+                    className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-wait disabled:hover:scale-100"
+                  >
+                    {photo.src ? (
+                      <StereoThumbnail photo={photo} />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Images className="h-6 w-6 text-muted-foreground/60" />
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -577,7 +601,7 @@ export default function PublicProfile() {
         )}
       </main>
 
-      {selectedPhotoIndex !== null && (() => {
+      {data && selectedPhotoIndex !== null && (() => {
         const viewerProps = {
           album: selectedAlbum,
           photo: sortedActivePhotos[selectedPhotoIndex],
