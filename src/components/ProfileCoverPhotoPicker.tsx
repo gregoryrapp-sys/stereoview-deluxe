@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect } from 'react';
-import { ArrowUp, Cloud, FolderOpen, Images } from 'lucide-react';
+import { ArrowLeft, Cloud, FolderOpen, Images } from 'lucide-react';
 import type { AlbumRecord } from '@/types/database';
 import { fetchDropboxPhotos, type GalleryData, type GalleryPhoto } from '@/services/galleryService';
 import StereoThumbnail from '@/components/StereoThumbnail';
@@ -175,7 +175,7 @@ export function ProfileCoverPhotoPicker({
               }
             }}
           >
-            <ArrowUp className="h-4 w-4" />
+            <ArrowLeft className="h-4 w-4" />
             Up to {selectedAlbumId ? 'albums' : 'events'}
           </Button>
         )}
@@ -187,8 +187,10 @@ export function ProfileCoverPhotoPicker({
           <ThumbnailGrid
             items={galleryData.events}
             sortOptions={[
-              { value: 'title', label: 'Name' },
-              { value: 'created_at', label: 'Creation Date' },
+              { value: 'title_asc', label: 'Name A-Z' },
+              { value: 'title_desc', label: 'Name Z-A' },
+              { value: 'created_at_desc', label: 'Date New-Old' },
+              { value: 'created_at_asc', label: 'Date Old-New' },
             ]}
             emptyMessage="No events found."
             renderItem={(event) => {
@@ -252,8 +254,10 @@ export function ProfileCoverPhotoPicker({
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={[
-              { value: 'title', label: 'Name' },
-              { value: 'created_at', label: 'Creation Date' },
+              { value: 'title_asc', label: 'Name A-Z' },
+              { value: 'title_desc', label: 'Name Z-A' },
+              { value: 'created_at_desc', label: 'Date New-Old' },
+              { value: 'created_at_asc', label: 'Date Old-New' },
             ]}
             emptyMessage="This event has no albums."
             renderItem={(album) => {

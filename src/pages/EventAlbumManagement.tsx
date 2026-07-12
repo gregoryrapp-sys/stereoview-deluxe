@@ -5,7 +5,7 @@ import {
   Cloud,
   AlertCircle,
   Copy,
-  ArrowUp,
+  ArrowLeft,
   FolderOpen,
   ImagePlus,
   Images,
@@ -981,7 +981,7 @@ export default function EventAlbumManagement() {
         {backTo && (
           <Button asChild variant="secondary" className="gap-2">
             <Link to={backTo}>
-              <ArrowUp className="h-4 w-4" />
+              <ArrowLeft className="h-4 w-4" />
               Up
             </Link>
           </Button>
@@ -1089,8 +1089,10 @@ export default function EventAlbumManagement() {
             <ThumbnailGrid
               items={galleryData.events}
               sortOptions={[
-                { value: 'title', label: 'Name' },
-                { value: 'created_at', label: 'Creation Date' },
+                { value: 'title_asc', label: 'Name A-Z' },
+                { value: 'title_desc', label: 'Name Z-A' },
+                { value: 'created_at_desc', label: 'Date New-Old' },
+                { value: 'created_at_asc', label: 'Date Old-New' },
               ]}
               emptyMessage="No events yet. Click 'Add Event' to create one."
               renderItem={(eventRecord) => {
@@ -1221,8 +1223,10 @@ export default function EventAlbumManagement() {
             <ThumbnailGrid
               items={eventAlbums}
               sortOptions={[
-                { value: 'title', label: 'Name' },
-                { value: 'created_at', label: 'Creation Date' },
+                { value: 'title_asc', label: 'Name A-Z' },
+                { value: 'title_desc', label: 'Name Z-A' },
+                { value: 'created_at_desc', label: 'Date New-Old' },
+                { value: 'created_at_asc', label: 'Date Old-New' },
               ]}
               emptyMessage="This event has no albums yet. Click 'Add Album' to create one."
               renderItem={(album) => {

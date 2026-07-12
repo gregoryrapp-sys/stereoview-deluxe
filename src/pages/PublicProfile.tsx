@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, ArrowDown, ArrowUp, Cloud, FolderOpen, Images , User} from 'lucide-react';
+import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images , User} from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -28,8 +28,7 @@ export default function PublicProfile() {
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('stereo');
   const [hasManualViewMode, setHasManualViewMode] = useState(false);
-  const [photoSortKey, setPhotoSortKey] = useState<'alt'>('alt');
-  const [photoSortDirection, setPhotoSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [photoSort, setPhotoSort] = useState('alt_asc');
   const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
@@ -267,12 +266,19 @@ export default function PublicProfile() {
     return photosByAlbum[selectedAlbum.id] ?? [];
   }, [selectedAlbum, photosByAlbum, dropboxAlbumPhotos]);
 
+  const { photoSortDirection } = useMemo(() => {
+    const [_key, direction] = photoSort.split('_');
+    return {
+      photoSortDirection: direction as 'asc' | 'desc',
+    };
+  }, [photoSort]);
+
   const sortedActivePhotos = useMemo(() => {
     return [...activePhotos].sort((a, b) => {
       const comparison = (a.alt || '').localeCompare(b.alt || '', undefined, { numeric: true });
       return photoSortDirection === 'asc' ? comparison : -comparison;
     });
-  }, [activePhotos, photoSortKey, photoSortDirection]);
+  }, [activePhotos, photoSortDirection]);
 
   useEffect(() => {
     if (!selectedAlbum?.id) return;
@@ -431,7 +437,12 @@ export default function PublicProfile() {
         {data && isProfilePage && (
           <ThumbnailGrid
             items={data.events}
-            sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
+            sortOptions={[
+              { value: 'title_asc', label: 'Name A-Z' },
+              { value: 'title_desc', label: 'Name Z-A' },
+              { value: 'created_at_desc', label: 'Date New-Old' },
+              { value: 'created_at_asc', label: 'Date Old-New' },
+            ]}
             emptyMessage="This photographer has no public events."
             renderItem={(event) => {
               const eventPhotos = photosByEvent[event.id] ?? [];
@@ -464,7 +475,12 @@ export default function PublicProfile() {
         {data && isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
-            sortOptions={[{ value: 'title', label: 'Name' }, { value: 'created_at', label: 'Date' }]}
+            sortOptions={[
+              { value: 'title_asc', label: 'Name A-Z' },
+              { value: 'title_desc', label: 'Name Z-A' },
+              { value: 'created_at_desc', label: 'Date New-Old' },
+              { value: 'created_at_asc', label: 'Date Old-New' },
+            ]}
             emptyMessage="This event has no public albums."
             renderItem={(album) => {
               const photos = photosByAlbum[album.id] ?? [];
@@ -555,17 +571,15 @@ export default function PublicProfile() {
             {activePhotos.length > 1 && (
               <div className="flex items-center justify-start gap-2">
                 <span className="text-xs font-medium text-muted-foreground">Sort by</span>
-                <Select value={photoSortKey} onValueChange={(v) => setPhotoSortKey(v as 'alt')}>
-                  <SelectTrigger className="w-[120px]">
+                <Select value={photoSort} onValueChange={setPhotoSort}>
+                  <SelectTrigger className="w-[180px]">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="alt">Name</SelectItem>
+                    <SelectItem value="alt_asc">Name A-Z</SelectItem>
+                    <SelectItem value="alt_desc">Name Z-A</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button variant="outline" size="icon" onClick={() => setPhotoSortDirection(d => d === 'asc' ? 'desc' : 'asc')}>
-                  {photoSortDirection === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />}
-                </Button>
               </div>
             )}
             {isDropboxLoading ? (
