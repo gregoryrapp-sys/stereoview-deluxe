@@ -9,10 +9,8 @@ import {
   GalleryData,
   GalleryPhoto,
 } from '@/services/galleryService';
-import StereoViewer from '@/components/StereoViewer';
-import GifViewer from '@/components/GifViewer';
+import SmartViewer from '@/components/SmartViewer';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
-import TwoDViewer from '@/components/TwoDViewer';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -20,9 +18,6 @@ import type { AlbumRecord } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
-import { getSmartViewerMode } from '@/lib/viewerMode';
-
-type ViewMode = 'stereo' | '2d' | 'gif';
 
 type WebKitFullscreenDocument = Document & {
   webkitFullscreenElement?: Element | null;
@@ -42,8 +37,6 @@ function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
 export default function Gallery() {
   const { isAuthenticated, isAdmin, isLoading: isAuthLoading, logout, profile } = useAuth();
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('stereo');
-  const [hasManualViewMode, setHasManualViewMode] = useState(false);
   const [galleryData, setGalleryData] = useState<GalleryData>({ events: [], albums: [], photos: [] });
   const [selectedEventId, setSelectedEventId] = useState('');
   const [selectedAlbumId, setSelectedAlbumId] = useState('');
@@ -326,48 +319,6 @@ export default function Gallery() {
     setSelectedPhotoIndex(null);
   }, []);
 
-  useEffect(() => {
-    if (!selectedAlbumId) return;
-
-    setHasManualViewMode(false);
-    setViewMode(getSmartViewerMode());
-  }, [selectedAlbumId]);
-
-  useEffect(() => {
-    if (!selectedAlbumId || hasManualViewMode || selectedPhotoIndex !== null) return;
-
-    const handleResize = () => {
-      setViewMode(getSmartViewerMode());
-    };
-
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
-  }, [hasManualViewMode, selectedAlbumId, selectedPhotoIndex]);
-
-  // Listen for fullscreen exit (user presses back/escape)
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const fullscreenDocument = document as WebKitFullscreenDocument;
-      const isFullscreen = !!(document.fullscreenElement || fullscreenDocument.webkitFullscreenElement);
-      if (!isFullscreen && selectedPhotoIndex !== null) {
-        setSelectedPhotoIndex(null);
-      }
-    };
-
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-
-    return () => {
-      document.removeEventListener('fullscreenchange', handleFullscreenChange);
-      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
-    };
-  }, [selectedPhotoIndex]);
-
   const loadGallery = useCallback(() => {
     let cancelled = false;
 
@@ -560,49 +511,6 @@ export default function Gallery() {
                 <Settings className="h-4 w-4" />
               </Link>
             </Button>
-            
-            {/* View Mode Toggle */}
-          <div className="flex rounded-lg bg-secondary p-1">
-            <button
-              onClick={() => {
-                setHasManualViewMode(true);
-                setViewMode('stereo');
-              }}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === 'stereo'
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Stereo
-            </button>
-            <button
-              onClick={() => {
-                setHasManualViewMode(true);
-                setViewMode('2d');
-              }}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === '2d'
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              2D
-            </button>
-            <button
-              onClick={() => {
-                setHasManualViewMode(true);
-                setViewMode('gif');
-              }}
-              className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                viewMode === 'gif'
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              GIF
-            </button>
-          </div>
           </div>
         </div>
 
@@ -781,34 +689,8 @@ export default function Gallery() {
         ref={fullscreenContainerRef}
         className={`fixed inset-0 z-50 bg-black ${isViewerOpen ? 'block' : 'hidden'}`}
       >
-        {isViewerOpen && viewMode === 'stereo' && (
-          <StereoViewer
-            photo={sortedActivePhotos[selectedPhotoIndex]}
-            album={selectedAlbum}
-            photos={sortedActivePhotos}
-            photoIndex={selectedPhotoIndex}
-            onClose={handleCloseViewer}
-            onPrevious={() => handleNavigate('prev')}
-            onNext={() => handleNavigate('next')}
-            hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
-          />
-        )}
-        {isViewerOpen && viewMode === '2d' && (
-          <TwoDViewer
-            photo={sortedActivePhotos[selectedPhotoIndex]}
-            album={selectedAlbum}
-            photos={sortedActivePhotos}
-            photoIndex={selectedPhotoIndex}
-            onClose={handleCloseViewer}
-            onPrevious={() => handleNavigate('prev')}
-            onNext={() => handleNavigate('next')}
-            hasPrevious={selectedPhotoIndex > 0}
-            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
-          />
-        )}
-        {isViewerOpen && viewMode === 'gif' && (
-          <GifViewer
+        {isViewerOpen && (
+          <SmartViewer
             photo={sortedActivePhotos[selectedPhotoIndex]}
             album={selectedAlbum}
             photos={sortedActivePhotos}

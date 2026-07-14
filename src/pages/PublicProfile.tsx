@@ -1,23 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images , User} from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
-import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData , fetchDropboxPhotos} from '@/services/galleryService';
+import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
-import StereoViewer from '@/components/StereoViewer';
-import TwoDViewer from '@/components/TwoDViewer';
-import GifViewer from '@/components/GifViewer';
-import { getSmartViewerMode } from '@/lib/viewerMode';
-
+import SmartViewer from '@/components/SmartViewer';
 
 function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
   return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
 }
 
-type ViewMode = 'stereo' | '2d' | 'gif';
+type WebKitFullscreenDocument = Document & {
+  webkitFullscreenElement?: Element | null;
+  webkitExitFullscreen?: () => Promise<void> | void;
+};
+
+type WebKitFullscreenElement = HTMLElement & {
+  webkitRequestFullscreen?: () => Promise<void> | void;
+};
 
 export default function PublicProfile() {
   const { isAuthenticated } = useAuth();
@@ -26,13 +29,12 @@ export default function PublicProfile() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('stereo');
-  const [hasManualViewMode, setHasManualViewMode] = useState(false);
   const [photoSort, setPhotoSort] = useState('alt_asc');
   const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const [dropboxProfileCover, setDropboxProfileCover] = useState<GalleryPhoto | null>(null);
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     async function loadPublicData() {
@@ -280,32 +282,30 @@ export default function PublicProfile() {
     });
   }, [activePhotos, photoSortDirection]);
 
-  useEffect(() => {
-    if (!selectedAlbum?.id) return;
-
-    setHasManualViewMode(false);
-    setViewMode(getSmartViewerMode());
-  }, [selectedAlbum?.id]);
-
-  useEffect(() => {
-    if (!selectedAlbum?.id || hasManualViewMode || selectedPhotoIndex !== null) return;
-
-    const handleResize = () => {
-      setViewMode(getSmartViewerMode());
-    };
-
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleResize);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleResize);
-    };
-  }, [hasManualViewMode, selectedAlbum?.id, selectedPhotoIndex]);
-
   const handlePhotoClick = (index: number) => {
+    const container = fullscreenContainerRef.current;
+    if (container) {
+      const fullscreenContainer = container as WebKitFullscreenElement;
+      if (container.requestFullscreen) {
+        container.requestFullscreen().catch(() => {});
+      } else if (fullscreenContainer.webkitRequestFullscreen) {
+        fullscreenContainer.webkitRequestFullscreen();
+      }
+    }
     setSelectedPhotoIndex(index);
   };
+
+  const handleCloseViewer = useCallback(async () => {
+    try {
+      const fullscreenDocument = document as WebKitFullscreenDocument;
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else if (fullscreenDocument.webkitFullscreenElement) {
+        await fullscreenDocument.webkitExitFullscreen?.();
+      }
+    } catch (e) { /* Ignore */ }
+    setSelectedPhotoIndex(null);
+  }, []);
 
   const isAlbumPage = !!albumSlug;
   const isEventPage = !!eventSlug && !albumSlug;
@@ -532,41 +532,6 @@ export default function PublicProfile() {
                   )}
                 </p>
               </div>
-              <div className="flex rounded-lg bg-secondary p-1">
-                <button
-                  onClick={() => {
-                    setHasManualViewMode(true);
-                    setViewMode('stereo');
-                  }}
-                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                    viewMode === 'stereo' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  Stereo
-                </button>
-                <button
-                  onClick={() => {
-                    setHasManualViewMode(true);
-                    setViewMode('2d');
-                  }}
-                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                    viewMode === '2d' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  2D
-                </button>
-                <button
-                  onClick={() => {
-                    setHasManualViewMode(true);
-                    setViewMode('gif');
-                  }}
-                  className={`rounded-md px-3 py-1 text-sm transition-colors ${
-                    viewMode === 'gif' ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  GIF
-                </button>
-              </div>
             </div>
             {activePhotos.length > 1 && (
               <div className="flex items-center justify-start gap-2">
@@ -616,22 +581,24 @@ export default function PublicProfile() {
       </main>
 
       {data && selectedPhotoIndex !== null && (() => {
+        const isViewerOpen = selectedPhotoIndex !== null;
         const viewerProps = {
           album: selectedAlbum,
           photo: sortedActivePhotos[selectedPhotoIndex],
           photos: sortedActivePhotos,
           photoIndex: selectedPhotoIndex,
-          onClose: () => setSelectedPhotoIndex(null),
+          onClose: handleCloseViewer,
           onPrevious: () => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index)),
           onNext: () => setSelectedPhotoIndex((index) => (index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index)),
           hasPrevious: selectedPhotoIndex > 0,
           hasNext: selectedPhotoIndex < sortedActivePhotos.length - 1,
         };
         return (
-          <div className="fixed inset-0 z-50 bg-black">
-            {viewMode === 'stereo' && <StereoViewer {...viewerProps} />}
-            {viewMode === '2d' && <TwoDViewer {...viewerProps} />}
-            {viewMode === 'gif' && <GifViewer {...viewerProps} />}
+          <div
+            ref={fullscreenContainerRef}
+            className={`fixed inset-0 z-50 bg-black ${isViewerOpen ? 'block' : 'hidden'}`}
+          >
+            {isViewerOpen && <SmartViewer {...viewerProps} />}
           </div>
         );
       })()}
