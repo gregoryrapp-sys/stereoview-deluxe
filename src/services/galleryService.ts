@@ -7,6 +7,7 @@ export interface GalleryPhoto extends Photo {
   eventId?: string;
   storagePath?: string;
   rightSrc?: string; // For Dropbox pairs
+  created_at?: string;
 }
 
 export interface DropboxFile {
@@ -177,6 +178,7 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       albumId: photo.album_id,
       eventId: albumEventIds.get(photo.album_id),
       storagePath: photo.storage_path,
+      created_at: photo.created_at,
     })),
   );
 }

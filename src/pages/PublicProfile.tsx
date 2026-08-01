@@ -8,19 +8,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
-
-function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
-  return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
-}
-
-type WebKitFullscreenDocument = Document & {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-};
-
-type WebKitFullscreenElement = HTMLElement & {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-};
+import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
+import { exitPhotoFullscreen, requestPhotoFullscreen } from '@/lib/fullscreen';
+import { usePhotoSort } from '@/hooks/usePhotoSort';
 
 export default function PublicProfile() {
   const { isAuthenticated } = useAuth();
@@ -268,42 +258,15 @@ export default function PublicProfile() {
     return photosByAlbum[selectedAlbum.id] ?? [];
   }, [selectedAlbum, photosByAlbum, dropboxAlbumPhotos]);
 
-  const { photoSortDirection } = useMemo(() => {
-    const [_key, direction] = photoSort.split('_');
-    return {
-      photoSortDirection: direction as 'asc' | 'desc',
-    };
-  }, [photoSort]);
-
-  const sortedActivePhotos = useMemo(() => {
-    return [...activePhotos].sort((a, b) => {
-      const comparison = (a.alt || '').localeCompare(b.alt || '', undefined, { numeric: true });
-      return photoSortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [activePhotos, photoSortDirection]);
+  const sortedActivePhotos = usePhotoSort(activePhotos, photoSort);
 
   const handlePhotoClick = (index: number) => {
-    const container = fullscreenContainerRef.current;
-    if (container) {
-      const fullscreenContainer = container as WebKitFullscreenElement;
-      if (container.requestFullscreen) {
-        container.requestFullscreen().catch(() => {});
-      } else if (fullscreenContainer.webkitRequestFullscreen) {
-        fullscreenContainer.webkitRequestFullscreen();
-      }
-    }
+    requestPhotoFullscreen(fullscreenContainerRef.current);
     setSelectedPhotoIndex(index);
   };
 
   const handleCloseViewer = useCallback(async () => {
-    try {
-      const fullscreenDocument = document as WebKitFullscreenDocument;
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else if (fullscreenDocument.webkitFullscreenElement) {
-        await fullscreenDocument.webkitExitFullscreen?.();
-      }
-    } catch (e) { /* Ignore */ }
+    await exitPhotoFullscreen();
     setSelectedPhotoIndex(null);
   }, []);
 
@@ -437,12 +400,7 @@ export default function PublicProfile() {
         {data && isProfilePage && (
           <ThumbnailGrid
             items={data.events}
-            sortOptions={[
-              { value: 'title_asc', label: 'Name A-Z' },
-              { value: 'title_desc', label: 'Name Z-A' },
-              { value: 'created_at_desc', label: 'Date New-Old' },
-              { value: 'created_at_asc', label: 'Date Old-New' },
-            ]}
+            sortOptions={COLLECTION_SORT_OPTIONS}
             emptyMessage="This photographer has no public events."
             renderItem={(event) => {
               const eventPhotos = photosByEvent[event.id] ?? [];
@@ -475,12 +433,7 @@ export default function PublicProfile() {
         {data && isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
-            sortOptions={[
-              { value: 'title_asc', label: 'Name A-Z' },
-              { value: 'title_desc', label: 'Name Z-A' },
-              { value: 'created_at_desc', label: 'Date New-Old' },
-              { value: 'created_at_asc', label: 'Date Old-New' },
-            ]}
+            sortOptions={COLLECTION_SORT_OPTIONS}
             emptyMessage="This event has no public albums."
             renderItem={(album) => {
               const photos = photosByAlbum[album.id] ?? [];

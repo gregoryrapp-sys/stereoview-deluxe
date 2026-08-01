@@ -3,7 +3,6 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   DropboxFile,
-  fetchDropboxPhoto,
   fetchDropboxPhotos,
   fetchGalleryData,
   GalleryData,
@@ -18,19 +17,10 @@ import type { AlbumRecord } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
-
-type WebKitFullscreenDocument = Document & {
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-};
-
-type WebKitFullscreenElement = HTMLElement & {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-};
-
-function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
-  return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
-}
+import { COLLECTION_SORT_OPTIONS, resolveAlbumCover, resolveEventCover } from '@/lib/galleryUtils';
+import { exitPhotoFullscreen, requestPhotoFullscreen } from '@/lib/fullscreen';
+import { usePhotoSort } from '@/hooks/usePhotoSort';
+import { useDropboxCovers } from '@/hooks/useDropboxCovers';
 
 
 
@@ -43,7 +33,6 @@ export default function Gallery() {
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
-  const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
   const albumCountsByEvent = useMemo(() => {
@@ -91,113 +80,7 @@ export default function Gallery() {
     return '/manage';
   }, [selectedEventId, selectedAlbumId]);
 
-  useEffect(() => {
-    if (!activeAlbums || activeAlbums.length === 0) return;
-
-    const fetchCovers = async () => {
-      const coversToFetch = activeAlbums.filter(
-        (album) =>
-          album.source_type === 'dropbox' &&
-          album.dropbox_cover_image_name &&
-          album.dropbox_folder_url &&
-          !dropboxCoverUrls[album.id]
-      );
-
-      if (coversToFetch.length === 0) return;
-
-      const results = await Promise.allSettled(
-        coversToFetch.map(async (album) => {
-          const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, album.dropbox_cover_image_name!);
-          return { albumId: album.id, src: photo.src, name: photo.name };
-        })
-      );
-
-      const newCoverUrls: Record<string, { src: string; name: string }> = {};
-      results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value.src) {
-          newCoverUrls[result.value.albumId] = { src: result.value.src, name: result.value.name };
-        }
-      });
-
-      if (Object.keys(newCoverUrls).length > 0) {
-        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
-      }
-    };
-
-    fetchCovers();
-  }, [activeAlbums, dropboxCoverUrls]);
-
-  useEffect(() => {
-    if (!galleryData.events || galleryData.events.length === 0) return;
-
-    const fetchEventCovers = async () => {
-      const coversToFetch = galleryData.events.filter(
-        (event) => !event.cover_photo_id && !dropboxCoverUrls[`event:${event.id}`],
-      );
-
-      if (coversToFetch.length === 0) return;
-
-      const results = await Promise.allSettled(
-        coversToFetch.map(async (event) => {
-          const dropboxAlbum = galleryData.albums.find(
-            (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
-          );
-          if (!dropboxAlbum) return null;
-          const photos = await fetchDropboxPhotos(dropboxAlbum.dropbox_folder_url!);
-          if (photos.length > 0) {
-            return { eventId: event.id, src: photos[0].src, name: photos[0].name };
-          }
-          return null;
-        }),
-      );
-
-      const newCoverUrls: Record<string, { src: string; name: string }> = {};
-      results.forEach((result) => {
-        if (result.status === 'fulfilled' && result.value?.src) {
-          newCoverUrls[`event:${result.value.eventId}`] = { src: result.value.src, name: result.value.name };
-        }
-      });
-
-      if (Object.keys(newCoverUrls).length > 0) {
-        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
-      }
-    };
-
-    fetchEventCovers();
-  }, [galleryData.events, galleryData.albums, dropboxCoverUrls]);
-
-  // Fetch specific dropbox covers for all events in the list
-  useEffect(() => {
-    if (!galleryData.events.length) return;
-
-    const coversToFetch = galleryData.events.filter(
-      (event) =>
-        event.dropbox_cover_album_id &&
-        event.dropbox_cover_image_name &&
-        !dropboxCoverUrls[`event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`]
-    );
-
-    if (coversToFetch.length === 0) return;
-
-    const fetchCovers = async () => {
-      const results = await Promise.allSettled(
-        coversToFetch.map(async (event) => {
-          const album = galleryData.albums.find((a) => a.id === event.dropbox_cover_album_id);
-          if (!album || !album.dropbox_folder_url) return null;
-          const photo = await fetchDropboxPhoto(album.dropbox_folder_url, event.dropbox_cover_image_name!);
-          return { key: `event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`, src: photo.src, name: photo.name };
-        })
-      );
-
-      const newCoverUrls: Record<string, { src: string; name: string }> = {};
-      results.forEach((result) => { if (result.status === 'fulfilled' && result.value) { newCoverUrls[result.value.key] = { src: result.value.src, name: result.value.name }; } });
-      if (Object.keys(newCoverUrls).length > 0) {
-        setDropboxCoverUrls((prev) => ({ ...prev, ...newCoverUrls }));
-      }
-    };
-
-    fetchCovers();
-  }, [galleryData.events, galleryData.albums, dropboxCoverUrls]);
+  const { dropboxCoverUrls } = useDropboxCovers(galleryData.events, galleryData.albums, activeAlbums);
 
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
@@ -248,37 +131,18 @@ export default function Gallery() {
 
   const activePhotos = useMemo(() => {
   if (isDropboxAlbum) {
-    return dropboxPhotos.map((file: any) => {
-      // DEBUG: Log the incoming file object to see if 'src' exists here
-      console.log("Mapping file:", file);
-      
-      return {
+    return dropboxPhotos.map((file: any) => ({
         id: file.id,
-        // Ensure we explicitly grab 'src' from the file object
-        // If file.src is undefined here, your Edge Function isn't returning it
-        src: file.src || '', 
+        src: file.src || '',
         alt: file.name,
         albumId: selectedAlbumId,
         eventId: selectedEventId,
-      };
-    });
+      }));
   }
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
 }, [isDropboxAlbum, dropboxPhotos, galleryData.photos, selectedAlbumId, selectedEventId]);
 
-  const { photoSortDirection } = useMemo(() => {
-    const [_key, direction] = photoSort.split('_');
-    return {
-      photoSortDirection: direction as 'asc' | 'desc',
-    };
-  }, [photoSort]);
-
-  const sortedActivePhotos = useMemo(() => {
-    return [...activePhotos].sort((a, b) => {
-      const comparison = (a.alt || '').localeCompare(b.alt || '', undefined, { numeric: true });
-      return photoSortDirection === 'asc' ? comparison : -comparison;
-    });
-  }, [activePhotos, photoSortDirection]);
+  const sortedActivePhotos = usePhotoSort(activePhotos, photoSort);
 
   const photoCountsByAlbum = useMemo(() => {
     const counts = galleryData.photos.reduce<Record<string, number>>((counts, photo) => {
@@ -306,16 +170,7 @@ export default function Gallery() {
 
   const handleCloseViewer = useCallback(async () => {
     // Exit fullscreen first
-    try {
-      const fullscreenDocument = document as WebKitFullscreenDocument;
-      if (document.fullscreenElement) {
-        await document.exitFullscreen();
-      } else if (fullscreenDocument.webkitFullscreenElement) {
-        await fullscreenDocument.webkitExitFullscreen?.();
-      }
-    } catch (e) {
-      // Ignore errors
-    }
+    await exitPhotoFullscreen();
     setSelectedPhotoIndex(null);
   }, []);
 
@@ -375,16 +230,8 @@ export default function Gallery() {
 
   // Request fullscreen synchronously in click handler (user gesture required)
   const handlePhotoClick = (index: number) => {
-    const container = fullscreenContainerRef.current;
-    if (container) {
-      const fullscreenContainer = container as WebKitFullscreenElement;
-      // Request fullscreen immediately - this is synchronous with user gesture
-      if (container.requestFullscreen) {
-        container.requestFullscreen().catch(() => {});
-      } else if (fullscreenContainer.webkitRequestFullscreen) {
-        fullscreenContainer.webkitRequestFullscreen();
-      }
-    }
+    // Request fullscreen immediately - this is synchronous with user gesture
+    requestPhotoFullscreen(fullscreenContainerRef.current);
     setSelectedPhotoIndex(index);
   };
 
@@ -524,6 +371,8 @@ export default function Gallery() {
               <SelectContent>
                 <SelectItem value="alt_asc">Name A-Z</SelectItem>
                 <SelectItem value="alt_desc">Name Z-A</SelectItem>
+                <SelectItem value="created_at_desc">Date New-Old</SelectItem>
+                <SelectItem value="created_at_asc">Date Old-New</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -532,44 +381,11 @@ export default function Gallery() {
         {galleryLevel === 'events' && (
           <ThumbnailGrid
             items={galleryData.events}
-            sortOptions={[
-              { value: 'title_asc', label: 'Name A-Z' },
-              { value: 'title_desc', label: 'Name Z-A' },
-              { value: 'created_at_desc', label: 'Date New-Old' },
-              { value: 'created_at_asc', label: 'Date Old-New' },
-            ]}
+            sortOptions={COLLECTION_SORT_OPTIONS}
             emptyMessage="No events yet."
             renderItem={(event) => {
               const eventPhotos = photosByEvent[event.id] ?? [];
-              let eventCover: GalleryPhoto | null = null;
-
-              // 1. Check for explicitly set Dropbox cover
-              if (event.dropbox_cover_album_id && event.dropbox_cover_image_name) {
-                const coverKey = `event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`;
-                const coverInfo = dropboxCoverUrls[coverKey];
-                if (coverInfo) {
-                  eventCover = {
-                    id: coverKey,
-                    src: coverInfo.src,
-                    alt: coverInfo.name,
-                    eventId: event.id,
-                    albumId: event.dropbox_cover_album_id,
-                  };
-                }
-              }
-
-              // 2. If no explicit Dropbox cover, check for uploaded cover (explicit or fallback to first)
-              if (!eventCover) {
-                eventCover = getCoverPhoto(eventPhotos, event.cover_photo_id);
-              }
-
-              // 3. If still no cover, check for a default fetched Dropbox cover (first photo of first dropbox album)
-              if (!eventCover) {
-                const coverInfo = dropboxCoverUrls[`event:${event.id}`];
-                if (coverInfo) {
-                  eventCover = { id: `event-cover-${event.id}`, src: coverInfo.src, alt: coverInfo.name, eventId: event.id };
-                }
-              }
+              const eventCover = resolveEventCover(event, eventPhotos, dropboxCoverUrls);
 
               return (
                 <button
@@ -600,31 +416,11 @@ export default function Gallery() {
         {galleryLevel === 'albums' && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
-            sortOptions={[
-              { value: 'title_asc', label: 'Name A-Z' },
-              { value: 'title_desc', label: 'Name Z-A' },
-              { value: 'created_at_desc', label: 'Date New-Old' },
-              { value: 'created_at_asc', label: 'Date Old-New' },
-            ]}
+            sortOptions={COLLECTION_SORT_OPTIONS}
             emptyMessage="This event does not have albums yet."
             renderItem={(album) => {
               const photos = photosByAlbum[album.id] ?? [];
-              let albumCover: GalleryPhoto | null = null;
-
-              if (album.source_type === 'dropbox' && album.dropbox_cover_image_name) {
-                const coverInfo = dropboxCoverUrls[album.id];
-                if (coverInfo) {
-                  albumCover = {
-                    id: `${album.id}-${album.dropbox_cover_image_name}`,
-                    src: coverInfo.src,
-                    alt: coverInfo.name,
-                    albumId: album.id,
-                    eventId: album.event_id,
-                  };
-                }
-              } else {
-                albumCover = getCoverPhoto(photos, album.cover_photo_id);
-              }
+              const albumCover = resolveAlbumCover(album, photos, dropboxCoverUrls);
 
               return (
                 <button
