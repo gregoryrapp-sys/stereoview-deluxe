@@ -3,7 +3,9 @@ import type { GalleryPhoto } from '@/services/galleryService';
 
 export function usePhotoSort(activePhotos: GalleryPhoto[], sortValue: string): GalleryPhoto[] {
   return useMemo(() => {
-    const [sortKey, sortDirection] = sortValue.split('_');
+    const separatorIndex = sortValue.lastIndexOf('_');
+    const sortKey = sortValue.slice(0, separatorIndex);
+    const sortDirection = sortValue.slice(separatorIndex + 1);
 
     return [...activePhotos].sort((a, b) => {
       let comparison = 0;

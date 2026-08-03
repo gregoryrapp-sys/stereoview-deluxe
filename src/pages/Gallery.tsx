@@ -137,6 +137,7 @@ export default function Gallery() {
         alt: file.name,
         albumId: selectedAlbumId,
         eventId: selectedEventId,
+        created_at: file.client_modified,
       }));
   }
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);

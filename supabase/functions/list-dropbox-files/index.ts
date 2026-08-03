@@ -140,6 +140,7 @@ async function handler(req: Request) {
         path_lower: fileMeta.path_lower,
         id: fileMeta.id,
         src: getDirectLink(fileMeta.url.replace("dl=0", "dl=1") ),
+        client_modified: fileMeta.client_modified,
       };
 
       return new Response(JSON.stringify(fileData), {
@@ -170,6 +171,7 @@ async function handler(req: Request) {
         path_lower: meta.path_lower,
         id: meta.id,
         src: getDirectLink(meta.url.replace("dl=0", "dl=1") ),
+        client_modified: meta.client_modified,
       }));
 
     return new Response(JSON.stringify(filesWithSrc), {

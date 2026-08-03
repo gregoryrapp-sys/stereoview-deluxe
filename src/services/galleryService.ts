@@ -15,6 +15,7 @@ export interface DropboxFile {
   path_lower: string;
   id: string; // Dropbox ID
   src: string; // Direct download URL for <img> tags
+  client_modified?: string; // Dropbox FileMetadata client_modified timestamp
 }
 
 export interface GalleryData {

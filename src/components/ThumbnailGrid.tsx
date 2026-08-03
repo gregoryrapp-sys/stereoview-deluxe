@@ -25,7 +25,9 @@ export default function ThumbnailGrid<T extends { id: string; title: string; cre
 
   const { sortKey, sortDirection } = useMemo(() => {
     if (!sortValue) return { sortKey: 'created_at', sortDirection: 'desc' as SortDirection };
-    const [key, direction] = sortValue.split('_');
+    const separatorIndex = sortValue.lastIndexOf('_');
+    const key = sortValue.slice(0, separatorIndex);
+    const direction = sortValue.slice(separatorIndex + 1);
     return {
       sortKey: key as keyof T | 'created_at' | 'title',
       sortDirection: direction as SortDirection,

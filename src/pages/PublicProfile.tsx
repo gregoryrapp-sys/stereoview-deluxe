@@ -187,7 +187,7 @@ export default function PublicProfile() {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
         if (cancelled) return;
 
-        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name })));
+        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name, created_at: file.client_modified })));
         setIsDropboxLoading(false);
 
         files.forEach(async (file) => {
@@ -496,6 +496,8 @@ export default function PublicProfile() {
                   <SelectContent>
                     <SelectItem value="alt_asc">Name A-Z</SelectItem>
                     <SelectItem value="alt_desc">Name Z-A</SelectItem>
+                    <SelectItem value="created_at_desc">Date New-Old</SelectItem>
+                    <SelectItem value="created_at_asc">Date Old-New</SelectItem>
                   </SelectContent>
                 </Select>
               </div>

@@ -358,6 +358,7 @@ export default function EventAlbumManagement() {
         eventId: selectedAlbum?.event_id,
         storagePath: undefined,
         rightSrc: undefined,
+        created_at: file.client_modified,
       }));
     }
     // Explicitly map properties to ensure type consistency and add isDropbox flag
