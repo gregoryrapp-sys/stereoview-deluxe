@@ -36,6 +36,7 @@ import {
   updateProfilePresentation,
   uploadSbsPhoto,
   DropboxFile,
+  getFileExtension,
 } from '@/services/galleryService';
 import type { AlbumRecord, EventRecord } from '@/types/database';
 import StereoThumbnail from '@/components/StereoThumbnail';
@@ -359,6 +360,7 @@ export default function EventAlbumManagement() {
         storagePath: undefined,
         rightSrc: undefined,
         created_at: file.client_modified,
+        extension: getFileExtension(file.name),
       }));
     }
     // Explicitly map properties to ensure type consistency and add isDropbox flag

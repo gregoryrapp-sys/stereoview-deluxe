@@ -5,7 +5,7 @@ import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
-import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos } from '@/services/galleryService';
+import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
@@ -187,7 +187,7 @@ export default function PublicProfile() {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
         if (cancelled) return;
 
-        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name, created_at: file.client_modified })));
+        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name, created_at: file.client_modified, extension: getFileExtension(file.name) })));
         setIsDropboxLoading(false);
 
         files.forEach(async (file) => {
@@ -516,15 +516,30 @@ export default function PublicProfile() {
                       if (photo.src) handlePhotoClick(index);
                     }}
                     disabled={!photo.src}
-                    className="group relative aspect-[2/1] overflow-hidden rounded-lg bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-wait disabled:hover:scale-100"
+                    className="group overflow-hidden rounded-lg bg-secondary text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-wait disabled:hover:scale-100"
                   >
-                    {photo.src ? (
-                      <StereoThumbnail photo={photo} />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center">
-                        <Images className="h-6 w-6 text-muted-foreground/60" />
-                      </div>
-                    )}
+                    <span className="block aspect-[2/1] overflow-hidden">
+                      {photo.src ? (
+                        <StereoThumbnail photo={photo} />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center">
+                          <Images className="h-6 w-6 text-muted-foreground/60" />
+                        </div>
+                      )}
+                    </span>
+                    <span className="block p-1.5">
+                      <span className="block truncate text-[10px] font-medium leading-tight text-foreground">
+                        {photo.alt || 'Untitled'}
+                        {photo.extension && !(photo.alt || '').toLowerCase().endsWith(`.${photo.extension}`) && (
+                          <span className="text-muted-foreground">.{photo.extension}</span>
+                        )}
+                      </span>
+                      {photo.created_at && (
+                        <span className="block truncate text-[10px] leading-tight text-muted-foreground">
+                          {new Date(photo.created_at).toLocaleDateString()}
+                        </span>
+                      )}
+                    </span>
                   </button>
                 ))}
               </div>

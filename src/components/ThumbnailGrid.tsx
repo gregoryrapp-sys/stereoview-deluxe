@@ -21,7 +21,9 @@ export default function ThumbnailGrid<T extends { id: string; title: string; cre
   sortOptions,
   emptyMessage,
 }: ThumbnailGridProps<T>) {
-  const [sortValue, setSortValue] = useState(sortOptions[0]?.value);
+  const [sortValue, setSortValue] = useState(
+    () => sortOptions.find((option) => option.value === 'title_asc')?.value ?? sortOptions[0]?.value ?? 'title_asc',
+  );
 
   const { sortKey, sortDirection } = useMemo(() => {
     if (!sortValue) return { sortKey: 'created_at', sortDirection: 'desc' as SortDirection };

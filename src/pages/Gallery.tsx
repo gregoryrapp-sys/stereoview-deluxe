@@ -7,6 +7,7 @@ import {
   fetchGalleryData,
   GalleryData,
   GalleryPhoto,
+  getFileExtension,
 } from '@/services/galleryService';
 import SmartViewer from '@/components/SmartViewer';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
@@ -138,6 +139,7 @@ export default function Gallery() {
         albumId: selectedAlbumId,
         eventId: selectedEventId,
         created_at: file.client_modified,
+        extension: getFileExtension(file.name),
       }));
   }
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
@@ -466,9 +468,24 @@ export default function Gallery() {
                 <button
                   key={photo.id}
                   onClick={() => handlePhotoClick(index)}
-                  className="group relative aspect-[2/1] overflow-hidden rounded-md bg-secondary transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
+                  className="group overflow-hidden rounded-md bg-secondary text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
                 >
-                <StereoThumbnail photo={photo} />
+                  <span className="block aspect-[2/1] overflow-hidden">
+                    <StereoThumbnail photo={photo} />
+                  </span>
+                  <span className="block p-1.5">
+                    <span className="block truncate text-[10px] font-medium leading-tight text-foreground">
+                      {photo.alt || 'Untitled'}
+                      {photo.extension && !(photo.alt || '').toLowerCase().endsWith(`.${photo.extension}`) && (
+                        <span className="text-muted-foreground">.{photo.extension}</span>
+                      )}
+                    </span>
+                    {photo.created_at && (
+                      <span className="block truncate text-[10px] leading-tight text-muted-foreground">
+                        {new Date(photo.created_at).toLocaleDateString()}
+                      </span>
+                    )}
+                  </span>
                 </button>
               ))}
             </div>

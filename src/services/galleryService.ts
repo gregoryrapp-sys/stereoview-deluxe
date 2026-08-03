@@ -8,6 +8,7 @@ export interface GalleryPhoto extends Photo {
   storagePath?: string;
   rightSrc?: string; // For Dropbox pairs
   created_at?: string;
+  extension?: string; // File extension (lowercase, without dot) when available
 }
 
 export interface DropboxFile {
@@ -59,6 +60,11 @@ export function makeSlug(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
+}
+
+export function getFileExtension(nameOrPath: string): string {
+  const match = /\.([a-zA-Z0-9]+)$/.exec(nameOrPath.trim());
+  return match ? match[1].toLowerCase() : '';
 }
 
 function loadImageUrl(url: string, label: string): Promise<HTMLImageElement> {
@@ -180,6 +186,7 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       eventId: albumEventIds.get(photo.album_id),
       storagePath: photo.storage_path,
       created_at: photo.created_at,
+      extension: getFileExtension(photo.storage_path),
     })),
   );
 }
