@@ -67,6 +67,15 @@ export function getFileExtension(nameOrPath: string): string {
   return match ? match[1].toLowerCase() : '';
 }
 
+function getFileModifiedIso(file: File | null | undefined): string | null {
+  if (!file || typeof file.lastModified !== 'number' || !file.lastModified) return null;
+  return new Date(file.lastModified).toISOString();
+}
+
+function getSourceModifiedIso(source: UploadImageSource): string | null {
+  return source.kind === 'file' ? getFileModifiedIso(source.file) : null;
+}
+
 function loadImageUrl(url: string, label: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new window.Image();
@@ -185,7 +194,7 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       albumId: photo.album_id,
       eventId: albumEventIds.get(photo.album_id),
       storagePath: photo.storage_path,
-      created_at: photo.created_at,
+      created_at: photo.file_modified_at ?? photo.created_at,
       extension: getFileExtension(photo.storage_path),
     })),
   );
@@ -314,6 +323,7 @@ export async function uploadStereoPairPhoto({
     album_id: albumId,
     storage_path: storagePath,
     alt: baseName,
+    file_modified_at: getSourceModifiedIso(leftSource) ?? getSourceModifiedIso(rightSource),
   });
 
   if (insertResult.error) {
@@ -355,6 +365,7 @@ export async function uploadSbsPhoto({
     album_id: albumId,
     storage_path: storagePath,
     alt: baseName,
+    file_modified_at: getFileModifiedIso(file),
   });
 
   if (insertResult.error) {

@@ -157,6 +157,7 @@ export default function Admin() {
       album_id: selectedAlbumId,
       storage_path: storagePath,
       alt: photoAlt || selectedFile.name,
+      file_modified_at: selectedFile.lastModified ? new Date(selectedFile.lastModified).toISOString() : null,
     });
 
     if (insertResult.error) {

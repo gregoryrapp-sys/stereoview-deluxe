@@ -51,6 +51,7 @@ export interface PhotoRecord {
   alt: string;
   sort_order: number;
   created_at: string;
+  file_modified_at: string | null;
 }
 
 export interface ShareLinkRecord {
@@ -120,6 +121,7 @@ export interface Database {
           storage_path: string;
           alt: string;
           sort_order?: number;
+          file_modified_at?: string | null;
           created_at?: string;
         };
         Update: Partial<Omit<PhotoRecord, 'id' | 'created_at'>>;
