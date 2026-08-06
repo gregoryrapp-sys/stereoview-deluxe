@@ -1,13 +1,16 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
-import { Photo, photos } from '@/data/photos';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { X, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import type { AlbumRecord } from '@/types/database';
 
 interface StereoViewerProps {
   photo: Photo;
+  photos: Photo[];
   photoIndex: number;
+  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;
@@ -17,7 +20,9 @@ interface StereoViewerProps {
 
 export default function StereoViewer({
   photo,
+  photos,
   photoIndex,
+  album,
   onClose,
   onPrevious,
   onNext,
@@ -25,23 +30,24 @@ export default function StereoViewer({
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
 
   // Process the stereo image into left/right halves
-  const { leftUrl, rightUrl, isLoading, error } = useProcessedImage(photo.src);
+  const { leftUrl, rightUrl, isLoading, error, dimensions } =  useProcessedImage(photo, album);
 
   // Preload adjacent images for smoother navigation
-  const adjacentSrcs = useMemo(() => {
-    const srcs: string[] = [];
+  const adjacentPhotos = useMemo(() => {
+    const result: Photo[] = [];
     if (photoIndex > 0) {
-      srcs.push(photos[photoIndex - 1].src);
+      result.push(photos[photoIndex - 1]);
     }
     if (photoIndex < photos.length - 1) {
-      srcs.push(photos[photoIndex + 1].src);
+      result.push(photos[photoIndex + 1]);
     }
-    return srcs;
-  }, [photoIndex]);
+    return result;
+  }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentSrcs);
+  usePreloadImages(adjacentPhotos, album);
 
   // Update container size on mount and resize
   useEffect(() => {
@@ -104,15 +110,30 @@ export default function StereoViewer({
   const handleSwipeDown = useCallback((e: React.TouchEvent) => {
     if (scale <= 1) {
       const touch = e.changedTouches[0];
-      const startY = (e as any).startY;
-      if (startY !== undefined && touch.clientY - startY > 100) {
+      const startY = touchStartYRef.current;
+      if (startY !== null && touch.clientY - startY > 100) {
         onClose();
       }
     }
+    touchStartYRef.current = null;
   }, [scale, onClose]);
 
-  // The transform to apply to each half (synchronized)
-  const imageTransform = `scale(${scale}) translate(${translateX / scale}px, ${translateY / scale}px)`;
+  const viewportWidth = containerSize.width / 2;
+  const viewportHeight = containerSize.height;
+  const containedImageScale = dimensions
+    ? Math.min(viewportWidth / dimensions.width, viewportHeight / dimensions.height)
+    : 1;
+  const imageStageSize = dimensions
+    ? {
+        width: dimensions.width * containedImageScale,
+        height: dimensions.height * containedImageScale,
+      }
+    : null;
+
+  // Transform the actual image-sized stage, not the full viewport. Scaling from
+  // the center keeps the stereo pair visually aligned at every zoom level.
+  const imageTransform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  const imageTransformOrigin = 'center center';
 
   return (
     <div
@@ -121,7 +142,10 @@ export default function StereoViewer({
         swipeDirection === 'left' && "animate-slide-left",
         swipeDirection === 'right' && "animate-slide-right"
       )}
-      onTouchStart={handleTouchStart}
+      onTouchStart={(e) => {
+        touchStartYRef.current = e.touches[0]?.clientY ?? null;
+        handleTouchStart(e);
+      }}
       onTouchMove={handleTouchMove}
       onTouchEnd={(e) => {
         handleTouchEnd(e);
@@ -147,30 +171,40 @@ export default function StereoViewer({
       {leftUrl && rightUrl && (
         <div className="flex h-full w-full">
           {/* Left viewport - displays left image */}
-          <div className="h-full w-1/2 overflow-hidden">
+          <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
             <div
-              className="h-full w-full transition-transform duration-75"
-              style={{ transform: imageTransform }}
+              className="transition-transform duration-75"
+              style={{
+                width: imageStageSize?.width,
+                height: imageStageSize?.height,
+                transform: imageTransform,
+                transformOrigin: imageTransformOrigin,
+              }}
             >
               <img
                 src={leftUrl}
                 alt={`${photo.alt} (left)`}
-                className="h-full w-full object-contain"
+                className="h-full w-full"
                 draggable={false}
               />
             </div>
           </div>
 
           {/* Right viewport - displays right image */}
-          <div className="h-full w-1/2 overflow-hidden">
+          <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
             <div
-              className="h-full w-full transition-transform duration-75"
-              style={{ transform: imageTransform }}
+              className="transition-transform duration-75"
+              style={{
+                width: imageStageSize?.width,
+                height: imageStageSize?.height,
+                transform: imageTransform,
+                transformOrigin: imageTransformOrigin,
+              }}
             >
               <img
                 src={rightUrl}
                 alt={`${photo.alt} (right)`}
-                className="h-full w-full object-contain"
+                className="h-full w-full"
                 draggable={false}
               />
             </div>
@@ -193,7 +227,7 @@ export default function StereoViewer({
       </button>
 
       {/* Zoom indicator */}
-      {scale > 1 && (
+      {Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
           {Math.round(scale * 100)}%
         </div>
