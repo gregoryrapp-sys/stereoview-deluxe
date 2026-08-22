@@ -19,9 +19,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { toast } from '@/hooks/use-toast';
 import { COLLECTION_SORT_OPTIONS, resolveAlbumCover, resolveEventCover } from '@/lib/galleryUtils';
-import { exitPhotoFullscreen, requestPhotoFullscreen } from '@/lib/fullscreen';
+import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
+import { useViewerFullscreen } from '@/hooks/useViewerFullscreen';
 
 
 
@@ -177,6 +178,8 @@ export default function Gallery() {
     setSelectedPhotoIndex(null);
   }, []);
 
+  useViewerFullscreen(selectedPhotoIndex !== null, fullscreenContainerRef, () => setSelectedPhotoIndex(null));
+
   const loadGallery = useCallback(() => {
     let cancelled = false;
 
@@ -231,10 +234,9 @@ export default function Gallery() {
     return <Navigate to="/" replace />;
   }
 
-  // Request fullscreen synchronously in click handler (user gesture required)
+  // Fullscreen is entered by useViewerFullscreen once the overlay is mounted,
+  // still inside this tap's user-activation window.
   const handlePhotoClick = (index: number) => {
-    // Request fullscreen immediately - this is synchronous with user gesture
-    requestPhotoFullscreen(fullscreenContainerRef.current);
     setSelectedPhotoIndex(index);
   };
 

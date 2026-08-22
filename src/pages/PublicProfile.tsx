@@ -9,8 +9,9 @@ import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, Gall
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
-import { exitPhotoFullscreen, requestPhotoFullscreen } from '@/lib/fullscreen';
+import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
+import { useViewerFullscreen } from '@/hooks/useViewerFullscreen';
 
 export default function PublicProfile() {
   const { isAuthenticated } = useAuth();
@@ -260,8 +261,9 @@ export default function PublicProfile() {
 
   const sortedActivePhotos = usePhotoSort(activePhotos, photoSort);
 
+  // Fullscreen is entered by useViewerFullscreen once the overlay is mounted,
+  // still inside this tap's user-activation window.
   const handlePhotoClick = (index: number) => {
-    requestPhotoFullscreen(fullscreenContainerRef.current);
     setSelectedPhotoIndex(index);
   };
 
@@ -269,6 +271,10 @@ export default function PublicProfile() {
     await exitPhotoFullscreen();
     setSelectedPhotoIndex(null);
   }, []);
+
+  const isViewerOpen = selectedPhotoIndex !== null && !!sortedActivePhotos[selectedPhotoIndex];
+
+  useViewerFullscreen(isViewerOpen, fullscreenContainerRef, () => setSelectedPhotoIndex(null));
 
   const isAlbumPage = !!albumSlug;
   const isEventPage = !!eventSlug && !albumSlug;
@@ -550,28 +556,30 @@ export default function PublicProfile() {
         )}
       </main>
 
-      {data && selectedPhotoIndex !== null && (() => {
-        const isViewerOpen = selectedPhotoIndex !== null;
-        const viewerProps = {
-          album: selectedAlbum,
-          photo: sortedActivePhotos[selectedPhotoIndex],
-          photos: sortedActivePhotos,
-          photoIndex: selectedPhotoIndex,
-          onClose: handleCloseViewer,
-          onPrevious: () => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index)),
-          onNext: () => setSelectedPhotoIndex((index) => (index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index)),
-          hasPrevious: selectedPhotoIndex > 0,
-          hasNext: selectedPhotoIndex < sortedActivePhotos.length - 1,
-        };
-        return (
-          <div
-            ref={fullscreenContainerRef}
-            className={`fixed inset-0 z-50 bg-black ${isViewerOpen ? 'block' : 'hidden'}`}
-          >
-            {isViewerOpen && <SmartViewer {...viewerProps} />}
-          </div>
-        );
-      })()}
+      {/* Fullscreen container - always in the DOM so the ref exists when the
+          fullscreen request is made. */}
+      <div
+        ref={fullscreenContainerRef}
+        className={`fixed inset-0 z-50 bg-black ${isViewerOpen ? 'block' : 'hidden'}`}
+      >
+        {isViewerOpen && (
+          <SmartViewer
+            album={selectedAlbum}
+            photo={sortedActivePhotos[selectedPhotoIndex]}
+            photos={sortedActivePhotos}
+            photoIndex={selectedPhotoIndex}
+            onClose={handleCloseViewer}
+            onPrevious={() => setSelectedPhotoIndex((index) => (index !== null && index > 0 ? index - 1 : index))}
+            onNext={() =>
+              setSelectedPhotoIndex((index) =>
+                index !== null && index < sortedActivePhotos.length - 1 ? index + 1 : index,
+              )
+            }
+            hasPrevious={selectedPhotoIndex > 0}
+            hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
+          />
+        )}
+      </div>
     </div>
   );
 }
