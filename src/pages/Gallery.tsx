@@ -240,14 +240,14 @@ export default function Gallery() {
     setSelectedPhotoIndex(index);
   };
 
+  // Functional update so two navigations in quick succession do not both
+  // resolve against the same captured index.
   const handleNavigate = (direction: 'prev' | 'next') => {
-    if (selectedPhotoIndex === null) return;
-
-    if (direction === 'prev' && selectedPhotoIndex > 0) {
-      setSelectedPhotoIndex(selectedPhotoIndex - 1);
-    } else if (direction === 'next' && selectedPhotoIndex < sortedActivePhotos.length - 1) {
-      setSelectedPhotoIndex(selectedPhotoIndex + 1);
-    }
+    setSelectedPhotoIndex((index) => {
+      if (index === null) return index;
+      if (direction === 'prev') return index > 0 ? index - 1 : index;
+      return index < sortedActivePhotos.length - 1 ? index + 1 : index;
+    });
   };
 
   const handleSelectEvent = (eventId: string) => {

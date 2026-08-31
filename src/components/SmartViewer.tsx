@@ -34,7 +34,6 @@ export default function SmartViewer({
   const [mode, setMode] = useState<ViewMode>('stereo');
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const [swipeDirection, setSwipeDirection] = useState<'left' | 'right' | null>(null);
 
   // --- Common Hooks ---
   const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo, album);
@@ -96,24 +95,32 @@ export default function SmartViewer({
     return () => window.removeEventListener('resize', updateSize);
   }, []);
 
+  // Navigate immediately. This used to defer behind a 150ms timer to play
+  // `animate-slide-left/right`, but those classes are not defined anywhere -
+  // it was latency for no animation, and it let two quick swipes resolve
+  // against the same photo index.
+  const lastSwipeAtRef = useRef(0);
+
   const handleSwipeLeft = useCallback(() => {
-    setSwipeDirection('left');
-    setTimeout(() => {
-      onNext();
-      setSwipeDirection(null);
-    }, 150);
+    lastSwipeAtRef.current = Date.now();
+    onNext();
   }, [onNext]);
 
   const handleSwipeRight = useCallback(() => {
-    setSwipeDirection('right');
-    setTimeout(() => {
-      onPrevious();
-      setSwipeDirection(null);
-    }, 150);
+    lastSwipeAtRef.current = Date.now();
+    onPrevious();
   }, [onPrevious]);
 
-  const { scale, translateX, translateY, handleTouchStart, handleTouchMove, handleTouchEnd, resetTransform } =
-    useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false);
+  const {
+    scale,
+    translateX,
+    translateY,
+    handleTouchStart,
+    handleTouchMove,
+    handleTouchEnd,
+    handleTouchCancel,
+    resetTransform,
+  } = useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false);
 
   useEffect(() => {
     resetTransform();
@@ -122,8 +129,33 @@ export default function SmartViewer({
 
   const handleContainerClick = () => {
     if (mode === 'stereo' && scale > 1) return;
+    // A swipe also produces a click. Without this guard every swipe toggles the
+    // controls off, so the arrows end up pointer-events-none right when the
+    // user reaches for them.
+    if (Date.now() - lastSwipeAtRef.current < 300) return;
     setShowControls((current) => !current);
   };
+
+  // Keyboard navigation. Desktop fullscreen is landscape, so it renders the
+  // stereo view, where there is no other pointer affordance for paging.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'ArrowLeft') {
+        if (hasPrevious) onPrevious();
+      } else if (event.key === 'ArrowRight') {
+        if (hasNext) onNext();
+      } else if (event.key === 'Escape') {
+        onClose();
+      } else {
+        return;
+      }
+      event.preventDefault();
+      setShowControls(true);
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [hasPrevious, hasNext, onPrevious, onNext, onClose]);
 
   const viewportWidth = containerSize.width / 2;
   const viewportHeight = containerSize.height;
@@ -175,7 +207,7 @@ export default function SmartViewer({
   if (mode === '2d') {
     return (
       <div
-        className="flex h-full w-full items-center justify-center bg-black"
+        className="viewer-container flex h-full w-full items-center justify-center bg-black"
         onTouchStart={handleTouchStart_2d}
         onTouchEnd={handleTouchEnd_2d}
         onClick={handleContainerClick}
@@ -193,10 +225,11 @@ export default function SmartViewer({
   // Stereo Mode
   return (
     <div
-      className={cn('viewer-container h-full w-full flex items-center justify-center bg-black', swipeDirection === 'left' && 'animate-slide-left', swipeDirection === 'right' && 'animate-slide-right')}
+      className="viewer-container h-full w-full flex items-center justify-center bg-black"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
       onClick={handleContainerClick}
     >
       {loadingIndicator}
@@ -216,6 +249,8 @@ export default function SmartViewer({
         </div>
       )}
       {closeButton}
+      {prevButton}
+      {nextButton}
       {Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
           {Math.round(scale * 100)}%
