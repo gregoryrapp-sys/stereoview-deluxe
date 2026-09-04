@@ -62,6 +62,15 @@ export function makeSlug(value: string) {
     .replace(/^-+|-+$/g, '');
 }
 
+function slugSuffix(): string {
+  return Math.random().toString(36).slice(2, 6);
+}
+
+function withSlugCollisionSuffix(base: string): string {
+  const suffix = slugSuffix();
+  return base ? `${base}-${suffix}` : suffix;
+}
+
 export function getFileExtension(nameOrPath: string): string {
   const match = /\.([a-zA-Z0-9]+)$/.exec(nameOrPath.trim());
   return match ? match[1].toLowerCase() : '';
@@ -256,7 +265,18 @@ export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile
     throw new Error(error.message || 'Failed to fetch Dropbox files');
   }
   // The edge function now returns entries with a direct 'src' URL.
-  return data as DropboxFile[];
+  const files = data as DropboxFile[];
+  // Client-side dedupe as safety net for stale/overlapping API data
+  const seen = new Set<string>();
+  const deduped: DropboxFile[] = [];
+  for (const f of files) {
+    const key = f.id || f.path_lower || f.name;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(f);
+    }
+  }
+  return deduped;
 }
 
 export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Promise<DropboxFile> {
@@ -384,22 +404,25 @@ export async function createEvent({
   description?: string;
   slug?: string;
 }): Promise<EventRecord> {
-  const { data, error } = await supabase
-    .from('events')
-    .insert({
-      owner_id: ownerId,
-      title,
-      description: description || null,
-      slug: slug ? makeSlug(slug) : undefined,
-    })
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
+  const baseSlug = slug ? makeSlug(slug) : undefined;
+  let attemptSlug: string | undefined = baseSlug;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data, error } = await supabase
+      .from('events')
+      .insert({
+        owner_id: ownerId,
+        title,
+        description: description || null,
+        slug: attemptSlug,
+      })
+      .select('*')
+      .single();
+    if (!error) return data;
+    const isUniqueViolation = (error as any).code === '23505';
+    if (!isUniqueViolation || attempt === 2) throw error;
+    attemptSlug = withSlugCollisionSuffix(baseSlug ?? makeSlug(title) ?? 'event');
   }
-
-  return data;
+  throw new Error('Could not create event');
 }
 
 export async function createAlbum({
@@ -417,24 +440,27 @@ export async function createAlbum({
   source_type?: 'upload' | 'dropbox';
   dropbox_folder_url?: string | null;
 }): Promise<AlbumRecord> {
-  const { data, error } = await supabase
-    .from('albums')
-    .insert({
-      event_id: eventId,
-      title,
-      description: description || null,
-      slug: slug ? makeSlug(slug) : null,
-      source_type: source_type ?? 'upload',
-      dropbox_folder_url: dropbox_folder_url ?? null,
-    })
-    .select('*')
-    .single();
-
-  if (error) {
-    throw error;
+  const baseSlug = slug ? makeSlug(slug) : null;
+  let attemptSlug: string | null | undefined = baseSlug;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const { data, error } = await supabase
+      .from('albums')
+      .insert({
+        event_id: eventId,
+        title,
+        description: description || null,
+        slug: attemptSlug,
+        source_type: source_type ?? 'upload',
+        dropbox_folder_url: dropbox_folder_url ?? null,
+      })
+      .select('*')
+      .single();
+    if (!error) return data;
+    const isUniqueViolation = (error as any).code === '23505';
+    if (!isUniqueViolation || attempt === 2) throw error;
+    attemptSlug = withSlugCollisionSuffix(baseSlug ?? makeSlug(title) ?? 'album');
   }
-
-  return data;
+  throw new Error('Could not create album');
 }
 
 export async function updateEvent({

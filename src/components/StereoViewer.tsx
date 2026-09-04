@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
-import { X, Loader2 } from 'lucide-react';
+import { X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AlbumRecord } from '@/types/database';
 
@@ -26,6 +26,8 @@ export default function StereoViewer({
   onClose,
   onPrevious,
   onNext,
+  hasPrevious,
+  hasNext,
 }: StereoViewerProps) {
   const [showControls, setShowControls] = useState(true);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -85,6 +87,7 @@ export default function StereoViewer({
     handleTouchStart,
     handleTouchMove,
     handleTouchEnd,
+    handleTouchCancel,
     resetTransform,
   } = useStereoGestures(
     handleSwipeLeft,
@@ -132,7 +135,7 @@ export default function StereoViewer({
 
   // Transform the actual image-sized stage, not the full viewport. Scaling from
   // the center keeps the stereo pair visually aligned at every zoom level.
-  const imageTransform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  const imageTransform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
   const imageTransformOrigin = 'center center';
 
   return (
@@ -151,6 +154,7 @@ export default function StereoViewer({
         handleTouchEnd(e);
         handleSwipeDown(e);
       }}
+      onTouchCancel={handleTouchCancel}
       onClick={handleContainerClick}
     >
       {/* Loading state */}
@@ -173,12 +177,13 @@ export default function StereoViewer({
           {/* Left viewport - displays left image */}
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
             <div
-              className="transition-transform duration-75"
+              className="viewer-stage"
               style={{
                 width: imageStageSize?.width,
                 height: imageStageSize?.height,
                 transform: imageTransform,
                 transformOrigin: imageTransformOrigin,
+                willChange: 'transform',
               }}
             >
               <img
@@ -193,12 +198,13 @@ export default function StereoViewer({
           {/* Right viewport - displays right image */}
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
             <div
-              className="transition-transform duration-75"
+              className="viewer-stage"
               style={{
                 width: imageStageSize?.width,
                 height: imageStageSize?.height,
                 transform: imageTransform,
                 transformOrigin: imageTransformOrigin,
+                willChange: 'transform',
               }}
             >
               <img
@@ -225,6 +231,24 @@ export default function StereoViewer({
       >
         <X className="h-6 w-6" />
       </button>
+
+      {/* Navigation - bottom corners as requested */}
+      {hasPrevious && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onPrevious(); }}
+          className={cn("absolute bottom-4 left-4 rounded-full bg-secondary/60 p-3 text-foreground backdrop-blur-sm transition-opacity duration-200", showControls ? "opacity-100" : "opacity-0 pointer-events-none")}
+        >
+          <ChevronLeft className="h-6 w-6" />
+        </button>
+      )}
+      {hasNext && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onNext(); }}
+          className={cn("absolute bottom-4 right-4 rounded-full bg-secondary/60 p-3 text-foreground backdrop-blur-sm transition-opacity duration-200", showControls ? "opacity-100" : "opacity-0 pointer-events-none")}
+        >
+          <ChevronRight className="h-6 w-6" />
+        </button>
+      )}
 
       {/* Zoom indicator */}
       {Math.abs(scale - 1) > 0.01 && (

@@ -26,9 +26,12 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
     onPasswordChange(null); // Passing null tells the service layer to clear it
   };
 
+  const isValidPin = /^[0-9]{4,6}$/.test(passwordInput.trim());
+
   const handlePasswordApply = () => {
-    if (passwordInput.trim()) {
-      onPasswordChange(passwordInput.trim());
+    const trimmed = passwordInput.trim();
+    if (/^[0-9]{4,6}$/.test(trimmed)) {
+      onPasswordChange(trimmed);
     }
   };
 
@@ -53,13 +56,20 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
       {/* Password Protection */}
       {!isPublic && (
       <div className="space-y-3 pt-2">
+        <p className="text-xs text-muted-foreground">PIN must be 4-6 digits. Required for private access.</p>
         <div className="flex items-center space-x-2">
           <div className="relative flex-1">
             <Input
               type={showPassword ? 'text' : 'password'}
-              placeholder={passwordSet ? '•••••••• (Password Configured)' : 'Enter new password'}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              maxLength={6}
+              placeholder={passwordSet ? '•••• PIN configured' : 'Enter 4-6 digit PIN'}
               value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
+              onChange={(e) => {
+                const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+                setPasswordInput(digits);
+              }}
             />
             <button
               type="button"
@@ -73,7 +83,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
           <Button
             type="button"
             onClick={handlePasswordApply}
-            disabled={!passwordInput.trim()}
+            disabled={!isValidPin}
           >
             Apply
           </Button>
@@ -82,13 +92,15 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
             <Button
               type="button"
               onClick={handlePasswordClear}
-              variant="destructive"
-              outline
+              variant="outline"
             >
               Remove
             </Button>
           )}
         </div>
+        {passwordInput && !isValidPin && (
+          <p className="text-xs text-destructive">PIN must be 4-6 digits.</p>
+        )}
       </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams, useBlocker } from 'react-router-dom';
 import {
   Check,
   Cloud,
@@ -41,6 +41,7 @@ import {
 import type { AlbumRecord, EventRecord } from '@/types/database';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
+import { usePhotoSort } from '@/hooks/usePhotoSort';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -130,10 +131,31 @@ export default function EventAlbumManagement() {
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
+  const [managePhotoSort, setManagePhotoSort] = useState('alt_asc');
   const [isMovePhotosDialogOpen, setIsMovePhotosDialogOpen] = useState(false);
   const [moveDestinationEventId, setMoveDestinationEventId] = useState<string | null>(null);
   const [moveDestinationAlbumId, setMoveDestinationAlbumId] = useState<string | null>(null);
   const shouldShowUploadRedirectNotice = searchParams.get('reason') === 'missing-destination';
+
+  // Block navigation while an upload/save is in progress
+  const uploadInProgress = isSaving;
+  const blocker = useBlocker(uploadInProgress);
+  useEffect(() => {
+    if (blocker.state === 'blocked') {
+      const ok = window.confirm('An upload or save is in progress — leaving now will cancel it. Leave anyway?');
+      if (ok) blocker.proceed();
+      else blocker.reset();
+    }
+  }, [blocker]);
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!uploadInProgress) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [uploadInProgress]);
 
   // Public / Share state declarations
   const [profileIsPublic, setProfileIsPublic] = useState(true);
@@ -369,6 +391,8 @@ export default function EventAlbumManagement() {
       isDropbox: false,
     }));
   }, [isDropboxAlbum, dropboxPhotos, albumPhotos, selectedAlbum]);
+
+  const sortedDisplayPhotos = usePhotoSort(displayPhotos as GalleryPhoto[], managePhotoSort);
 
   const profileCover = useMemo(() => {
     if (!profile) return null;
@@ -1271,6 +1295,23 @@ export default function EventAlbumManagement() {
               )}
             </div>
 
+            {displayPhotos.length > 1 && !isDropboxLoading && (
+              <div className="flex items-center justify-start gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+                <Select value={managePhotoSort} onValueChange={setManagePhotoSort}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="alt_asc">Name A-Z</SelectItem>
+                    <SelectItem value="alt_desc">Name Z-A</SelectItem>
+                    <SelectItem value="created_at_desc">Date New-Old</SelectItem>
+                    <SelectItem value="created_at_asc">Date Old-New</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
             {isDropboxLoading ? (
               <div className="flex items-center justify-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
                 <Cloud className="mr-2 h-4 w-4 animate-pulse" />
@@ -1278,7 +1319,7 @@ export default function EventAlbumManagement() {
               </div>
             ) : (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-                {displayPhotos.map((photo) => {
+                {sortedDisplayPhotos.map((photo) => {
                   const isSelectedCover = photo.isDropbox
                     ? photo.alt === albumDropboxCoverImageName
                     : photo.id === albumCoverPhotoId;
@@ -1297,7 +1338,19 @@ export default function EventAlbumManagement() {
                           <StereoThumbnail photo={photo as GalleryPhoto} />
                         </div>
                         <CardContent className="flex items-center justify-between gap-2 p-2">
-                          <p className="truncate text-xs text-muted-foreground">{photo.alt || 'Untitled photo'}</p>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-[10px] font-medium leading-tight text-foreground">
+                              {photo.alt || 'Untitled photo'}
+                              {(photo as GalleryPhoto).extension && !(photo.alt || '').toLowerCase().endsWith(`.${(photo as GalleryPhoto).extension}`) && (
+                                <span className="text-muted-foreground">.{(photo as GalleryPhoto).extension}</span>
+                              )}
+                            </p>
+                            {(photo as GalleryPhoto).created_at && (
+                              <p className="truncate text-[10px] leading-tight text-muted-foreground">
+                                {new Date((photo as GalleryPhoto).created_at!).toLocaleDateString()}
+                              </p>
+                            )}
+                          </div>
                           {!photo.isDropbox && (
                             <Button
                               variant="secondary"

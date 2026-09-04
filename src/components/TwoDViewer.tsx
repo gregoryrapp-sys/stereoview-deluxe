@@ -119,7 +119,7 @@ export default function TwoDViewer({
             onPrevious();
           }}
           className={cn(
-            'absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200',
+            'absolute bottom-4 left-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200',
             showControls ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
         >
@@ -134,7 +134,7 @@ export default function TwoDViewer({
             onNext();
           }}
           className={cn(
-            'absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200',
+            'absolute bottom-4 right-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200',
             showControls ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
         >

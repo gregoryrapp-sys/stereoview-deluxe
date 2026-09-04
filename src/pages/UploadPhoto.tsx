@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useBlocker, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Cloud, Folder, FolderOpen, Images, Upload, X } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -343,6 +343,24 @@ export default function UploadPhoto() {
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState('');
+
+  const uploadBlocker = useBlocker(isSubmitting);
+  useEffect(() => {
+    if (uploadBlocker.state === 'blocked') {
+      const ok = window.confirm('An upload is in progress — leaving will cancel it. Leave anyway?');
+      if (ok) uploadBlocker.proceed();
+      else uploadBlocker.reset();
+    }
+  }, [uploadBlocker]);
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (!isSubmitting) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [isSubmitting]);
 
   const selectedEvent = useMemo(
     () => galleryData.events.find((event) => event.id === selectedEventId) ?? null,

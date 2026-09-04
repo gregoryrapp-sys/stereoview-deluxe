@@ -7,10 +7,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { fetchDropboxPhotos, GalleryData, GalleryPhoto } from '@/services/galleryService';
+import { fetchDropboxPhotos, GalleryData, GalleryPhoto, getFileExtension } from '@/services/galleryService';
 import type { AlbumRecord, EventRecord } from '@/types/database';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { ProfileCoverPhotoPicker } from '@/components/ProfileCoverPhotoPicker';
+import { usePhotoSort } from '@/hooks/usePhotoSort';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 export function ObjectCoverPickerDialog({
   open,
@@ -34,6 +36,7 @@ export function ObjectCoverPickerDialog({
   const [photos, setPhotos] = useState<(GalleryPhoto & { isDropbox?: boolean; album: AlbumRecord | null })[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [coverSort, setCoverSort] = useState('alt_asc');
 
   const title = useMemo(() => {
     if (object === 'profile') {
@@ -85,6 +88,8 @@ export function ObjectCoverPickerDialog({
                   albumId: album.id,
                   eventId: album.event_id,
                   album,
+                  created_at: file.client_modified,
+                  extension: getFileExtension(file.name),
                 })),
               ),
             ),
@@ -106,6 +111,8 @@ export function ObjectCoverPickerDialog({
               albumId: album.id,
               eventId: album.event_id,
               album: album,
+              created_at: file.client_modified,
+              extension: getFileExtension(file.name),
             }));
           } else {
             fetchedPhotos = (galleryData.photos.filter((p) => p.albumId === album.id) ?? []).map((p) => ({
@@ -139,6 +146,8 @@ export function ObjectCoverPickerDialog({
     ? photos.find((p) => p.isDropbox && p.alt === currentDropboxCoverName)?.id ?? null
     : currentCoverPhotoId;
 
+  const sortedPhotos = usePhotoSort(photos as GalleryPhoto[], coverSort);
+
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="flex max-h-[90vh] w-[90vw] max-w-4xl flex-col">
@@ -161,27 +170,42 @@ export function ObjectCoverPickerDialog({
               dropboxCoverUrls={dropboxCoverUrls}
             />
           ) : (
-            <div
-              className="grid min-h-0 flex-1
-              grid-cols-1
-              sm:grid-cols-2
-              lg:grid-cols-3
-              gap-3
-              overflow-y-auto
-              content-start
-              auto-rows-max
-              p-1"
-            >
-              <button
-                type="button"
-                onClick={() => onSelect(null)}
-                className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
-                  selectedId === null ? 'ring-2 ring-ring' : ''
-                }`}
+            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+              <div className="flex items-center justify-start gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+                <Select value={coverSort} onValueChange={setCoverSort}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="alt_asc">Name A-Z</SelectItem>
+                    <SelectItem value="alt_desc">Name Z-A</SelectItem>
+                    <SelectItem value="created_at_desc">Date New-Old</SelectItem>
+                    <SelectItem value="created_at_asc">Date Old-New</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div
+                className="grid min-h-0 flex-1
+                grid-cols-1
+                sm:grid-cols-2
+                lg:grid-cols-3
+                gap-3
+                overflow-y-auto
+                content-start
+                auto-rows-max
+                p-1"
               >
-                Use first photo automatically
-              </button>
-              {photos.map((photo) => (
+                <button
+                  type="button"
+                  onClick={() => onSelect(null)}
+                  className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
+                    selectedId === null ? 'ring-2 ring-ring' : ''
+                  }`}
+                >
+                  Use first photo automatically
+                </button>
+                {sortedPhotos.map((photo) => (
                 <button
                   key={photo.id}
                   type="button"
@@ -198,6 +222,7 @@ export function ObjectCoverPickerDialog({
                   </span>
                 </button>
               ))}
+              </div>
             </div>
           )
         )}

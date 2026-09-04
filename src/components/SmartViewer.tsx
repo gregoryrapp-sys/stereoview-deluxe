@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Loader2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, X, Share2 } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
@@ -161,7 +161,25 @@ export default function SmartViewer({
   const viewportHeight = containerSize.height;
   const containedImageScale = dimensions ? Math.min(viewportWidth / dimensions.width, viewportHeight / dimensions.height) : 1;
   const imageStageSize = dimensions ? { width: dimensions.width * containedImageScale, height: dimensions.height * containedImageScale } : null;
-  const imageTransform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+  const imageTransform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
+
+  const handleShare = useCallback(async () => {
+    if (!leftUrl) return;
+    try {
+      const res = await fetch(leftUrl);
+      const blob = await res.blob();
+      const ext = (photo as any).extension ? `.${(photo as any).extension}` : '.jpg';
+      const safeName = (photo.alt || 'photo').replace(/[^\w.-]+/g, '_');
+      const file = new File([blob], `${safeName}${ext}`, { type: blob.type || 'image/jpeg' });
+      if ((navigator as any).canShare?.({ files: [file] })) {
+        await (navigator as any).share({ files: [file], title: photo.alt || 'Photo' });
+      } else if ((navigator as any).share) {
+        await (navigator as any).share({ title: photo.alt || 'Photo', url: leftUrl });
+      }
+    } catch (e) {
+      console.warn('Share failed', e);
+    }
+  }, [leftUrl, photo]);
 
   // --- Common UI Elements ---
   const closeButton = (
@@ -170,6 +188,16 @@ export default function SmartViewer({
       className={cn('absolute right-4 top-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
     >
       <X className="h-6 w-6" />
+    </button>
+  );
+
+  const shareButton = (
+    <button
+      onClick={(e) => { e.stopPropagation(); handleShare(); }}
+      className={cn('absolute left-4 top-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
+      aria-label="Share"
+    >
+      <Share2 className="h-6 w-6" />
     </button>
   );
 
@@ -188,7 +216,7 @@ export default function SmartViewer({
   const prevButton = hasPrevious && (
     <button
       onClick={(e) => { e.stopPropagation(); onPrevious(); }}
-      className={cn('absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
+      className={cn('absolute bottom-4 left-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200 [padding-bottom:env(safe-area-inset-bottom)]', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
     >
       <ChevronLeft className="h-6 w-6" />
     </button>
@@ -197,7 +225,7 @@ export default function SmartViewer({
   const nextButton = hasNext && (
     <button
       onClick={(e) => { e.stopPropagation(); onNext(); }}
-      className={cn('absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
+      className={cn('absolute bottom-4 right-4 rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200 [padding-bottom:env(safe-area-inset-bottom)]', showControls ? 'opacity-100' : 'pointer-events-none opacity-0')}
     >
       <ChevronRight className="h-6 w-6" />
     </button>
@@ -216,6 +244,7 @@ export default function SmartViewer({
         {errorIndicator}
         {leftUrl && <img src={leftUrl} alt={photo.alt} className="max-h-full max-w-full object-contain" draggable={false} />}
         {closeButton}
+        {shareButton}
         {prevButton}
         {nextButton}
       </div>
@@ -237,18 +266,19 @@ export default function SmartViewer({
       {leftUrl && rightUrl && (
         <div className="flex h-full w-full">
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            <div className="transition-transform duration-75" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center' }}>
+            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center', willChange: 'transform' }}>
               <img src={leftUrl} alt={`${photo.alt} (left)`} className="h-full w-full" draggable={false} />
             </div>
           </div>
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            <div className="transition-transform duration-75" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center' }}>
+            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center', willChange: 'transform' }}>
               <img src={rightUrl} alt={`${photo.alt} (right)`} className="h-full w-full" draggable={false} />
             </div>
           </div>
         </div>
       )}
       {closeButton}
+      {shareButton}
       {prevButton}
       {nextButton}
       {Math.abs(scale - 1) > 0.01 && (

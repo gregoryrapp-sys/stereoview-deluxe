@@ -130,21 +130,20 @@ export function useStereoGestures(
 
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
 
-      // Only pan if zoomed in
-      if (state.scale > DEFAULT_SCALE) {
-        setState(prev => {
-          const clamped = clampTranslate(
-            prev.translateX + deltaX,
-            prev.translateY + deltaY,
-            prev.scale
-          );
-          return {
-            ...prev,
-            translateX: clamped.x,
-            translateY: clamped.y,
-          };
-        });
-      }
+      setState(prev => {
+        // Only pan if zoomed in — check prev.scale to avoid stale closure
+        if (prev.scale <= DEFAULT_SCALE) return prev;
+        const clamped = clampTranslate(
+          prev.translateX + deltaX,
+          prev.translateY + deltaY,
+          prev.scale
+        );
+        return {
+          ...prev,
+          translateX: clamped.x,
+          translateY: clamped.y,
+        };
+      });
     }
   }, [state.scale, clampTranslate, transformDelta]);
 

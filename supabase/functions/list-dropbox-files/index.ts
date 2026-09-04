@@ -95,7 +95,7 @@ async function handler(req: Request) {
         throw new Error(`Dropbox API error: ${listResponse.statusText}`);
     }
 
-    let listData = await listResponse.json();
+     let listData = await listResponse.json();
     let allEntries = listData.entries;
 
     while (listData.has_more) {
@@ -109,6 +109,17 @@ async function handler(req: Request) {
         });
         listData = await listResponse.json();
         allEntries.push(...(listData.entries || []));
+    }
+
+    // Dedupe entries by id (handles overlapping pagination windows)
+    {
+      const seen = new Set<string>();
+      allEntries = allEntries.filter((entry: any) => {
+        const key = entry.id || entry.path_lower || entry.name;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
     }
 
     const imageFiles = allEntries.filter(entry =>
@@ -164,15 +175,25 @@ async function handler(req: Request) {
 
     const metaResults = await Promise.all(metaPromises);
 
-    const filesWithSrc = metaResults
-      .filter(meta => meta !== null)
-      .map(meta => ({
-        name: meta.name,
-        path_lower: meta.path_lower,
-        id: meta.id,
-        src: getDirectLink(meta.url.replace("dl=0", "dl=1") ),
-        client_modified: meta.client_modified,
-      }));
+    const dedupedFilesWithSrc = (() => {
+      const filtered = metaResults
+        .filter(meta => meta !== null)
+        .map(meta => ({
+          name: meta.name,
+          path_lower: meta.path_lower,
+          id: meta.id,
+          src: getDirectLink(meta.url.replace("dl=0", "dl=1") ),
+          client_modified: meta.client_modified,
+        }));
+      const seen = new Set<string>();
+      return filtered.filter((f) => {
+        const key = f.id || f.path_lower;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    })();
+    const filesWithSrc = dedupedFilesWithSrc;
 
     return new Response(JSON.stringify(filesWithSrc), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

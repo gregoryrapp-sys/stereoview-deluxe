@@ -1,11 +1,13 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ArrowLeft, Cloud, FolderOpen, Images } from 'lucide-react';
 import type { AlbumRecord } from '@/types/database';
-import { fetchDropboxPhotos, type GalleryData, type GalleryPhoto } from '@/services/galleryService';
+import { fetchDropboxPhotos, type GalleryData, type GalleryPhoto, getFileExtension } from '@/services/galleryService';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { Button } from '@/components/ui/button';
 import { toast } from '@/hooks/use-toast';
+import { usePhotoSort } from '@/hooks/usePhotoSort';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 function getCoverPhoto(photos: GalleryPhoto[], coverPhotoId?: string | null) {
   return photos.find((photo) => photo.id === coverPhotoId) ?? photos[0] ?? null;
@@ -28,6 +30,7 @@ export function ProfileCoverPhotoPicker({
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
   const [dropboxPhotos, setDropboxPhotos] = useState<GalleryPhoto[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
+  const [profilePickerSort, setProfilePickerSort] = useState('alt_asc');
   const [localDropboxCoverUrls, setLocalDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
 
   const allDropboxCoverUrls = useMemo(() => ({ ...dropboxCoverUrls, ...localDropboxCoverUrls }), [
@@ -121,6 +124,8 @@ export function ProfileCoverPhotoPicker({
     [galleryData.photos, selectedAlbumId, selectedAlbum, dropboxPhotos],
   );
 
+  const sortedActivePhotos = usePhotoSort(activePhotos, profilePickerSort);
+
   useEffect(() => {
     if (!selectedAlbum || selectedAlbum.source_type !== 'dropbox' || !selectedAlbum.dropbox_folder_url) {
       setDropboxPhotos([]);
@@ -133,7 +138,7 @@ export function ProfileCoverPhotoPicker({
       try {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
         if (!cancelled) {
-          const photos: GalleryPhoto[] = files.map((file) => ({ id: file.id, src: file.src, alt: file.name }));
+          const photos: GalleryPhoto[] = files.map((file) => ({ id: file.id, src: file.src, alt: file.name, created_at: file.client_modified, extension: getFileExtension(file.name) }));
           setDropboxPhotos(photos);
         }
       } catch (error) {
@@ -310,17 +315,32 @@ export function ProfileCoverPhotoPicker({
               Loading photos from Dropbox...
             </div>
           ) : (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <button
-                type="button"
-                onClick={() => onSelect(null)}
-                className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
-                  currentCoverPhotoId === null ? 'ring-2 ring-ring' : ''
-                }`}
-              >
-                Use first photo automatically
-              </button>
-              {activePhotos.map((photo) => (
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center justify-start gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Sort by</span>
+                <Select value={profilePickerSort} onValueChange={setProfilePickerSort}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="alt_asc">Name A-Z</SelectItem>
+                    <SelectItem value="alt_desc">Name Z-A</SelectItem>
+                    <SelectItem value="created_at_desc">Date New-Old</SelectItem>
+                    <SelectItem value="created_at_asc">Date Old-New</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => onSelect(null)}
+                  className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
+                    currentCoverPhotoId === null ? 'ring-2 ring-ring' : ''
+                  }`}
+                >
+                  Use first photo automatically
+                </button>
+                {sortedActivePhotos.map((photo) => (
                 <button
                   key={photo.id}
                   type="button"
@@ -337,6 +357,7 @@ export function ProfileCoverPhotoPicker({
                   </span>
                 </button>
               ))}
+              </div>
             </div>
           ))}
       </div>
