@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams, useBlocker } from 'react-router-dom';
+import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Check,
   Cloud,
@@ -137,25 +137,19 @@ export default function EventAlbumManagement() {
   const [moveDestinationAlbumId, setMoveDestinationAlbumId] = useState<string | null>(null);
   const shouldShowUploadRedirectNotice = searchParams.get('reason') === 'missing-destination';
 
-  // Block navigation while an upload/save is in progress
-  const uploadInProgress = isSaving;
-  const blocker = useBlocker(uploadInProgress);
-  useEffect(() => {
-    if (blocker.state === 'blocked') {
-      const ok = window.confirm('An upload or save is in progress — leaving now will cancel it. Leave anyway?');
-      if (ok) blocker.proceed();
-      else blocker.reset();
-    }
-  }, [blocker]);
+  // Block browser refresh/close while an upload/save is in progress.
+  // Internal React Router navigation is not blocked here because App uses
+  // BrowserRouter (useBlocker requires a data router and would crash).
+  // We keep page navigation enabled but disable action buttons via isSaving.
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!uploadInProgress) return;
+      if (!isSaving) return;
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [uploadInProgress]);
+  }, [isSaving]);
 
   // Public / Share state declarations
   const [profileIsPublic, setProfileIsPublic] = useState(true);
