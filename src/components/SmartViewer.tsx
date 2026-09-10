@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Loader2, X, Share2 } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
+import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { cn } from '@/lib/utils';
 import type { AlbumRecord } from '@/types/database';
 
@@ -161,7 +162,15 @@ export default function SmartViewer({
   const viewportHeight = containerSize.height;
   const containedImageScale = dimensions ? Math.min(viewportWidth / dimensions.width, viewportHeight / dimensions.height) : 1;
   const imageStageSize = dimensions ? { width: dimensions.width * containedImageScale, height: dimensions.height * containedImageScale } : null;
-  const imageTransform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
+  // A 3D transform plus will-change parks the stage on its own GPU layer, which
+  // is what makes the gesture smooth. That layer is rasterized once and then
+  // stretched, so holding it after the gesture leaves the image blurry while
+  // zoomed. Once the transform settles, fall back to a 2D transform with no
+  // hint and let the browser re-rasterize at the zoomed resolution.
+  const isTransforming = useTransformSettle(`${scale}:${translateX}:${translateY}`);
+  const imageTransform = isTransforming
+    ? `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`
+    : `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 
   const handleShare = useCallback(async () => {
     if (!leftUrl) return;
@@ -266,12 +275,12 @@ export default function SmartViewer({
       {leftUrl && rightUrl && (
         <div className="flex h-full w-full">
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center', willChange: 'transform' }}>
+            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, willChange: isTransforming ? 'transform' : 'auto' }}>
               <img src={leftUrl} alt={`${photo.alt} (left)`} className="h-full w-full" draggable={false} />
             </div>
           </div>
           <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, transformOrigin: 'center center', willChange: 'transform' }}>
+            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, willChange: isTransforming ? 'transform' : 'auto' }}>
               <img src={rightUrl} alt={`${photo.alt} (right)`} className="h-full w-full" draggable={false} />
             </div>
           </div>

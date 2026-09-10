@@ -71,11 +71,14 @@ All colors MUST be HSL.
   max-height: 100vh;
 }
 
-/* Viewer stage promoted to GPU layer for smooth pan/zoom (see zoom/pan fix) */
+/* Scaling from the center keeps the stereo pair aligned at every zoom level.
+   Deliberately no will-change/translateZ/backface-visibility here: a
+   permanently composited layer is rasterized once at 1x and then stretched by
+   the compositor, so pinch-zoom magnified a low-res texture instead of
+   re-rendering the image. The viewers add the GPU hint only while a gesture is
+   in flight (see useTransformSettle). */
 .viewer-stage {
-  will-change: transform;
-  transform: translateZ(0);
-  backface-visibility: hidden;
+  transform-origin: center center;
 }
 
 /* Landscape orientation lock prompt */
