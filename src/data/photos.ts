@@ -5,9 +5,37 @@ export interface Photo {
   alt: string;
 }
 
-// Stereoscopic photos - raw side-by-side images that get split on load
-// Add more entries as needed with paths to your stereo images
-export const photos: Photo[] = [
+type DropboxPhoto = Omit<Photo, 'src'> & {
+  /** File path within a shared Dropbox folder OR a full Dropbox shared link. */
+  filePath: string;
+};
+
+const normalizeDropboxShareLink = (shareUrl: string) => {
+  const [baseUrl] = shareUrl.split('?');
+  return `${baseUrl}?raw=1`;
+};
+
+const buildDropboxSharedFileUrl = (folderUrl: string, filePath: string) => {
+  if (filePath.startsWith('http')) {
+    return normalizeDropboxShareLink(filePath);
+  }
+
+  const baseFolderUrl = folderUrl.replace(/\?.*$/, '').replace(/\/$/, '');
+  const encodedPath = filePath
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/');
+  return `${baseFolderUrl}/${encodedPath}?raw=1`;
+};
+
+const dropboxFolderShareUrl = import.meta.env.VITE_DROPBOX_FOLDER_SHARE_URL ?? '';
+
+const dropboxPhotos: DropboxPhoto[] = [
+  // Example:
+  // { id: '1', filePath: 'stereo-photo-1.jpeg', alt: 'Stereoscopic photo 1' }
+];
+
+const localPhotos: Photo[] = [
   {
     id: '1',
     src: '/photos/raw/stereo-photo-1.jpeg',
@@ -39,3 +67,16 @@ export const photos: Photo[] = [
     alt: 'Crop test'
   }
 ];
+
+const resolvedDropboxPhotos: Photo[] = dropboxFolderShareUrl
+  ? dropboxPhotos.map((photo) => ({
+      id: photo.id,
+      alt: photo.alt,
+      src: buildDropboxSharedFileUrl(dropboxFolderShareUrl, photo.filePath)
+    }))
+  : [];
+
+// Stereoscopic photos - raw side-by-side images that get split on load.
+// Prefer Dropbox shared folder links when configured (no token needed).
+export const photos: Photo[] =
+  resolvedDropboxPhotos.length > 0 ? resolvedDropboxPhotos : localPhotos;
