@@ -1,6 +1,6 @@
 import type { Photo } from '@/data/photos';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
-import type { AlbumRecord, EventRecord, PhotoRecord, Profile, ShareLinkRecord, ShareScope } from '@/types/database';
+import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
   albumId?: string;
@@ -660,17 +660,6 @@ export async function hashPassword(password: string): Promise<string> {
     throw new Error('Password service did not return a hash.');
   }
   return data.hash;
-}
-
-export async function verifyPassword(password: string, hash: string): Promise<boolean> {
-  const { data, error } = await supabase.functions.invoke('password-service', {
-    body: { type: 'verify', password: password, hash: hash },
-  });
-
-  if (error) {
-    throw new Error(`Password verification failed: ${error.message}`);
-  }
-  return data.valid === true;
 }
 
 export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryItem[]> {

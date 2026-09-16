@@ -1,5 +1,4 @@
 export type AppRole = 'admin' | 'user';
-export type ShareScope = 'profile' | 'event' | 'album';
 
 export interface Profile {
   id: string;
@@ -52,20 +51,6 @@ export interface PhotoRecord {
   sort_order: number;
   created_at: string;
   file_modified_at: string | null;
-}
-
-export interface ShareLinkRecord {
-  id: string;
-  token: string;
-  scope: ShareScope;
-  profile_id: string | null;
-  event_id: string | null;
-  album_id: string | null;
-  password_hash: string | null;
-  created_by: string;
-  is_active: boolean;
-  expires_at: string | null;
-  created_at: string;
 }
 
 export interface Database {
@@ -126,52 +111,12 @@ export interface Database {
         };
         Update: Partial<Omit<PhotoRecord, 'id' | 'created_at'>>;
       };
-      share_links: {
-        Row: ShareLinkRecord;
-        Insert: {
-          id?: string;
-          token?: string;
-          scope: ShareScope;
-          profile_id?: string | null;
-          event_id?: string | null;
-          album_id?: string | null;
-          password_hash?: string | null;
-          created_by: string;
-          is_active?: boolean;
-          expires_at?: string | null;
-          created_at?: string;
-        };
-        Update: Partial<Omit<ShareLinkRecord, 'id' | 'created_at'>>;
-      };
     };
     Functions: {
-      create_share_link: {
-        Args: {
-          p_scope: ShareScope;
-          p_profile_id: string | null;
-          p_event_id: string | null;
-          p_album_id: string | null;
-          p_password: string;
-          p_expires_at?: string | null;
-        };
-        Returns: ShareLinkRecord;
-      };
-      verify_share_password: {
-        Args: {
-          p_token: string;
-          p_password: string;
-        };
-        Returns: boolean;
-      };
-      get_shared_gallery_by_slugs: {
-        Args: {
-          p_profile_slug: string;
-          p_event_slug?: string | null;
-          p_album_slug?: string | null;
-          p_password?: string;
-        };
-        Returns: unknown;
-      };
+      // share_links and its three RPCs (create_share_link, verify_share_password,
+      // get_shared_gallery_by_slugs) were dropped by migration 20260624000000 but
+      // stayed declared here for months. Removed so the types describe the DB
+      // that actually exists.
       get_public_photographers: {
         Args: Record<string, never>;
         Returns: unknown;
