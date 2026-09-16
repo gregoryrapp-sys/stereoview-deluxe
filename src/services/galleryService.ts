@@ -741,7 +741,12 @@ export async function updateProfilePresentation({
     privacyUpdate.password = null;
   }
 
-  const { error } = await supabase
+  // `.select()` is what makes an RLS rejection visible. Postgres does not raise
+  // when a policy denies an UPDATE - the statement simply matches zero rows and
+  // returns success. Without checking the returned rows, a profile save that RLS
+  // silently discarded reported success to the user, which is exactly how the
+  // missing self-update policy went unnoticed for months.
+  const { data, error } = await supabase
     .from('profiles')
     .update({
       ...(displayName !== undefined ? { display_name: displayName || null } : {}),
@@ -749,10 +754,17 @@ export async function updateProfilePresentation({
       ...coverUpdate,
       ...privacyUpdate,
     })
-    .eq('id', profileId);
+    .eq('id', profileId)
+    .select('id');
 
   if (error) {
     throw error;
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Profile could not be saved. You may not have permission to update this profile.',
+    );
   }
 }
 

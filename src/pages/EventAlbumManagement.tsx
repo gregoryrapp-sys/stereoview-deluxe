@@ -658,10 +658,10 @@ export default function EventAlbumManagement() {
         isPublic: profileIsPublic,
         password: profilePasswordDirty ? profilePassword || null : undefined,
       });
+      // Refresh before the success toast: updateProfilePresentation now throws
+      // if RLS discarded the write, so reaching here means the row really changed.
+      await refreshProfile();
       toast({ title: 'Photographer page saved' });
-      if (refreshProfile) {
-        await refreshProfile();
-      }
     } catch (error) {
       toast({
         title: 'Could not save photographer page',
