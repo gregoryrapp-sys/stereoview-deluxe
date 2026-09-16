@@ -48,7 +48,121 @@ export type UploadImageSource =
       fileName: string;
     };
 
-const SIGNED_URL_EXPIRES_IN_SECONDS = 60 * 60;
+/**
+ * Signed URLs live for a week and are reused from a persisted cache.
+ *
+ * The old one-hour expiry was minted fresh on every fetch, so the URL string -
+ * and with it the browser's HTTP cache key, and every in-app cache key derived
+ * from `src` - changed on every single page load. Nothing could ever be a cache
+ * hit. It also meant a gallery left open for an hour went dead.
+ *
+ * The trade is a bounded revocation tail: an album made private stays reachable
+ * to whoever already holds a URL until it expires. A week is the deliberate
+ * ceiling on that.
+ */
+const SIGNED_URL_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
+
+/** Re-sign below this much remaining life, so a URL never expires mid-session. */
+const SIGNED_URL_MIN_REMAINING_MS = 12 * 60 * 60 * 1000;
+
+/** Supabase caps a single createSignedUrls call; chunk well under it. */
+const SIGNED_URL_BATCH_SIZE = 500;
+
+const SIGNED_URL_STORAGE_KEY = 'svd:signed-urls:v1';
+
+/** One year. Photo objects are write-once under a UUID path, so they never change. */
+export const PHOTO_CACHE_CONTROL_SECONDS = '31536000';
+
+interface SignedUrlEntry {
+  url: string;
+  expiresAt: number;
+}
+
+let signedUrlCache: Map<string, SignedUrlEntry> | null = null;
+
+function loadSignedUrlCache(): Map<string, SignedUrlEntry> {
+  if (signedUrlCache) return signedUrlCache;
+
+  signedUrlCache = new Map();
+  try {
+    const raw = localStorage.getItem(SIGNED_URL_STORAGE_KEY);
+    if (raw) {
+      const now = Date.now();
+      for (const [path, entry] of Object.entries(JSON.parse(raw) as Record<string, SignedUrlEntry>)) {
+        if (entry?.url && entry.expiresAt - now > SIGNED_URL_MIN_REMAINING_MS) {
+          signedUrlCache.set(path, entry);
+        }
+      }
+    }
+  } catch {
+    // Private browsing, cleared site data, or a corrupt entry. Start empty -
+    // this cache is an optimisation, never a source of truth.
+  }
+  return signedUrlCache;
+}
+
+function persistSignedUrlCache(): void {
+  if (!signedUrlCache) return;
+  try {
+    localStorage.setItem(
+      SIGNED_URL_STORAGE_KEY,
+      JSON.stringify(Object.fromEntries(signedUrlCache)),
+    );
+  } catch {
+    // Quota exceeded or storage unavailable; the in-memory cache still works.
+  }
+}
+
+/**
+ * Signs many storage paths in one round trip, reusing still-valid URLs.
+ *
+ * Replaces one `createSignedUrl` HTTP request per photo - a 200-photo album
+ * issued 200 concurrent requests, each running the three-table join inside
+ * `can_read_storage_object`, before a single pixel could be requested.
+ *
+ * Paths that fail to sign are omitted from the result rather than failing the
+ * whole gallery. That is safe here in a way it would not be during a sync: this
+ * only decides what renders, so a missing object costs one broken tile, whereas
+ * a short listing fed into a diff would read as a deletion.
+ */
+async function signStoragePaths(paths: string[]): Promise<Map<string, string>> {
+  const cache = loadSignedUrlCache();
+  const now = Date.now();
+  const resolved = new Map<string, string>();
+  const missing: string[] = [];
+
+  for (const path of new Set(paths)) {
+    const entry = cache.get(path);
+    if (entry && entry.expiresAt - now > SIGNED_URL_MIN_REMAINING_MS) {
+      resolved.set(path, entry.url);
+    } else {
+      missing.push(path);
+    }
+  }
+
+  for (let offset = 0; offset < missing.length; offset += SIGNED_URL_BATCH_SIZE) {
+    const chunk = missing.slice(offset, offset + SIGNED_URL_BATCH_SIZE);
+    const { data, error } = await supabase.storage
+      .from(PHOTOS_BUCKET)
+      .createSignedUrls(chunk, SIGNED_URL_EXPIRES_IN_SECONDS);
+
+    if (error) throw error;
+
+    const expiresAt = Date.now() + SIGNED_URL_EXPIRES_IN_SECONDS * 1000;
+    for (const item of data ?? []) {
+      if (!item.path || !item.signedUrl) {
+        console.warn('Could not sign storage object:', item.path, item.error);
+        continue;
+      }
+      cache.set(item.path, { url: item.signedUrl, expiresAt });
+      resolved.set(item.path, item.signedUrl);
+    }
+  }
+
+  if (missing.length > 0) persistSignedUrlCache();
+
+  return resolved;
+}
 
 function safeFileName(name: string) {
   return name.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-');
@@ -185,33 +299,25 @@ async function createStereoPairBlob(leftSource: UploadImageSource, rightSource: 
   });
 }
 
-async function getPhotoUrl(photo: PhotoRecord): Promise<string> {
-  const { data, error } = await supabase.storage
-    .from(PHOTOS_BUCKET)
-    .createSignedUrl(photo.storage_path, SIGNED_URL_EXPIRES_IN_SECONDS);
-
-  if (error || !data?.signedUrl) {
-    throw error ?? new Error(`Could not create signed URL for ${photo.storage_path}`);
-  }
-
-  return data.signedUrl;
-}
-
 async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: AlbumRecord[]): Promise<GalleryPhoto[]> {
   const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
+  const signedUrls = await signStoragePaths(photoRows.map((photo) => photo.storage_path));
 
-  return Promise.all(
-    photoRows.map(async (photo) => ({
+  return photoRows.flatMap((photo) => {
+    const src = signedUrls.get(photo.storage_path);
+    if (!src) return [];
+
+    return [{
       id: photo.id,
-      src: await getPhotoUrl(photo),
+      src,
       alt: photo.alt,
       albumId: photo.album_id,
       eventId: albumEventIds.get(photo.album_id),
       storagePath: photo.storage_path,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: getFileExtension(photo.storage_path),
-    })),
-  );
+    }];
+  });
 }
 
 export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
@@ -334,7 +440,9 @@ export async function uploadStereoPairPhoto({
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
     .upload(storagePath, stereoBlob, {
-      cacheControl: '3600',
+      // Immutable by construction: the path carries a per-photo UUID, so these
+      // bytes are never replaced in place. An hour was throwing away the cache.
+      cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
       contentType: 'image/jpeg',
       upsert: false,
     });
@@ -376,7 +484,7 @@ export async function uploadSbsPhoto({
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
     .upload(storagePath, file, {
-      cacheControl: '3600',
+      cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
       contentType: file.type || 'image/jpeg',
       upsert: false,
     });
