@@ -385,6 +385,24 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# Per-function settings. Declared explicitly rather than inherited from the
+# dashboard default so the deployed posture is visible in the repo.
+#
+# Note that verify_jwt only proves the caller presented *a* valid project JWT -
+# the browser's anon key qualifies. Any function that must distinguish a real
+# account holder from an anonymous visitor has to call auth.getUser() itself;
+# password-service does.
+[functions.password-service]
+verify_jwt = true
+
+# Live-mode Dropbox endpoints, called by unauthenticated visitors browsing a
+# public gallery. Both are deleted once every album is imported.
+[functions.list-dropbox-files]
+verify_jwt = false
+
+[functions.dropbox-file]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327
