@@ -1,86 +1,129 @@
-import { useState, useEffect } from 'react';
-import { splitStereoImage, ProcessedStereoImage, preloadStereoImages } from '@/lib/imageProcessing';
+import { useEffect, useRef, useState } from 'react';
+import {
+  type EyeSelection,
+  peekProcessedImage,
+  photoCacheKey,
+  preloadStereoImages,
+  type ProcessedStereoImage,
+  splitStereoImage,
+} from '@/lib/imageProcessing';
 import type { DropboxFile, GalleryPhoto } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
 
 interface UseProcessedImageResult {
   /** URL for the left half of the stereo image */
   leftUrl: string | null;
-  /** URL for the right half of the stereo image */
+  /** URL for the right half, or null when only the left eye was requested */
   rightUrl: string | null;
   /** Whether the image is currently being processed */
   isLoading: boolean;
   /** Error message if processing failed */
   error: string | null;
-  /** Original image dimensions (after split) */
+  /** Dimensions of a single eye after downscaling */
   dimensions: { width: number; height: number } | null;
 }
 
 type ProcessablePhoto = GalleryPhoto | DropboxFile;
 
+interface ProcessedImageOptions {
+  /** `'left'` skips the right eye entirely - halves the work in portrait/2D mode. */
+  eyes?: EyeSelection;
+}
+
+type SourceAlbum = Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
+
+function normalizePhoto(photo: ProcessablePhoto | string | null): ProcessablePhoto | null {
+  // A bare string is a URL; treat it as a Supabase-style photo.
+  if (typeof photo === 'string') {
+    return { src: photo, id: photo, alt: '' } as GalleryPhoto;
+  }
+  if (photo && typeof photo === 'object' && photo.src) {
+    return photo;
+  }
+  return null;
+}
+
+function dropboxFolderUrl(album: SourceAlbum): string | undefined {
+  return album?.source_type === 'dropbox' ? album.dropbox_folder_url ?? undefined : undefined;
+}
+
 /**
- * Hook to process a raw stereo image into left/right halves
- * Results are cached, so subsequent calls with the same src are instant
- * @param photo The photo object (either from Supabase or Dropbox)
- * @param album The album containing the photo, used to get Dropbox context if needed
+ * Processes a raw stereo image into its left/right halves.
+ *
+ * Effects here key on **strings**, not on the `photo` and `album` object
+ * identities they used to depend on. Callers legitimately mint new photo objects
+ * as data arrives - `PublicProfile` replaces one per resolved Dropbox blob - and
+ * with object deps that re-ran this effect once per photo in the album while the
+ * viewer was open, each time tearing down and re-creating the <img>.
  */
 export function useProcessedImage(
   photo: ProcessablePhoto | string | null,
-  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null,
+  album: SourceAlbum,
+  options: ProcessedImageOptions = {},
 ): UseProcessedImageResult {
-  const [result, setResult] = useState<ProcessedStereoImage | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { eyes = 'both' } = options;
+
+  const photoObject = normalizePhoto(photo);
+  const folderUrl = dropboxFolderUrl(album);
+  const cacheKey = photoObject ? photoCacheKey(photoObject, eyes) : null;
+
+  // Read through a ref so the effect can use the latest object without taking a
+  // dependency on its identity.
+  const photoRef = useRef(photoObject);
+  photoRef.current = photoObject;
+
+  // Seeding from the cache means a hit renders on the very first paint rather
+  // than flashing a spinner and then swapping in.
+  const [result, setResult] = useState<ProcessedStereoImage | null>(
+    () => (photoObject ? peekProcessedImage(photoObject, eyes) ?? null : null),
+  );
+  const [isLoading, setIsLoading] = useState(() => (photoObject ? !result : false));
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    const current = photoRef.current;
 
-    // Create a valid photo object from the input, which might be a string or an object.
-    let photoObject: ProcessablePhoto | null = null;
-    if (typeof photo === 'string') {
-      // If a string is passed, it's a URL. We can treat it as a Supabase photo.
-      photoObject = { src: photo, id: photo, alt: '' } as GalleryPhoto;
-    } else if (photo && typeof photo === 'object' && photo.src) {
-      // If it's a valid object, use it directly.
-      photoObject = photo;
-    }
-
-    // Guard against invalid photo objects.
-    if (!photoObject) {
-      setIsLoading(false);
+    if (!current || !cacheKey) {
       setResult(null);
-      if (photo) {
-        setError('Invalid photo object provided for processing.');
-      }
+      setIsLoading(false);
+      setError(photo ? 'Invalid photo object provided for processing.' : null);
       return;
     }
 
-    async function processImage() {
-      setIsLoading(true);
+    // A cache hit resolves synchronously. The previous implementation called
+    // setIsLoading(true) and setResult(null) *before* awaiting, so even an
+    // instant hit unmounted the image and flashed the loading state.
+    const hit = peekProcessedImage(current, eyes);
+    if (hit) {
+      setResult(hit);
+      setIsLoading(false);
       setError(null);
-      setResult(null);
-
-      try {
-        const folderUrl = album?.source_type === 'dropbox' ? album.dropbox_folder_url ?? undefined : undefined;
-        const processed = await splitStereoImage(photoObject, folderUrl);
-        if (!cancelled) {
-          setResult(processed);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to process image');
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
+      return;
     }
 
-    processImage();
+    let cancelled = false;
+    setResult(null);
+    setIsLoading(true);
+    setError(null);
+
+    splitStereoImage(current, folderUrl, eyes)
+      .then((processed) => {
+        if (cancelled) return;
+        setResult(processed);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to process image');
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [photo, album]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey, folderUrl, eyes]);
 
   return {
     leftUrl: result?.leftUrl ?? null,
@@ -92,29 +135,43 @@ export function useProcessedImage(
 }
 
 /**
- * Hook to preload adjacent images for smoother navigation
+ * Warms the cache for adjacent photos.
+ *
+ * The returned cleanup aborts the queue, so navigating past a photo stops work
+ * on neighbours that are no longer adjacent instead of leaving them competing
+ * with the photo the user actually landed on.
  */
 export function usePreloadImages(
   photos: (ProcessablePhoto | string)[],
-  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null,
+  album: SourceAlbum,
+  options: ProcessedImageOptions = {},
 ): void {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const photoSrcsKey = photos.map((p) => (typeof p === 'string' ? p : p.src)).join(',');
+  const { eyes = 'both' } = options;
+
+  const photosRef = useRef(photos);
+  photosRef.current = photos;
+
+  const folderUrl = dropboxFolderUrl(album);
+  // Keyed on stable identity rather than `src`, which for Supabase photos is a
+  // freshly signed URL on every fetch and so changed on every reload.
+  const photosKey = photos
+    .map((p) => {
+      const normalized = normalizePhoto(p);
+      return normalized ? photoCacheKey(normalized, eyes) : '';
+    })
+    .join(',');
 
   useEffect(() => {
-    if (photos.length > 0) {
-      const photoObjects = photos
-        .map((p) => {
-          if (typeof p === 'string') {
-            return { src: p, id: p, alt: '' } as GalleryPhoto;
-          }
-          return p;
-        })
-        .filter((p): p is ProcessablePhoto => !!(p && p.src));
+    const objects = photosRef.current
+      .map(normalizePhoto)
+      .filter((p): p is ProcessablePhoto => p !== null);
 
-      const folderUrl = album?.source_type === 'dropbox' ? album.dropbox_folder_url ?? undefined : undefined;
-      preloadStereoImages(photoObjects, folderUrl);
-    }
+    if (objects.length === 0) return;
+
+    const controller = new AbortController();
+    void preloadStereoImages(objects, folderUrl, { eyes, signal: controller.signal });
+
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [photoSrcsKey, album]);
+  }, [photosKey, folderUrl, eyes]);
 }

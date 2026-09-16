@@ -3,6 +3,7 @@ import { Navigate } from 'react-router-dom';
 import { ImagePlus, Shield, Upload } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { PHOTO_CACHE_CONTROL_SECONDS } from '@/services/galleryService';
 import type { AlbumRecord, AppRole, EventRecord, Profile } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -144,7 +145,7 @@ export default function Admin() {
     const uploadResult = await supabase.storage
       .from(PHOTOS_BUCKET)
       .upload(storagePath, selectedFile, {
-        cacheControl: '3600',
+        cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
         upsert: false,
       });
 

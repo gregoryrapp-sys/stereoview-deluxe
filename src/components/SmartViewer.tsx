@@ -36,7 +36,11 @@ export default function SmartViewer({
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   // --- Common Hooks ---
-  const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo, album);
+  // 2D mode renders the left eye only, so the right one is never worth decoding
+  // or encoding. That is the dominant path on phones, where the viewer opens in
+  // portrait, and it halves the per-photo work there.
+  const eyes = mode === '2d' ? 'left' : 'both';
+  const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo, album, { eyes });
 
   const adjacentPhotos = useMemo(() => {
     const result: Photo[] = [];
@@ -45,7 +49,7 @@ export default function SmartViewer({
     return result;
   }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentPhotos, album);
+  usePreloadImages(adjacentPhotos, album, { eyes });
 
   // --- Mode Switching Logic ---
   useEffect(() => {
