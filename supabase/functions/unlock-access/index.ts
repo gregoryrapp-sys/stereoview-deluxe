@@ -1,26 +1,28 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import * as bcrypt from "https://deno.land/x/bcrypt@v0.4.1/mod.ts";
-import { create, getNumericDate } from "https://deno.land/x/djwt@v3.0.2/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.107.0";
 import { corsHeaders } from "../_shared/cors.ts";
 
 /**
  * PIN unlock for private profiles, events and albums.
  *
- * The RLS side of this feature already existed and was correct:
- * verify_private_access() (20260623000000) reads an `unlocked_ids` claim from the
- * caller's JWT. What never existed was anything that mints that claim, or any UI
- * to enter a PIN - so setting a PIN made content permanently unreachable. This
- * function is the missing half.
+ * Setting a PIN used to make content permanently unreachable. The RLS half
+ * existed - verify_private_access() reads an `unlocked_ids` JWT claim - but
+ * nothing ever minted that claim and there was no UI to enter a PIN.
  *
- * Why a JWT rather than a grant token in a header: storage.objects RLS is
- * evaluated by the storage service, which only ever sees the bearer token. A
- * custom header would unlock the database rows and then fail to sign a single
- * photo URL. Putting the grant in the token makes PostgREST and Storage agree.
+ * Minting the claim ourselves is not possible on this project: it uses asymmetric
+ * JWT signing keys, so Supabase holds the private key and a self-signed token
+ * would be rejected. So instead of granting the caller rights and letting RLS
+ * serve them, this function verifies the PIN and then serves the unlocked gallery
+ * itself with the service role - including signing the photo URLs, which is the
+ * part no header- or cookie-based scheme could do, because storage RLS only ever
+ * sees the bearer token.
  *
- * The minted token deliberately mirrors the shape of the project's own anon key -
- * same role, same issuer - plus the unlocked_ids claim. It grants nothing beyond
- * anonymous access to the specific object ids whose PIN was just verified.
+ * The consequence is deliberate and worth stating plainly: for unlocked content,
+ * the visibility rules below ARE the access control. They mirror the RLS policies
+ * in 20260624000000_update_rls_for_public_access.sql, including the cascade where
+ * unlocking a parent reaches children that have no PIN of their own. If those
+ * policies change, this must change with them.
  */
 
 type ObjectType = "profile" | "event" | "album";
@@ -31,11 +33,15 @@ const TABLES: Record<ObjectType, string> = {
   album: "albums",
 };
 
-/** Unlocks are short-lived; the visitor re-enters the PIN in a new session. */
 const GRANT_TTL_SECONDS = 12 * 60 * 60;
 
-/** Per-isolate throttle. Not a substitute for a real limiter, but it makes a
- *  4-digit PIN impractical to grind through a single warm instance. */
+/** Granted photo URLs are deliberately shorter-lived than public ones: a signed
+ *  URL works for anyone holding it, so private content should not hand out a
+ *  week-long link. */
+const GRANTED_URL_TTL_SECONDS = GRANT_TTL_SECONDS;
+
+const PHOTOS_BUCKET = "photos";
+
 const MAX_ATTEMPTS_PER_WINDOW = 10;
 const ATTEMPT_WINDOW_MS = 10 * 60 * 1000;
 const attempts = new Map<string, { count: number; resetAt: number }>();
@@ -64,40 +70,48 @@ function requireEnv(name: string): string {
   return value;
 }
 
-async function signingKey(): Promise<CryptoKey> {
-  return await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(requireEnv("SUPABASE_JWT_SECRET")),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
+function admin() {
+  // SUPABASE_SERVICE_ROLE_KEY is marked deprecated in favour of SUPABASE_SECRET_KEYS,
+  // but is still injected and still works. Prefer the new one when present.
+  const secret = Deno.env.get("SUPABASE_SECRET_KEYS") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!secret) throw new Error("No service credential available");
+
+  // SUPABASE_SECRET_KEYS is a JSON dictionary; the legacy variable is a bare key.
+  let key = secret;
+  if (secret.trim().startsWith("{")) {
+    const parsed = JSON.parse(secret) as Record<string, string>;
+    key = Object.values(parsed)[0];
+  }
+
+  return createClient(requireEnv("SUPABASE_URL"), key, { auth: { persistSession: false } });
+}
+
+function newToken(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Resolves grant tokens to the object ids they unlock, dropping anything expired. */
+async function resolveGrants(
+  db: ReturnType<typeof admin>,
+  tokens: string[],
+): Promise<Set<string>> {
+  if (tokens.length === 0) return new Set();
+
+  const { data } = await db
+    .from("access_grants")
+    .select("object_id, expires_at")
+    .in("token", tokens.slice(0, 20));
+
+  const now = Date.now();
+  return new Set(
+    (data ?? [])
+      .filter((row) => new Date(row.expires_at).getTime() > now)
+      .map((row) => String(row.object_id)),
   );
 }
 
-/** Existing grants ride along, so unlocking an album does not drop a previously
- *  unlocked event. Read without verifying: these ids only widen access after the
- *  signature is re-checked by Postgres, and an id the caller was not entitled to
- *  simply fails RLS there. */
-function existingGrants(token: string | undefined): string[] {
-  if (!token) return [];
-  try {
-    const payload = JSON.parse(atob(token.split(".")[1]));
-    return Array.isArray(payload?.unlocked_ids) ? payload.unlocked_ids.map(String) : [];
-  } catch {
-    return [];
-  }
-}
-
-const admin = () =>
-  createClient(requireEnv("SUPABASE_URL"), requireEnv("SUPABASE_SERVICE_ROLE_KEY"), {
-    auth: { persistSession: false },
-  });
-
-/**
- * Reports which level of a gallery URL is PIN-protected, so the page can show a
- * prompt instead of "not found". Never returns the hash, and reports only
- * whether a PIN exists - which the visitor is about to be asked for anyway.
- */
 async function probe(body: Record<string, string | undefined>) {
   const { profileSlug, eventSlug, albumSlug } = body;
   if (!profileSlug) return json({ error: "profileSlug is required" }, 400);
@@ -125,9 +139,7 @@ async function probe(body: Record<string, string | undefined>) {
     .maybeSingle();
 
   if (!event) return json({ found: false }, 200);
-  if (event.password) {
-    return json({ found: true, requires: "event", objectId: event.id }, 200);
-  }
+  if (event.password) return json({ found: true, requires: "event", objectId: event.id }, 200);
 
   if (!albumSlug) return json({ found: true, requires: null }, 200);
 
@@ -139,55 +151,151 @@ async function probe(body: Record<string, string | undefined>) {
     .maybeSingle();
 
   if (!album) return json({ found: false }, 200);
-  if (album.password) {
-    return json({ found: true, requires: "album", objectId: album.id }, 200);
-  }
+  if (album.password) return json({ found: true, requires: "album", objectId: album.id }, 200);
 
   return json({ found: true, requires: null }, 200);
 }
 
-async function unlock(body: Record<string, string | undefined>, authHeader: string) {
+async function unlock(body: Record<string, string | undefined>) {
   const { objectType, objectId, pin } = body;
 
   if (!objectType || !objectId || !pin) {
     return json({ error: "objectType, objectId and pin are required" }, 400);
   }
-  if (!(objectType in TABLES)) {
-    return json({ error: "Unknown objectType" }, 400);
-  }
+  if (!(objectType in TABLES)) return json({ error: "Unknown objectType" }, 400);
   if (rateLimited(`${objectType}:${objectId}`)) {
     return json({ error: "Too many attempts. Try again later." }, 429);
   }
 
-  const { data: row } = await admin()
+  const db = admin();
+
+  const { data: row } = await db
     .from(TABLES[objectType as ObjectType])
     .select("id, password")
     .eq("id", objectId)
     .maybeSingle();
 
-  // Same response whether the row is missing or the PIN is wrong, so this cannot
-  // be used to enumerate ids.
+  // Identical response for a missing row and a wrong PIN, so this cannot be used
+  // to enumerate ids.
   if (!row?.password || !(await bcrypt.compare(pin, row.password))) {
     return json({ error: "Incorrect PIN." }, 401);
   }
 
-  const granted = Array.from(
-    new Set([...existingGrants(authHeader.replace(/^Bearer\s+/i, "")), String(row.id)]),
+  const token = newToken();
+  const expiresAt = new Date(Date.now() + GRANT_TTL_SECONDS * 1000).toISOString();
+
+  const { error } = await db.from("access_grants").insert({
+    token,
+    object_type: objectType,
+    object_id: row.id,
+    expires_at: expiresAt,
+  });
+  if (error) throw error;
+
+  // Opportunistic cleanup, so the table does not grow without bound.
+  await db.from("access_grants").delete().lt("expires_at", new Date().toISOString());
+
+  return json({ token, expiresIn: GRANT_TTL_SECONDS }, 200);
+}
+
+/**
+ * Serves the gallery a set of grants unlocks.
+ *
+ * Mirrors the RLS cascade: a row is visible if it is public, or directly granted,
+ * or its own PIN is unset and an ancestor was granted.
+ */
+async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
+  const { profileSlug, tokens = [] } = body;
+  if (!profileSlug) return json({ error: "profileSlug is required" }, 400);
+
+  const db = admin();
+  const granted = await resolveGrants(db, tokens);
+
+  const { data: profile } = await db
+    .from("profiles")
+    .select("*")
+    .eq("slug", profileSlug)
+    .maybeSingle();
+
+  if (!profile) return json({ found: false }, 200);
+
+  const profileGranted = granted.has(String(profile.id));
+  if (!profile.is_public && !profileGranted) return json({ found: false }, 200);
+
+  const { data: allEvents } = await db
+    .from("events")
+    .select("*")
+    .eq("owner_id", profile.id)
+    .order("created_at", { ascending: false });
+
+  const events = (allEvents ?? []).filter(
+    (event) =>
+      event.is_public ||
+      granted.has(String(event.id)) ||
+      (!event.password && profileGranted),
   );
 
-  const token = await create(
-    { alg: "HS256", typ: "JWT" },
-    {
-      role: "anon",
-      iss: "supabase",
-      iat: getNumericDate(0),
-      exp: getNumericDate(GRANT_TTL_SECONDS),
-      unlocked_ids: granted,
-    },
-    await signingKey(),
-  );
+  const eventById = new Map(events.map((event) => [event.id, event]));
 
-  return json({ token, expiresIn: GRANT_TTL_SECONDS, unlockedIds: granted }, 200);
+  const { data: allAlbums } = events.length
+    ? await db
+        .from("albums")
+        .select("*")
+        .in("event_id", events.map((event) => event.id))
+        .order("created_at", { ascending: false })
+    : { data: [] };
+
+  const albums = (allAlbums ?? []).filter((album) => {
+    const parent = eventById.get(album.event_id);
+    if (!parent) return false;
+    if (album.is_public || granted.has(String(album.id))) return true;
+    if (album.password) return false;
+    if (granted.has(String(parent.id))) return true;
+    return !parent.password && profileGranted;
+  });
+
+  const { data: photoRows } = albums.length
+    ? await db
+        .from("photos")
+        .select("*")
+        .in("album_id", albums.map((album) => album.id))
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+    : { data: [] };
+
+  const paths = (photoRows ?? []).map((photo) => photo.storage_path);
+  const signed = new Map<string, string>();
+
+  for (let offset = 0; offset < paths.length; offset += 500) {
+    const { data: urls } = await db.storage
+      .from(PHOTOS_BUCKET)
+      .createSignedUrls(paths.slice(offset, offset + 500), GRANTED_URL_TTL_SECONDS);
+    for (const item of urls ?? []) {
+      if (item.path && item.signedUrl) signed.set(item.path, item.signedUrl);
+    }
+  }
+
+  const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
+
+  const photos = (photoRows ?? []).flatMap((photo) => {
+    const src = signed.get(photo.storage_path);
+    if (!src) return [];
+    return [{
+      id: photo.id,
+      src,
+      alt: photo.alt,
+      albumId: photo.album_id,
+      eventId: albumEventIds.get(photo.album_id),
+      storagePath: photo.storage_path,
+      created_at: photo.file_modified_at ?? photo.created_at,
+      extension: (/\.([a-zA-Z0-9]+)$/.exec(photo.storage_path)?.[1] ?? "").toLowerCase(),
+    }];
+  });
+
+  // The password hash must never leave the server.
+  const { password: _password, email: _email, ...publicProfile } = profile;
+
+  return json({ found: true, profile: publicProfile, events, albums, photos }, 200);
 }
 
 serve(async (req) => {
@@ -197,14 +305,14 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const action = body?.action;
 
-    if (action === "probe") return await probe(body);
-    if (action === "unlock") return await unlock(body, req.headers.get("Authorization") ?? "");
+    if (body?.action === "probe") return await probe(body);
+    if (body?.action === "unlock") return await unlock(body);
+    if (body?.action === "gallery") return await gallery(body);
 
-    return json({ error: 'Invalid action. Use "probe" or "unlock".' }, 400);
+    return json({ error: 'Invalid action. Use "probe", "unlock" or "gallery".' }, 400);
   } catch (err) {
     console.error("unlock-access failed:", err instanceof Error ? err.message : err);
-    return json({ error: "Unlock failed." }, 500);
+    return json({ error: "Request failed." }, 500);
   }
 });

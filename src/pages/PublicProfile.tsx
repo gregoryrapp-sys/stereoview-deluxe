@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
-import { type AccessLevel, probeAccess } from '@/lib/accessGrant';
+import { type AccessLevel, fetchUnlockedGallery, hasAccessGrant, probeAccess } from '@/lib/accessGrant';
 import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
@@ -41,7 +41,13 @@ export default function PublicProfile() {
       setError('');
       setAccessPrompt(null);
       try {
-        const result = await fetchPublicProfileBySlug(profileSlug);
+        // With a grant in hand the gallery comes from the unlock function, which
+        // applies the same visibility cascade as RLS and returns photo URLs
+        // already signed by the service role. PostgREST cannot serve this: the
+        // grant is an opaque token, not a JWT claim it can act on.
+        const result = hasAccessGrant()
+          ? await fetchUnlockedGallery(profileSlug)
+          : await fetchPublicProfileBySlug(profileSlug);
 
         // Either the profile itself is hidden, or it loaded but the requested
         // event/album within it is - both mean something below wants a PIN.
