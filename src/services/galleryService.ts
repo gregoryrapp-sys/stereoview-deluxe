@@ -172,6 +172,11 @@ export function makeSlug(value: string) {
   return value
     .trim()
     .toLowerCase()
+    // Apostrophes are dropped rather than treated as separators, so
+    // "Ben and Isabel's Wedding" becomes ben-and-isabels-wedding rather than
+    // ben-and-isabel-s-wedding. Must stay in step with public.slugify(), which
+    // the DB triggers apply when a slug is submitted blank.
+    .replace(/['’]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
 }
