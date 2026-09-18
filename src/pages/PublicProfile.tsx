@@ -5,6 +5,8 @@ import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
+import PinGate from '@/components/PinGate';
+import { type AccessLevel, probeAccess } from '@/lib/accessGrant';
 import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
@@ -19,6 +21,11 @@ export default function PublicProfile() {
   const [data, setData] = useState<SharedGalleryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
+  // A private profile/event/album is simply invisible to RLS, so "no rows" is
+  // indistinguishable from "does not exist" without asking the server which
+  // level wants a PIN.
+  const [accessPrompt, setAccessPrompt] = useState<{ level: AccessLevel; objectId: string } | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
   const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
@@ -32,10 +39,31 @@ export default function PublicProfile() {
       if (!profileSlug) return;
       setIsLoading(true);
       setError('');
+      setAccessPrompt(null);
       try {
         const result = await fetchPublicProfileBySlug(profileSlug);
-        if (!result) {
-          setError('Profile not found or is not public.');
+
+        // Either the profile itself is hidden, or it loaded but the requested
+        // event/album within it is - both mean something below wants a PIN.
+        const missingEvent =
+          !!result && !!eventSlug && !result.events.some((event) => event.slug === eventSlug);
+        const missingAlbum =
+          !!result && !!albumSlug && !result.albums.some((album) => album.slug === albumSlug);
+
+        if (!result || missingEvent || missingAlbum) {
+          const probe = await probeAccess({
+            profileSlug,
+            eventSlug: eventSlug ?? undefined,
+            albumSlug: albumSlug ?? undefined,
+          });
+
+          if (probe.found && probe.requires && probe.objectId) {
+            setAccessPrompt({ level: probe.requires, objectId: probe.objectId });
+          } else if (!result) {
+            setError('Profile not found or is not public.');
+          } else {
+            setData(result);
+          }
         } else {
           setData(result);
         }
@@ -46,7 +74,7 @@ export default function PublicProfile() {
       }
     }
     loadPublicData();
-  }, [profileSlug]);
+  }, [profileSlug, eventSlug, albumSlug, reloadKey]);
 
   useEffect(() => {
     if (!data?.profile) return;
@@ -397,7 +425,15 @@ export default function PublicProfile() {
           </div>
         )}
 
-        {!isLoading && !data && !error && (
+        {!isLoading && accessPrompt && (
+          <PinGate
+            level={accessPrompt.level}
+            objectId={accessPrompt.objectId}
+            onUnlocked={() => setReloadKey((key) => key + 1)}
+          />
+        )}
+
+        {!isLoading && !data && !error && !accessPrompt && (
           <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">
             Profile not found or is not public.
           </div>

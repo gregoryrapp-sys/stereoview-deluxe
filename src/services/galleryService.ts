@@ -1,5 +1,6 @@
 import type { Photo } from '@/data/photos';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { readClient } from '@/lib/accessGrant';
 import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
@@ -142,7 +143,7 @@ async function signStoragePaths(paths: string[]): Promise<Map<string, string>> {
 
   for (let offset = 0; offset < missing.length; offset += SIGNED_URL_BATCH_SIZE) {
     const chunk = missing.slice(offset, offset + SIGNED_URL_BATCH_SIZE);
-    const { data, error } = await supabase.storage
+    const { data, error } = await readClient().storage
       .from(PHOTOS_BUCKET)
       .createSignedUrls(chunk, SIGNED_URL_EXPIRES_IN_SECONDS);
 
@@ -321,7 +322,11 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
 }
 
 export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
-  let query = supabase
+  // Reads go through the grant-scoped client so a PIN-unlocked profile, event or
+  // album is visible here and, crucially, signable in signStoragePaths().
+  const db = readClient();
+
+  let query = db
     .from('events')
     .select('*');
   if (ownerId) query = query.eq('owner_id', ownerId);
@@ -337,7 +342,7 @@ export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
     return { events, albums: [], photos: [] };
   }
 
-  const { data: albums, error: albumsError } = await supabase
+  const { data: albums, error: albumsError } = await db
     .from('albums')
     .select('*')
     .in('event_id', eventIds)
@@ -352,7 +357,7 @@ export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
     return { events, albums, photos: [] };
   }
 
-  const { data: photoRows, error: photosError } = await supabase
+  const { data: photoRows, error: photosError } = await db
     .from('photos')
     .select('*')
     .in('album_id', albumIds)
@@ -834,7 +839,11 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
 }
 
 export async function fetchPublicProfileBySlug(slug: string): Promise<SharedGalleryData | null> {
-  const { data: profile, error } = await supabase.from('profiles').select('*').eq('slug', slug).single();
+  const { data: profile, error } = await readClient()
+    .from('profiles')
+    .select('*')
+    .eq('slug', slug)
+    .single();
 
   if (error) {
     if (error.code === 'PGRST116') return null; // Not found
