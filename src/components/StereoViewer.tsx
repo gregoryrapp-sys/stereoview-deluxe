@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
+import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { X, Loader2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { AlbumRecord } from '@/types/database';
@@ -133,10 +134,17 @@ export default function StereoViewer({
       }
     : null;
 
-  // Transform the actual image-sized stage, not the full viewport. Scaling from
-  // the center keeps the stereo pair visually aligned at every zoom level.
-  const imageTransform = `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`;
-  const imageTransformOrigin = 'center center';
+  // Transform the actual image-sized stage, not the full viewport.
+  //
+  // A 3D transform plus will-change parks the stage on its own GPU layer, which
+  // is what makes the gesture smooth. That layer is rasterized once and then
+  // stretched, so holding it after the gesture leaves the image blurry while
+  // zoomed. Once the transform settles, fall back to a 2D transform with no
+  // hint and let the browser re-rasterize at the zoomed resolution.
+  const isTransforming = useTransformSettle(`${scale}:${translateX}:${translateY}`);
+  const imageTransform = isTransforming
+    ? `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`
+    : `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 
   return (
     <div
@@ -182,8 +190,7 @@ export default function StereoViewer({
                 width: imageStageSize?.width,
                 height: imageStageSize?.height,
                 transform: imageTransform,
-                transformOrigin: imageTransformOrigin,
-                willChange: 'transform',
+                willChange: isTransforming ? 'transform' : 'auto',
               }}
             >
               <img
@@ -203,8 +210,7 @@ export default function StereoViewer({
                 width: imageStageSize?.width,
                 height: imageStageSize?.height,
                 transform: imageTransform,
-                transformOrigin: imageTransformOrigin,
-                willChange: 'transform',
+                willChange: isTransforming ? 'transform' : 'auto',
               }}
             >
               <img
