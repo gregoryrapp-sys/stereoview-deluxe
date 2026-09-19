@@ -70,20 +70,48 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function admin() {
-  // SUPABASE_SERVICE_ROLE_KEY is marked deprecated in favour of SUPABASE_SECRET_KEYS,
-  // but is still injected and still works. Prefer the new one when present.
-  const secret = Deno.env.get("SUPABASE_SECRET_KEYS") ?? Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!secret) throw new Error("No service credential available");
+/**
+ * Resolves the service-role credential.
+ *
+ * Prefers the bare SUPABASE_SERVICE_ROLE_KEY. It is marked deprecated in the
+ * dashboard, but it is unambiguous and still injected, whereas
+ * SUPABASE_SECRET_KEYS is a JSON dictionary whose shape is not guaranteed.
+ * Guessing an entry out of that dictionary is the worse default by far: picking
+ * a publishable key instead of a secret one would not raise anything. The client
+ * would simply be subject to RLS, every private row would come back invisible,
+ * and a correctly entered PIN would report "not found" - a misconfiguration that
+ * looks exactly like a broken feature.
+ */
+function serviceKey(): string {
+  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (legacy) return legacy;
 
-  // SUPABASE_SECRET_KEYS is a JSON dictionary; the legacy variable is a bare key.
-  let key = secret;
-  if (secret.trim().startsWith("{")) {
-    const parsed = JSON.parse(secret) as Record<string, string>;
-    key = Object.values(parsed)[0];
+  const dict = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (!dict) {
+    throw new Error(
+      "No service credential: set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEYS",
+    );
   }
 
-  return createClient(requireEnv("SUPABASE_URL"), key, { auth: { persistSession: false } });
+  let parsed: Record<string, string>;
+  try {
+    parsed = JSON.parse(dict);
+  } catch {
+    return dict.trim(); // Already a bare key.
+  }
+
+  const entries = Object.entries(parsed).filter(([, value]) => typeof value === "string" && value);
+  const preferred =
+    entries.find(([name]) => /secret|service/i.test(name)) ?? entries[0];
+
+  if (!preferred) throw new Error("SUPABASE_SECRET_KEYS contained no usable key");
+  return preferred[1];
+}
+
+function admin() {
+  return createClient(requireEnv("SUPABASE_URL"), serviceKey(), {
+    auth: { persistSession: false },
+  });
 }
 
 function newToken(): string {
@@ -174,6 +202,16 @@ async function unlock(body: Record<string, string | undefined>) {
     .select("id, password")
     .eq("id", objectId)
     .maybeSingle();
+
+  // Probe just located this id, so failing to read it back here almost always
+  // means the client is not actually service-role and RLS is hiding the row.
+  // Logged loudly because the visitor-facing symptom - "Incorrect PIN" for a
+  // correct PIN - gives no hint of the real cause.
+  if (!row) {
+    console.error(
+      `unlock: ${objectType} ${objectId} not readable. Check the service-role credential.`,
+    );
+  }
 
   // Identical response for a missing row and a wrong PIN, so this cannot be used
   // to enumerate ids.
