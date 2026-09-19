@@ -42,7 +42,22 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
       </div>
 
       {/* Visibility Toggle */}
-      <RadioGroup value={isPublic ? 'public' : 'private'} onValueChange={(value) => onIsPublicChange(value === 'public')}>
+      <RadioGroup
+        value={isPublic ? 'public' : 'private'}
+        onValueChange={(value) => {
+          const nextIsPublic = value === 'public';
+          onIsPublicChange(nextIsPublic);
+          // Clear the PIN on the way back to public. RLS short-circuits on
+          // is_public, so a PIN left on a public row protects nothing while its
+          // bcrypt hash becomes world-readable along with the rest of the row -
+          // and the field is hidden in this state, so it could never be cleared
+          // by hand.
+          if (nextIsPublic && passwordSet) {
+            setPasswordInput('');
+            onPasswordChange(null);
+          }
+        }}
+      >
         <div className="flex items-center space-x-2">
           <RadioGroupItem value="public" id="privacy-public" />
           <Label htmlFor="privacy-public">Public</Label>
