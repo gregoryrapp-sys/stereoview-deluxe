@@ -21,6 +21,13 @@ interface SmartViewerProps {
 
 type ViewMode = 'stereo' | '2d';
 
+/** Extension for a shared attachment, derived from the blob rather than the filename. */
+const SHARE_EXTENSIONS: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+};
+
 export default function SmartViewer({
   photo,
   photos,
@@ -177,18 +184,41 @@ export default function SmartViewer({
     try {
       const res = await fetch(leftUrl);
       const blob = await res.blob();
-      const ext = (photo as any).extension ? `.${(photo as any).extension}` : '.jpg';
-      const safeName = (photo.alt || 'photo').replace(/[^\w.-]+/g, '_');
-      const file = new File([blob], `${safeName}${ext}`, { type: blob.type || 'image/jpeg' });
-      if ((navigator as any).canShare?.({ files: [file] })) {
-        await (navigator as any).share({ files: [file], title: photo.alt || 'Photo' });
-      } else if ((navigator as any).share) {
-        await (navigator as any).share({ title: photo.alt || 'Photo', url: leftUrl });
+
+      // Name the attachment generically. `photo.alt` is the source filename
+      // (DSC-1234.jpg), which recipients have no reason to see, and it was also
+      // being passed as the share sheet title. On Dropbox albums `alt` already
+      // carries an extension, so appending `photo.extension` on top produced
+      // "DSC-1234.jpg.jpg" - taking the extension from the blob's own MIME type
+      // removes the filename and that double extension in one go.
+      const mimeType = blob.type || 'image/jpeg';
+      const file = new File([blob], `photo.${SHARE_EXTENSIONS[mimeType] ?? 'jpg'}`, {
+        type: mimeType,
+      });
+
+      const shareApi = navigator as Navigator & {
+        canShare?: (data: ShareData) => boolean;
+        share?: (data: ShareData) => Promise<void>;
+      };
+
+      if (shareApi.canShare?.({ files: [file] })) {
+        await shareApi.share?.({ files: [file] });
+        return;
+      }
+
+      // Without file-share support, fall back to the page. The previous fallback
+      // shared `leftUrl`, which is a multi-megabyte data: URL that no recipient
+      // can open.
+      if (shareApi.share) {
+        await shareApi.share({ url: window.location.href });
       }
     } catch (e) {
-      console.warn('Share failed', e);
+      // AbortError just means the user dismissed the share sheet.
+      if ((e as Error)?.name !== 'AbortError') {
+        console.warn('Share failed', e);
+      }
     }
-  }, [leftUrl, photo]);
+  }, [leftUrl]);
 
   // --- Common UI Elements ---
   const closeButton = (

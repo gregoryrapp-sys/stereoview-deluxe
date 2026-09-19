@@ -1,38 +1,78 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { corsHeaders } from "../_shared/cors.ts";
+import {
+  type DropboxEntry,
+  DropboxError,
+  getSharedLinkMetadata,
+  isImageEntry,
+  listSharedFolder,
+} from "../_shared/dropbox.ts";
 
-async function getDropboxToken() {
-  try{
-    const response = await fetch("https://api.dropboxapi.com/oauth2/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: Deno.env.get("DROPBOX_REFRESH_TOKEN")!,
-        client_id: Deno.env.get("DROPBOX_APP_KEY")!,
-        client_secret: Deno.env.get("DROPBOX_SECRET_KEY")!,
-      })
-    });
-    if (!response.ok) {
-        const errorBody = await response.text();
-        console.error("Dropbox token refresh failed:", errorBody);
-        throw new Error(`Dropbox token refresh failed: ${response.statusText}`);
-    }
-    const result = await response.json();
-    return result.access_token;
-  }  catch(err){
-    console.error("Error fetching Dropbox token:", err);
-    throw err;
-  }
+/**
+ * Lists the images in a public Dropbox shared folder, or returns metadata for a
+ * single named file.
+ *
+ * Serves live mode only: the per-file `get_shared_link_metadata` fan-out below
+ * exists solely to mint a displayable `src` URL. The import path does not need
+ * it - `files/list_folder` already carries id, rev, size and content_hash, and
+ * bytes come from `sharing/get_shared_link_file` - so this whole function is
+ * deleted once every album is imported.
+ */
+
+/** Dropbox rate-limits aggressively; a 500-file folder must not fan out 500-wide. */
+const METADATA_CONCURRENCY = 6;
+
+interface DropboxFile {
+  name: string;
+  path_lower?: string;
+  id?: string;
+  src: string;
+  client_modified?: string;
 }
 
-const DROPBOX_TOKEN = await getDropboxToken();
-const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'];
-
-function getDirectLink(url: string): string {
-  const urlObj = new URL(url);
-  urlObj.searchParams.set('raw', '1');
+function toDirectLink(url: string): string {
+  const urlObj = new URL(url.replace("dl=0", "dl=1"));
+  urlObj.searchParams.set("raw", "1");
   return urlObj.toString();
+}
+
+function toDropboxFile(meta: DropboxEntry & { url: string }): DropboxFile {
+  return {
+    name: meta.name,
+    path_lower: meta.path_lower,
+    id: meta.id,
+    src: toDirectLink(meta.url),
+    client_modified: meta.client_modified,
+  };
+}
+
+/**
+ * Maps with bounded concurrency, propagating the first failure.
+ *
+ * The previous implementation was `Promise.all` over an unbounded fan-out whose
+ * per-item handler was `res.ok ? res.json() : null`, followed by
+ * `.filter(meta => meta !== null)`. A rate-limited file therefore disappeared
+ * from the album with no error anywhere - the exact failure mode that would look
+ * like "deleted from Dropbox" to a sync. Failing loudly is the whole point here.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = cursor++;
+      if (index >= items.length) return;
+      results[index] = await fn(items[index]);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 async function handler(req: Request) {
@@ -50,162 +90,41 @@ async function handler(req: Request) {
       });
     }
 
-    if (!DROPBOX_TOKEN) {
-      return new Response(JSON.stringify({ error: "Dropbox token not available" }), {
-        status: 500,
+    // Single-file mode short-circuits the listing entirely. Previously this
+    // still paid for a full folder listing just to resolve one cover image,
+    // once per photographer on the home page and once per event and album in
+    // the cover hooks.
+    if (fileName) {
+      const meta = await getSharedLinkMetadata(folderUrl, fileName);
+      if (!meta?.url) {
+        throw new Error(`File "${fileName}" not found in shared folder.`);
+      }
+      return new Response(JSON.stringify(toDropboxFile(meta)), {
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-/*
-    const folderMetaResponse = await fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${DROPBOX_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url: folderUrl }),
-    });
 
-    if (!folderMetaResponse.ok) {
-      const errorBody = await folderMetaResponse.text();
-      console.error('Dropbox API error (get_shared_link_metadata for folder):', errorBody);
-      throw new Error(`Could not get shared folder metadata: ${folderMetaResponse.statusText}`);
-    }
-    const folderMeta = await folderMetaResponse.json();
-    const basePath = folderMeta.path_lower;
-    if (folderMeta['.tag'] !== 'folder' || !basePath) {
-      throw new Error('The provided URL is not a valid Dropbox folder link.');
-    }
-*/
-    let listResponse = await fetch("https://api.dropboxapi.com/2/files/list_folder", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${DROPBOX_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            path: "", // An empty path with a shared_link lists the root of the shared folder
-            shared_link: { url: folderUrl },
-        }),
-    });
+    const entries = await listSharedFolder(folderUrl);
+    const imageFiles = entries.filter(isImageEntry);
 
-    if (!listResponse.ok) {
-        const errorBody = await listResponse.text();
-        console.error("Dropbox API error (list_folder):", errorBody);
-        throw new Error(`Dropbox API error: ${listResponse.statusText}`);
-    }
-
-     let listData = await listResponse.json();
-    let allEntries = listData.entries;
-
-    while (listData.has_more) {
-        listResponse = await fetch("https://api.dropboxapi.com/2/files/list_folder/continue", {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${DROPBOX_TOKEN}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ cursor: listData.cursor }),
-        });
-        listData = await listResponse.json();
-        allEntries.push(...(listData.entries || []));
-    }
-
-    // Dedupe entries by id (handles overlapping pagination windows)
-    {
-      const seen = new Set<string>();
-      allEntries = allEntries.filter((entry: any) => {
-        const key = entry.id || entry.path_lower || entry.name;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    }
-
-    const imageFiles = allEntries.filter(entry =>
-      entry['.tag'] === 'file' && IMAGE_EXTENSIONS.some(ext => entry.name.toLowerCase().endsWith(ext))
+    const files = await mapWithConcurrency(
+      imageFiles,
+      METADATA_CONCURRENCY,
+      async (file) => toDropboxFile(await getSharedLinkMetadata(folderUrl, file.name)),
     );
 
-    if (fileName) {
-      const fileEntry = imageFiles.find(entry => entry.name === fileName);
-      if (!fileEntry) {
-        throw new Error(`File "${fileName}" not found in shared folder.`);
-      }
-      //const relativePath = fileEntry.path_lower.substring(basePath.length);
-      const fileMetaResponse = await fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${DROPBOX_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: folderUrl, path: "/"+fileName }),
-      });
-
-      if (!fileMetaResponse.ok) {
-        throw new Error(`Could not get metadata for ${fileName}: ${fileMetaResponse.statusText}`);
-      }
-
-      const fileMeta = await fileMetaResponse.json();
-      const fileData = {
-        name: fileMeta.name,
-        path_lower: fileMeta.path_lower,
-        id: fileMeta.id,
-        src: getDirectLink(fileMeta.url.replace("dl=0", "dl=1") ),
-        client_modified: fileMeta.client_modified,
-      };
-
-      return new Response(JSON.stringify(fileData), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      });
-    }
-
-    const metaPromises = imageFiles.map(file => {
-      //const relativePath = file.path_lower.substring(basePath.length);
-      return fetch('https://api.dropboxapi.com/2/sharing/get_shared_link_metadata', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${DROPBOX_TOKEN}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ url: folderUrl, path: "/"+file.name }),
-      })
-      .then(res => res.ok ? res.json() : null);
-    });
-
-    const metaResults = await Promise.all(metaPromises);
-
-    const dedupedFilesWithSrc = (() => {
-      const filtered = metaResults
-        .filter(meta => meta !== null)
-        .map(meta => ({
-          name: meta.name,
-          path_lower: meta.path_lower,
-          id: meta.id,
-          src: getDirectLink(meta.url.replace("dl=0", "dl=1") ),
-          client_modified: meta.client_modified,
-        }));
-      const seen = new Set<string>();
-      return filtered.filter((f) => {
-        const key = f.id || f.path_lower;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
-    })();
-    const filesWithSrc = dedupedFilesWithSrc;
-
-    return new Response(JSON.stringify(filesWithSrc), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    return new Response(JSON.stringify(files), {
       status: 200,
-    });
-
-  }catch (err: any) {
-    console.error("Error in handler:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+  } catch (err) {
+    const status = err instanceof DropboxError ? err.status : 500;
+    console.error("list-dropbox-files failed:", err instanceof Error ? err.message : err);
+    return new Response(
+      JSON.stringify({ error: err instanceof Error ? err.message : String(err) }),
+      { status, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   }
 }
 

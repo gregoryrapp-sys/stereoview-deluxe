@@ -34,7 +34,6 @@ import {
   updateAlbum,
   updateEvent,
   updateProfilePresentation,
-  uploadSbsPhoto,
   DropboxFile,
   getFileExtension,
 } from '@/services/galleryService';
@@ -42,6 +41,7 @@ import type { AlbumRecord, EventRecord } from '@/types/database';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
+import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -108,6 +108,10 @@ export default function EventAlbumManagement() {
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventDescription, setNewEventDescription] = useState('');
   const [newEventSlug, setNewEventSlug] = useState('');
+  // Tracks whether the user has edited the slug by hand. The previous code keyed
+  // auto-population off the slug being empty, which stopped working after the very
+  // first keystroke of the title - the slug was left stuck on a single letter.
+  const [newEventSlugTouched, setNewEventSlugTouched] = useState(false);
   const [eventTitle, setEventTitle] = useState('');
   const [eventDescription, setEventDescription] = useState('');
   const [eventSlug, setEventSlug] = useState('');
@@ -117,6 +121,7 @@ export default function EventAlbumManagement() {
   const [newAlbumTitle, setNewAlbumTitle] = useState('');
   const [newAlbumDescription, setNewAlbumDescription] = useState('');
   const [newAlbumSlug, setNewAlbumSlug] = useState('');
+  const [newAlbumSlugTouched, setNewAlbumSlugTouched] = useState(false);
   const [newAlbumSourceType, setNewAlbumSourceType] = useState<'upload' | 'dropbox'>('upload');
   const [newAlbumDropboxUrl, setNewAlbumDropboxUrl] = useState('');
   const [albumTitle, setAlbumTitle] = useState('');
@@ -125,11 +130,9 @@ export default function EventAlbumManagement() {
   const [albumCoverPhotoId, setAlbumCoverPhotoId] = useState<string | null>(null);
   const [albumDropboxCoverImageName, setAlbumDropboxCoverImageName] = useState<string | null>(null);
   const [albumDropboxUrl, setAlbumDropboxUrl] = useState('');
-  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  const [uploadNamePrefix, setUploadNamePrefix] = useState('');
+  const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState('');
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
   const [managePhotoSort, setManagePhotoSort] = useState('alt_asc');
   const [isMovePhotosDialogOpen, setIsMovePhotosDialogOpen] = useState(false);
@@ -658,10 +661,10 @@ export default function EventAlbumManagement() {
         isPublic: profileIsPublic,
         password: profilePasswordDirty ? profilePassword || null : undefined,
       });
+      // Refresh before the success toast: updateProfilePresentation now throws
+      // if RLS discarded the write, so reaching here means the row really changed.
+      await refreshProfile();
       toast({ title: 'Photographer page saved' });
-      if (refreshProfile) {
-        await refreshProfile();
-      }
     } catch (error) {
       toast({
         title: 'Could not save photographer page',
@@ -687,6 +690,7 @@ export default function EventAlbumManagement() {
       setNewEventTitle('');
       setNewEventDescription('');
       setNewEventSlug('');
+      setNewEventSlugTouched(false);
       setIsEventDialogOpen(false);
       toast({ title: 'Event created' });
       loadData();
@@ -762,6 +766,7 @@ export default function EventAlbumManagement() {
       setNewAlbumTitle('');
       setNewAlbumDescription('');
       setNewAlbumSlug('');
+      setNewAlbumSlugTouched(false);
       setNewAlbumSourceType('upload');
       setNewAlbumDropboxUrl('');
       setIsAlbumDialogOpen(false);
@@ -837,38 +842,6 @@ export default function EventAlbumManagement() {
   };
 
 
-  const handleUploadSbsPhotos = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!selectedAlbum || !selectedAlbumEvent || uploadFiles.length === 0) return;
-
-    setIsSaving(true);
-    setUploadProgress('');
-    try {
-      for (const [index, file] of uploadFiles.entries()) {
-        setUploadProgress(`Uploading ${index + 1} of ${uploadFiles.length}`);
-        await uploadSbsPhoto({
-          albumId: selectedAlbum.id,
-          eventId: selectedAlbumEvent.id,
-          ownerId: selectedAlbumEvent.owner_id,
-          file,
-          alt: uploadNamePrefix ? `${uploadNamePrefix} ${index + 1}` : file.name.replace(/\.[^.]+$/, ''),
-        });
-      }
-      setUploadFiles([]);
-      setUploadNamePrefix('');
-      toast({ title: uploadFiles.length === 1 ? 'Photo uploaded' : `${uploadFiles.length} photos uploaded` });
-      loadData();
-    } catch (error) {
-      toast({
-        title: 'Could not upload photos',
-        description: error instanceof Error ? error.message : 'Upload failed',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsSaving(false);
-      setUploadProgress('');
-    }
-  };
 
   const deleteTarget = deletingEvent ?? deletingAlbum ?? deletingPhoto;
   const deleteTargetName = deleteTarget?.title ?? (deleteTarget as any)?.alt ?? '';
@@ -1224,31 +1197,18 @@ export default function EventAlbumManagement() {
                       </div>
                       <p className="text-xs text-muted-foreground">Select already-created side-by-side stereo image files for this album.</p>
                     </div>
-                    <form onSubmit={handleUploadSbsPhotos} className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                      <div className="space-y-2">
-                        <Label htmlFor="sbs-files">SBS image files</Label>
-                        <Input
-                          id="sbs-files"
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp"
-                          multiple
-                          onChange={(event) => setUploadFiles(Array.from(event.target.files ?? []))}
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="upload-prefix">Name prefix</Label>
-                        <Input
-                          id="upload-prefix"
-                          value={uploadNamePrefix}
-                          placeholder="Optional"
-                          onChange={(event) => setUploadNamePrefix(event.target.value)}
-                        />
-                      </div>
-                      <Button type="submit" variant="secondary" className="self-end gap-2" disabled={uploadFiles.length === 0 || isSaving}>
-                        <ImagePlus className="h-4 w-4" />
-                        {isSaving ? uploadProgress || 'Uploading...' : 'Upload'}
-                      </Button>
-                    </form>
+                    {/* The upload flow owns its own pending files. Previously the
+                        file input lived here beside "Save Album", and selecting
+                        files then clicking Save discarded them silently. */}
+                    <Button
+                      variant="secondary"
+                      className="gap-2"
+                      onClick={() => setIsUploadDialogOpen(true)}
+                      disabled={isSaving}
+                    >
+                      <ImagePlus className="h-4 w-4" />
+                      Select and upload photos
+                    </Button>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-1">
@@ -1393,6 +1353,18 @@ export default function EventAlbumManagement() {
         />
       )}
 
+      {selectedAlbum && selectedAlbumEvent && (
+        <AlbumUploadDialog
+          open={isUploadDialogOpen}
+          onOpenChange={setIsUploadDialogOpen}
+          albumId={selectedAlbum.id}
+          albumTitle={selectedAlbum.title}
+          eventId={selectedAlbumEvent.id}
+          ownerId={selectedAlbumEvent.owner_id}
+          onUploaded={loadData}
+        />
+      )}
+
       <Dialog open={isMovePhotosDialogOpen} onOpenChange={setIsMovePhotosDialogOpen}>
         <DialogContent>
           <DialogHeader>
@@ -1506,14 +1478,21 @@ export default function EventAlbumManagement() {
                 value={newEventTitle}
                 onChange={(event) => {
                   setNewEventTitle(event.target.value);
-                  if (!newEventSlug) setNewEventSlug(makeSlug(event.target.value));
+                  if (!newEventSlugTouched) setNewEventSlug(makeSlug(event.target.value));
                 }}
                 autoFocus
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="new-event-slug">Public URL slug</Label>
-              <Input id="new-event-slug" value={newEventSlug} onChange={(event) => setNewEventSlug(makeSlug(event.target.value))} />
+              <Input
+                id="new-event-slug"
+                value={newEventSlug}
+                onChange={(event) => {
+                  setNewEventSlugTouched(true);
+                  setNewEventSlug(makeSlug(event.target.value));
+                }}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="new-event-description">Description</Label>
@@ -1542,14 +1521,21 @@ export default function EventAlbumManagement() {
                 value={newAlbumTitle}
                 onChange={(event) => {
                   setNewAlbumTitle(event.target.value);
-                  if (!newAlbumSlug) setNewAlbumSlug(makeSlug(event.target.value));
+                  if (!newAlbumSlugTouched) setNewAlbumSlug(makeSlug(event.target.value));
                 }}
                 autoFocus
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="new-album-slug">Public URL slug</Label>
-              <Input id="new-album-slug" value={newAlbumSlug} onChange={(event) => setNewAlbumSlug(makeSlug(event.target.value))} />
+              <Input
+                id="new-album-slug"
+                value={newAlbumSlug}
+                onChange={(event) => {
+                  setNewAlbumSlugTouched(true);
+                  setNewAlbumSlug(makeSlug(event.target.value));
+                }}
+              />
             </div>
             <div className="space-y-2">
               <Label htmlFor="new-album-description">Description</Label>
