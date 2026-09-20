@@ -1,4 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+// Only the *Sync* helpers are usable here: bcrypt's async hash/compare spawn a
+// Web Worker, which the Supabase edge runtime does not provide, so they throw
+// "Worker is not defined" at runtime.
 import * as bcrypt from "https://deno.land/x/bcrypt@v0.4.1/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.107.0";
 import { corsHeaders } from "../_shared/cors.ts";
@@ -215,7 +218,7 @@ async function unlock(body: Record<string, string | undefined>) {
 
   // Identical response for a missing row and a wrong PIN, so this cannot be used
   // to enumerate ids.
-  if (!row?.password || !(await bcrypt.compare(pin, row.password))) {
+  if (!row?.password || !bcrypt.compareSync(pin, row.password)) {
     return json({ error: "Incorrect PIN." }, 401);
   }
 

@@ -57,7 +57,15 @@ serve(async (req) => {
       return json({ error: 'A non-empty "password" string is required.' }, 400);
     }
 
-    return json({ hash: await bcrypt.hash(password) }, 200);
+    // hashSync, not hash. The async variants in deno bcrypt spawn a Web Worker,
+    // and the Supabase edge runtime has no Worker - the call throws
+    // "Worker is not defined" and every attempt to set a PIN fails. That is why
+    // PIN protection has never worked in production: this has been the async
+    // form since the function was written.
+    //
+    // The sync variant blocks the isolate for ~100ms at the default cost factor,
+    // which is fine for an operation that happens when an owner saves a PIN.
+    return json({ hash: bcrypt.hashSync(password) }, 200);
   } catch (error) {
     console.error("password-service failed:", error instanceof Error ? error.message : error);
     return json(
