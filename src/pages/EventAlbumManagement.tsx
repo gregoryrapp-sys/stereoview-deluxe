@@ -974,6 +974,7 @@ export default function EventAlbumManagement() {
                     onIsPublicChange={setProfileIsPublic}
                     passwordSet={!!profile?.password} // Assumes profile query payload tracks if password column is not null
                     onPasswordChange={handleProfilePasswordChange}
+                    pendingChange={profilePasswordDirty ? (profilePassword ? 'set' : 'clear') : null}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-3">
@@ -1076,6 +1077,7 @@ export default function EventAlbumManagement() {
                     onIsPublicChange={setEventIsPublic}
                     passwordSet={!!selectedEvent?.password}
                     onPasswordChange={handleEventPasswordChange}
+                    pendingChange={eventPasswordDirty ? (eventPassword ? 'set' : 'clear') : null}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-1">
@@ -1186,6 +1188,7 @@ export default function EventAlbumManagement() {
                     onIsPublicChange={setAlbumIsPublic}
                     passwordSet={!!selectedAlbum?.password}
                     onPasswordChange={handleAlbumPasswordChange}
+                    pendingChange={albumPasswordDirty ? (albumPassword ? 'set' : 'clear') : null}
                   />
                 </div>
                 {selectedAlbum.source_type === 'upload' && (

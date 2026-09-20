@@ -536,7 +536,10 @@ export async function updateEvent({
     privacyUpdate.password = null;
   }
 
-  const { error } = await supabase
+  // `.select('id')` is what makes an RLS rejection visible. Postgres does not
+  // raise when a policy denies an UPDATE - it matches zero rows and reports
+  // success - so without this a save that never happened still toasts "saved".
+  const { data, error } = await supabase
     .from('events')
     .update({
       title,
@@ -545,10 +548,17 @@ export async function updateEvent({
       ...coverUpdate,
       ...privacyUpdate,
     })
-    .eq('id', eventId);
+    .eq('id', eventId)
+    .select('id');
 
   if (error) {
     throw error;
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Event could not be saved. You may not have permission to update this event.',
+    );
   }
 }
 
@@ -592,7 +602,10 @@ export async function updateAlbum({
     privacyUpdate.password = null;
   }
 
-  const { error } = await supabase
+  // `.select('id')` is what makes an RLS rejection visible. Postgres does not
+  // raise when a policy denies an UPDATE - it matches zero rows and reports
+  // success - so without this a save that never happened still toasts "saved".
+  const { data, error } = await supabase
     .from('albums')
     .update({
       title: title,
@@ -602,10 +615,17 @@ export async function updateAlbum({
       ...coverUpdate,
       ...privacyUpdate,
     })
-    .eq('id', albumId);
+    .eq('id', albumId)
+    .select('id');
 
   if (error) {
     throw error;
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Album could not be saved. You may not have permission to update this album.',
+    );
   }
 }
 

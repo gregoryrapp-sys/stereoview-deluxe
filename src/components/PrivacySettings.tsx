@@ -10,6 +10,15 @@ interface PrivacySettingsProps {
   onIsPublicChange: (value: boolean) => void;
   passwordSet: boolean; // Indicates if a password already exists in the DB
   onPasswordChange: (password: string | null) => void;
+  /**
+   * Whether the owner has staged a PIN change that has not been saved yet.
+   *
+   * "Apply" only writes to the parent's React state - nothing reaches the
+   * database until the object's own Save button is pressed. Without a visible
+   * signal that reads as unfinished, "Apply" looks like it committed, and the
+   * PIN is lost on navigation with no warning.
+   */
+  pendingChange?: 'set' | 'clear' | null;
 }
 
 export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
@@ -17,6 +26,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
   onIsPublicChange,
   passwordSet,
   onPasswordChange,
+  pendingChange = null,
 }) => {
   const [passwordInput, setPasswordInput] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -32,6 +42,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
     const trimmed = passwordInput.trim();
     if (/^[0-9]{4,6}$/.test(trimmed)) {
       onPasswordChange(trimmed);
+      setPasswordInput('');
     }
   };
 
@@ -100,7 +111,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
             onClick={handlePasswordApply}
             disabled={!isValidPin}
           >
-            Apply
+            Set PIN
           </Button>
 
           {(passwordSet || passwordInput) && (
@@ -115,6 +126,13 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
         </div>
         {passwordInput && !isValidPin && (
           <p className="text-xs text-destructive">PIN must be 4-6 digits.</p>
+        )}
+        {pendingChange && (
+          <p className="rounded-md bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+            {pendingChange === 'set'
+              ? 'PIN entered but NOT saved yet - press Save below to apply it.'
+              : 'PIN will be removed when you press Save below.'}
+          </p>
         )}
       </div>
       )}
