@@ -47,6 +47,8 @@ export interface PhotoRecord {
   id: string;
   album_id: string;
   storage_path: string;
+  /** Downscaled whole-SBS copy next to the original; null = not generated. */
+  thumb_path: string | null;
   alt: string;
   sort_order: number;
   created_at: string;
@@ -104,6 +106,7 @@ export interface Database {
           id?: string;
           album_id: string;
           storage_path: string;
+          thumb_path?: string | null;
           alt: string;
           sort_order?: number;
           file_modified_at?: string | null;

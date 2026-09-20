@@ -1,5 +1,6 @@
 import type { Photo } from '@/data/photos';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { photoObjectPath } from '@/lib/photoPaths';
 import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
@@ -435,7 +436,7 @@ export async function uploadStereoPairPhoto({
   const stereoBlob = await createStereoPairBlob(leftSource, rightSource);
   const baseName = safeFileName(alt || 'stereo-photo');
   const photoId = crypto.randomUUID();
-  const storagePath = `${ownerId}/events/${eventId}/albums/${albumId}/photos/${photoId}/stereo.jpg`;
+  const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId);
 
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
@@ -479,7 +480,7 @@ export async function uploadSbsPhoto({
 }): Promise<void> {
   const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-photo');
   const photoId = crypto.randomUUID();
-  const storagePath = `${ownerId}/events/${eventId}/albums/${albumId}/photos/${photoId}/stereo.jpg`;
+  const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId);
 
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
@@ -950,7 +951,7 @@ export async function movePhotos({
   for (const photo of photos) {
     if (!photo.storage_path) continue;
 
-    const newStoragePath = `${ownerId}/events/${destinationEventId}/albums/${destinationAlbumId}/photos/${photo.id}/stereo.jpg`;
+    const newStoragePath = photoObjectPath(ownerId, destinationEventId, destinationAlbumId, photo.id);
 
     // 3a. Move file in storage
     const { error: moveError } = await supabase.storage.from(PHOTOS_BUCKET).move(photo.storage_path, newStoragePath);
