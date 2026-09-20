@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff } from 'lucide-react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -29,7 +28,6 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
   pendingChange = null,
 }) => {
   const [passwordInput, setPasswordInput] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
 
   const handlePasswordClear = () => {
     setPasswordInput('');
@@ -84,27 +82,22 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
       <div className="space-y-3 pt-2">
         <p className="text-xs text-muted-foreground">PIN must be 4-6 digits. Required for private access.</p>
         <div className="flex items-center space-x-2">
-          <div className="relative flex-1">
-            <Input
-              type={showPassword ? 'text' : 'password'}
-              inputMode="numeric"
-              pattern="[0-9]*"
-              maxLength={6}
-              placeholder={passwordSet ? '•••• PIN configured' : 'Enter 4-6 digit PIN'}
-              value={passwordInput}
-              onChange={(e) => {
-                const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
-                setPasswordInput(digits);
-              }}
-            />
-            <button
-              type="button"
-              onClick={() => setShowPassword(!showPassword)}
-              className="absolute inset-y-0 right-0 flex items-center pr-3 text-neutral-400 hover:text-neutral-600"
-            >
-              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-            </button>
-          </div>
+          {/* Shown in clear: only the owner ever types here, and a masked
+              4-6 digit field made people unsure what they had entered. */}
+          <Input
+            className="flex-1 font-mono tracking-widest"
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={6}
+            autoComplete="off"
+            placeholder={passwordSet ? 'PIN set - enter a new one to change it' : 'e.g. 2468'}
+            value={passwordInput}
+            onChange={(e) => {
+              const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
+              setPasswordInput(digits);
+            }}
+          />
 
           <Button
             type="button"
