@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images , User} from 'lucide-react';
+import { AlertCircle, ArrowLeft, Cloud, Eye, FolderOpen, Images, Lock, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
-import { type AccessLevel, fetchUnlockedGallery, hasAccessGrant, probeAccess } from '@/lib/accessGrant';
-import { fetchDropboxFileBlob, fetchDropboxPhoto, fetchPublicProfileBySlug, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
+import { fetchGallery, type LockedInfo } from '@/lib/accessGrant';
+import { fetchDropboxFileBlob, fetchDropboxPhoto, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
@@ -21,10 +21,12 @@ export default function PublicProfile() {
   const [data, setData] = useState<SharedGalleryData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-  // A private profile/event/album is simply invisible to RLS, so "no rows" is
-  // indistinguishable from "does not exist" without asking the server which
-  // level wants a PIN.
-  const [accessPrompt, setAccessPrompt] = useState<{ level: AccessLevel; objectId: string } | null>(null);
+  // The first locked level the URL addresses, as reported by the server.
+  const [accessPrompt, setAccessPrompt] = useState<LockedInfo | null>(null);
+  // Signed in as this profile's owner: private and unlisted rows are returned in
+  // full, and the page says so, so the photographer does not mistake what they
+  // see for what a visitor sees.
+  const [ownerView, setOwnerView] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
@@ -41,37 +43,33 @@ export default function PublicProfile() {
       setError('');
       setAccessPrompt(null);
       try {
-        // With a grant in hand the gallery comes from the unlock function, which
-        // applies the same visibility cascade as RLS and returns photo URLs
-        // already signed by the service role. PostgREST cannot serve this: the
-        // grant is an opaque token, not a JWT claim it can act on.
-        const result = hasAccessGrant()
-          ? await fetchUnlockedGallery(profileSlug)
-          : await fetchPublicProfileBySlug(profileSlug);
+        // One load path for every visitor, grants or not. The unlock function is
+        // what can return a private-but-listed row as a locked stub (title, no
+        // hash) and an unlisted row only when the URL names it - neither is
+        // expressible in RLS, which is row-level and intent-blind. It also
+        // returns photo URLs already signed by the service role.
+        const result = await fetchGallery({
+          profileSlug,
+          eventSlug: eventSlug ?? undefined,
+          albumSlug: albumSlug ?? undefined,
+        });
 
-        // Either the profile itself is hidden, or it loaded but the requested
-        // event/album within it is - both mean something below wants a PIN.
-        const missingEvent =
-          !!result && !!eventSlug && !result.events.some((event) => event.slug === eventSlug);
-        const missingAlbum =
-          !!result && !!albumSlug && !result.albums.some((album) => album.slug === albumSlug);
+        if (!result) {
+          setError('Photographer not found.');
+          return;
+        }
 
-        if (!result || missingEvent || missingAlbum) {
-          const probe = await probeAccess({
-            profileSlug,
-            eventSlug: eventSlug ?? undefined,
-            albumSlug: albumSlug ?? undefined,
-          });
+        setOwnerView(result.ownerView);
+        // Stubs still carry titles, so the header and breadcrumb render behind
+        // a PIN prompt instead of a blank page.
+        setData(result);
 
-          if (probe.found && probe.requires && probe.objectId) {
-            setAccessPrompt({ level: probe.requires, objectId: probe.objectId });
-          } else if (!result) {
-            setError('Profile not found or is not public.');
-          } else {
-            setData(result);
-          }
-        } else {
-          setData(result);
+        if (result.locked) {
+          setAccessPrompt(result.locked);
+        } else if (result.missing === 'event') {
+          setError('Event not found.');
+        } else if (result.missing === 'album') {
+          setError('Album not found.');
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load gallery.');
@@ -415,6 +413,12 @@ export default function PublicProfile() {
             </Button>
           </div>
         </div>
+        {ownerView && (
+          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+            <Eye className="h-3.5 w-3.5" />
+            Owner preview - private and unlisted items are shown to you, not to visitors
+          </p>
+        )}
       </header>
 
       <main className="mx-auto max-w-6xl">
@@ -431,7 +435,7 @@ export default function PublicProfile() {
           </div>
         )}
 
-        {!isLoading && accessPrompt && (
+        {!isLoading && accessPrompt && !accessPrompt.noPin && (
           <PinGate
             level={accessPrompt.level}
             objectId={accessPrompt.objectId}
@@ -439,18 +443,44 @@ export default function PublicProfile() {
           />
         )}
 
-        {!isLoading && !data && !error && !accessPrompt && (
-          <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">
-            Profile not found or is not public.
+        {/* Private with no PIN: a legacy state the settings page no longer
+            allows. There is nothing to unlock, so say so instead of prompting. */}
+        {!isLoading && accessPrompt?.noPin && (
+          <div className="flex flex-col items-center gap-2 rounded-md border border-border p-8 text-center text-sm text-muted-foreground">
+            <Lock className="h-6 w-6" />
+            This {accessPrompt.level === 'profile' ? 'photographer page' : accessPrompt.level} is private.
           </div>
         )}
 
-        {data && isProfilePage && (
+        {!isLoading && !data && !error && !accessPrompt && (
+          <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground">
+            Photographer not found.
+          </div>
+        )}
+
+        {data && !accessPrompt && isProfilePage && (
           <ThumbnailGrid
             items={data.events}
             sortOptions={COLLECTION_SORT_OPTIONS}
-            emptyMessage="This photographer has no public events."
+            emptyMessage="This photographer has no events to show."
             renderItem={(event) => {
+              if (event.locked) {
+                return (
+                  <Link key={event.id} to={`/${profileSlug}/${event.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
+                    <div className="flex aspect-[3/2] flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
+                      <Lock className="h-6 w-6" />
+                      <span className="text-xs font-medium">PIN required</span>
+                    </div>
+                    <div className="p-3">
+                      <h2 className="flex items-center gap-1.5 truncate text-sm font-medium">
+                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{event.title}</span>
+                      </h2>
+                    </div>
+                  </Link>
+                );
+              }
+
               const eventPhotos = photosByEvent[event.id] ?? [];
               let cover: GalleryPhoto | null = null;
               const e = event as any;
@@ -478,12 +508,30 @@ export default function PublicProfile() {
           />
         )}
 
-        {data && isEventPage && selectedEvent && (
+        {data && !accessPrompt && isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={COLLECTION_SORT_OPTIONS}
-            emptyMessage="This event has no public albums."
+            emptyMessage="This event has no albums to show."
             renderItem={(album) => {
+              if (album.locked) {
+                return (
+                  <Link key={album.id} to={`/${profileSlug}/${selectedEvent.slug}/${album.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
+                    <div className="flex aspect-[3/2] flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
+                      <Lock className="h-6 w-6" />
+                      <span className="text-xs font-medium">PIN required</span>
+                    </div>
+                    <div className="p-3">
+                      <h2 className="flex items-center gap-1.5 truncate text-sm font-medium">
+                        <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{album.title}</span>
+                      </h2>
+                      <p className="mt-1 text-xs text-muted-foreground">PIN required</p>
+                    </div>
+                  </Link>
+                );
+              }
+
               const photos = photosByAlbum[album.id] ?? [];
               let cover: GalleryPhoto | null = null;
               const a = album as any;
@@ -519,7 +567,7 @@ export default function PublicProfile() {
           />
         )}
 
-        {data && isAlbumPage && selectedAlbum && (
+        {data && !accessPrompt && isAlbumPage && selectedAlbum && (
           <section className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>

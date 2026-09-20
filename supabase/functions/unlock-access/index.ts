@@ -7,7 +7,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.107.0";
 import { corsHeaders } from "../_shared/cors.ts";
 
 /**
- * PIN unlock for private profiles, events and albums.
+ * PIN unlock and public-gallery serving for profiles, events and albums.
  *
  * Setting a PIN used to make content permanently unreachable. The RLS half
  * existed - verify_private_access() reads an `unlocked_ids` JWT claim - but
@@ -16,19 +16,32 @@ import { corsHeaders } from "../_shared/cors.ts";
  * Minting the claim ourselves is not possible on this project: it uses asymmetric
  * JWT signing keys, so Supabase holds the private key and a self-signed token
  * would be rejected. So instead of granting the caller rights and letting RLS
- * serve them, this function verifies the PIN and then serves the unlocked gallery
- * itself with the service role - including signing the photo URLs, which is the
- * part no header- or cookie-based scheme could do, because storage RLS only ever
- * sees the bearer token.
+ * serve them, this function verifies the PIN and then serves the gallery itself
+ * with the service role - including signing the photo URLs, which is the part no
+ * header- or cookie-based scheme could do, because storage RLS only ever sees
+ * the bearer token.
  *
- * The consequence is deliberate and worth stating plainly: for unlocked content,
- * the visibility rules below ARE the access control. They mirror the RLS policies
- * in 20260624000000_update_rls_for_public_access.sql, including the cascade where
- * unlocking a parent reaches children that have no PIN of their own. If those
- * policies change, this must change with them.
+ * Every public profile page load goes through `gallery`, grants or not. Two
+ * things need the service role even for a visitor with no PIN:
+ *
+ *   - a private-but-LISTED row is returned as a locked stub (title, slug, no
+ *     hash) so the page can show a card with a lock;
+ *   - an UNLISTED row is returned only when the URL names it.
+ *
+ * Neither can be expressed in RLS, which is row-level and intent-blind.
+ *
+ * The consequence is deliberate and worth stating plainly: the visibility rules
+ * in `gallery` ARE the access control for this page. They mirror the SELECT
+ * policies in 20260921002000_listing_pin_and_directory.sql, including the
+ * cascade where unlocking a parent reaches children that have no PIN of their
+ * own. If those policies change, this must change with them - and so must
+ * can_read_storage_object (20260624000000).
  */
 
 type ObjectType = "profile" | "event" | "album";
+
+// deno-lint-ignore no-explicit-any
+type Row = Record<string, any>;
 
 const TABLES: Record<ObjectType, string> = {
   profile: "profiles",
@@ -143,6 +156,34 @@ async function resolveGrants(
   );
 }
 
+/**
+ * Identifies a signed-in caller, if any.
+ *
+ * supabase-js sends the session access token when there is one and the
+ * publishable key otherwise. `sb_publishable_...` is not a JWT, so only a real
+ * session token is handed to the Auth server for verification.
+ */
+async function callerUserId(
+  db: ReturnType<typeof admin>,
+  authHeader: string | null,
+): Promise<string | null> {
+  const token = authHeader?.replace(/^Bearer\s+/i, "").trim();
+  if (!token || !token.startsWith("eyJ")) return null;
+  const { data, error } = await db.auth.getUser(token);
+  if (error) return null;
+  return data.user?.id ?? null;
+}
+
+/**
+ * Removes the bcrypt hash - and the email, for profiles - before a row leaves
+ * the server. A 4-6 digit PIN hash is brute-forced offline in minutes, so this
+ * applies to EVERY row, including ones the caller has just unlocked.
+ */
+function strip(row: Row): Row {
+  const { password: _password, email: _email, ...rest } = row;
+  return rest;
+}
+
 async function probe(body: Record<string, string | undefined>) {
   const { profileSlug, eventSlug, albumSlug } = body;
   if (!profileSlug) return json({ error: "profileSlug is required" }, 400);
@@ -156,7 +197,7 @@ async function probe(body: Record<string, string | undefined>) {
     .maybeSingle();
 
   if (!profile) return json({ found: false }, 200);
-  if (profile.password) {
+  if (!profile.is_public && profile.password) {
     return json({ found: true, requires: "profile", objectId: profile.id }, 200);
   }
 
@@ -164,25 +205,29 @@ async function probe(body: Record<string, string | undefined>) {
 
   const { data: event } = await db
     .from("events")
-    .select("id, password")
+    .select("id, is_public, password")
     .eq("owner_id", profile.id)
     .eq("slug", eventSlug)
     .maybeSingle();
 
   if (!event) return json({ found: false }, 200);
-  if (event.password) return json({ found: true, requires: "event", objectId: event.id }, 200);
+  if (!event.is_public && event.password) {
+    return json({ found: true, requires: "event", objectId: event.id }, 200);
+  }
 
   if (!albumSlug) return json({ found: true, requires: null }, 200);
 
   const { data: album } = await db
     .from("albums")
-    .select("id, password")
+    .select("id, is_public, password")
     .eq("event_id", event.id)
     .eq("slug", albumSlug)
     .maybeSingle();
 
   if (!album) return json({ found: false }, 200);
-  if (album.password) return json({ found: true, requires: "album", objectId: album.id }, 200);
+  if (!album.is_public && album.password) {
+    return json({ found: true, requires: "album", objectId: album.id }, 200);
+  }
 
   return json({ found: true, requires: null }, 200);
 }
@@ -206,10 +251,10 @@ async function unlock(body: Record<string, string | undefined>) {
     .eq("id", objectId)
     .maybeSingle();
 
-  // Probe just located this id, so failing to read it back here almost always
-  // means the client is not actually service-role and RLS is hiding the row.
-  // Logged loudly because the visitor-facing symptom - "Incorrect PIN" for a
-  // correct PIN - gives no hint of the real cause.
+  // The client just saw this id in a locked stub, so failing to read it back
+  // here almost always means the client is not actually service-role and RLS is
+  // hiding the row. Logged loudly because the visitor-facing symptom -
+  // "Incorrect PIN" for a correct PIN - gives no hint of the real cause.
   if (!row) {
     console.error(
       `unlock: ${objectType} ${objectId} not readable. Check the service-role credential.`,
@@ -240,17 +285,31 @@ async function unlock(body: Record<string, string | undefined>) {
 }
 
 /**
- * Serves the gallery a set of grants unlocks.
+ * Serves a public profile page.
  *
- * Mirrors the RLS cascade: a row is visible if it is public, or directly granted,
- * or its own PIN is unset and an ancestor was granted.
+ * For each level the row is UNLOCKED if it is public, directly granted, PIN-less
+ * under a granted ancestor, or the caller owns it. A row is INCLUDED when:
+ *
+ *   unlocked  and (listed or addressed by the URL or owner view)  -> full row
+ *   locked    and (listed or addressed by the URL)                -> stub
+ *   otherwise                                                     -> omitted
+ *
+ * Children of a locked row are never returned. Photos are returned only for
+ * unlocked albums. `locked` names the first locked level the URL addresses;
+ * `missing` names an addressed level that does not exist.
  */
-async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
-  const { profileSlug, tokens = [] } = body;
+async function gallery(
+  body: { profileSlug?: string; eventSlug?: string; albumSlug?: string; tokens?: string[] },
+  authHeader: string | null,
+) {
+  const { profileSlug, eventSlug, albumSlug, tokens = [] } = body;
   if (!profileSlug) return json({ error: "profileSlug is required" }, 400);
 
   const db = admin();
-  const granted = await resolveGrants(db, tokens);
+  const [granted, userId] = await Promise.all([
+    resolveGrants(db, tokens),
+    callerUserId(db, authHeader),
+  ]);
 
   const { data: profile } = await db
     .from("profiles")
@@ -260,8 +319,30 @@ async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
 
   if (!profile) return json({ found: false }, 200);
 
+  const ownerView = !!userId && userId === profile.id;
   const profileGranted = granted.has(String(profile.id));
-  if (!profile.is_public && !profileGranted) return json({ found: false }, 200);
+  const profileUnlocked = profile.is_public || profileGranted || ownerView;
+
+  if (!profileUnlocked) {
+    return json({
+      found: true,
+      ownerView,
+      profile: {
+        id: profile.id,
+        slug: profile.slug,
+        display_name: profile.display_name,
+        created_at: profile.created_at,
+        is_public: false,
+        is_listed: profile.is_listed ?? true,
+        locked: true,
+      },
+      events: [],
+      albums: [],
+      photos: [],
+      locked: { level: "profile", objectId: profile.id, noPin: !profile.password },
+      missing: null,
+    }, 200);
+  }
 
   const { data: allEvents } = await db
     .from("events")
@@ -269,42 +350,91 @@ async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
     .eq("owner_id", profile.id)
     .order("created_at", { ascending: false });
 
-  const events = (allEvents ?? []).filter(
-    (event) =>
-      event.is_public ||
-      granted.has(String(event.id)) ||
-      (!event.password && profileGranted),
-  );
+  const eventUnlocked = (event: Row) =>
+    event.is_public ||
+    granted.has(String(event.id)) ||
+    (!event.password && profileGranted) ||
+    ownerView;
 
-  const eventById = new Map(events.map((event) => [event.id, event]));
+  const events: Row[] = [];
+  const unlockedEvents = new Map<string, Row>();
 
-  const { data: allAlbums } = events.length
+  for (const event of allEvents ?? []) {
+    const unlocked = eventUnlocked(event);
+    const addressed = !!eventSlug && event.slug === eventSlug;
+    const listed = event.is_listed ?? true;
+
+    if (unlocked && (listed || addressed || ownerView)) {
+      events.push(strip(event));
+      unlockedEvents.set(String(event.id), event);
+    } else if (!unlocked && (listed || addressed)) {
+      events.push({
+        id: event.id,
+        owner_id: event.owner_id,
+        slug: event.slug,
+        title: event.title,
+        created_at: event.created_at,
+        is_public: false,
+        is_listed: listed,
+        locked: true,
+      });
+    }
+  }
+
+  const { data: allAlbums } = unlockedEvents.size
     ? await db
         .from("albums")
         .select("*")
-        .in("event_id", events.map((event) => event.id))
+        .in("event_id", [...unlockedEvents.keys()])
         .order("created_at", { ascending: false })
-    : { data: [] };
+    : { data: [] as Row[] };
 
-  const albums = (allAlbums ?? []).filter((album) => {
-    const parent = eventById.get(album.event_id);
-    if (!parent) return false;
-    if (album.is_public || granted.has(String(album.id))) return true;
-    if (album.password) return false;
-    if (granted.has(String(parent.id))) return true;
-    return !parent.password && profileGranted;
-  });
+  const albumUnlocked = (album: Row, parent: Row) =>
+    album.is_public ||
+    granted.has(String(album.id)) ||
+    ownerView ||
+    (!album.password &&
+      (granted.has(String(parent.id)) || (!parent.password && profileGranted)));
 
-  const { data: photoRows } = albums.length
+  const albums: Row[] = [];
+  const unlockedAlbumIds = new Set<string>();
+
+  for (const album of allAlbums ?? []) {
+    const parent = unlockedEvents.get(String(album.event_id));
+    if (!parent) continue;
+
+    const unlocked = albumUnlocked(album, parent);
+    const addressed = !!albumSlug && parent.slug === eventSlug && album.slug === albumSlug;
+    const listed = album.is_listed ?? true;
+
+    if (unlocked && (listed || addressed || ownerView)) {
+      albums.push(strip(album));
+      unlockedAlbumIds.add(String(album.id));
+    } else if (!unlocked && (listed || addressed)) {
+      albums.push({
+        id: album.id,
+        event_id: album.event_id,
+        slug: album.slug,
+        title: album.title,
+        created_at: album.created_at,
+        source_type: album.source_type,
+        is_public: false,
+        is_listed: listed,
+        locked: true,
+      });
+    }
+  }
+
+  const { data: photoRows } = unlockedAlbumIds.size
     ? await db
         .from("photos")
         .select("*")
-        .in("album_id", albums.map((album) => album.id))
+        .in("album_id", [...unlockedAlbumIds])
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true })
-    : { data: [] };
+    : { data: [] as Row[] };
 
-  const paths = (photoRows ?? []).map((photo) => photo.storage_path);
+  const paths = (photoRows ?? []).map((photo) => photo.storage_path as string);
   const signed = new Map<string, string>();
 
   for (let offset = 0; offset < paths.length; offset += 500) {
@@ -316,7 +446,9 @@ async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
     }
   }
 
-  const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
+  const albumEventIds = new Map(
+    (allAlbums ?? []).map((album) => [String(album.id), album.event_id]),
+  );
 
   const photos = (photoRows ?? []).flatMap((photo) => {
     const src = signed.get(photo.storage_path);
@@ -326,17 +458,45 @@ async function gallery(body: { profileSlug?: string; tokens?: string[] }) {
       src,
       alt: photo.alt,
       albumId: photo.album_id,
-      eventId: albumEventIds.get(photo.album_id),
+      eventId: albumEventIds.get(String(photo.album_id)),
       storagePath: photo.storage_path,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: (/\.([a-zA-Z0-9]+)$/.exec(photo.storage_path)?.[1] ?? "").toLowerCase(),
     }];
   });
 
-  // The password hash must never leave the server.
-  const { password: _password, email: _email, ...publicProfile } = profile;
+  // What the URL points at, so the client can show the right prompt.
+  let locked: { level: ObjectType; objectId: string; noPin: boolean } | null = null;
+  let missing: "event" | "album" | null = null;
 
-  return json({ found: true, profile: publicProfile, events, albums, photos }, 200);
+  if (eventSlug) {
+    const target = (allEvents ?? []).find((event) => event.slug === eventSlug);
+    if (!target) {
+      missing = "event";
+    } else if (!unlockedEvents.has(String(target.id))) {
+      locked = { level: "event", objectId: target.id, noPin: !target.password };
+    } else if (albumSlug) {
+      const targetAlbum = (allAlbums ?? []).find(
+        (album) => String(album.event_id) === String(target.id) && album.slug === albumSlug,
+      );
+      if (!targetAlbum) {
+        missing = "album";
+      } else if (!unlockedAlbumIds.has(String(targetAlbum.id))) {
+        locked = { level: "album", objectId: targetAlbum.id, noPin: !targetAlbum.password };
+      }
+    }
+  }
+
+  return json({
+    found: true,
+    ownerView,
+    profile: strip(profile),
+    events,
+    albums,
+    photos,
+    locked,
+    missing,
+  }, 200);
 }
 
 serve(async (req) => {
@@ -349,7 +509,7 @@ serve(async (req) => {
 
     if (body?.action === "probe") return await probe(body);
     if (body?.action === "unlock") return await unlock(body);
-    if (body?.action === "gallery") return await gallery(body);
+    if (body?.action === "gallery") return await gallery(body, req.headers.get("Authorization"));
 
     return json({ error: 'Invalid action. Use "probe", "unlock" or "gallery".' }, 400);
   } catch (err) {
