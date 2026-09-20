@@ -403,6 +403,12 @@ verify_jwt = false
 [functions.dropbox-file]
 verify_jwt = false
 
+# PIN probe/unlock/gallery for anonymous visitors. Access control is the PIN
+# itself plus the service-role checks inside the function, not the gateway.
+# Declared explicitly so it does not silently inherit the dashboard default.
+[functions.unlock-access]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

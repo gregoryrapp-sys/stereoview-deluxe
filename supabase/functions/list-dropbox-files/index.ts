@@ -81,7 +81,7 @@ async function handler(req: Request) {
   }
 
   try {
-    const { folderUrl, fileName } = await req.json();
+    const { folderUrl, fileName, coverOnly } = await req.json();
 
     if (!folderUrl) {
       return new Response(JSON.stringify({ error: "folderUrl is required" }), {
@@ -107,6 +107,32 @@ async function handler(req: Request) {
 
     const entries = await listSharedFolder(folderUrl);
     const imageFiles = entries.filter(isImageEntry);
+
+    // Cover mode: one listing plus ONE metadata call.
+    //
+    // Callers that only want a thumbnail used to request the whole folder and
+    // keep `photos[0]`, paying a metadata call per file to throw away all but
+    // one. Ten uncovered events on a single Gallery render was ten full folder
+    // fan-outs, which is what exhausts the Dropbox app quota and makes
+    // `files/list_folder` itself start returning 429.
+    //
+    // Sorted by name so the chosen cover is stable: `list_folder` does not
+    // promise an order, so the old `photos[0]` could pick a different photo on
+    // each call. A-Z also matches the app's default photo sort.
+    if (coverOnly) {
+      const first = [...imageFiles].sort((a, b) => a.name.localeCompare(b.name))[0];
+      if (!first) {
+        return new Response(JSON.stringify(null), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      const meta = await getSharedLinkMetadata(folderUrl, first.name);
+      return new Response(JSON.stringify(toDropboxFile(meta)), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const files = await mapWithConcurrency(
       imageFiles,

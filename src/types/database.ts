@@ -9,6 +9,7 @@ export interface Profile {
   cover_photo_id: string | null;
   created_at: string;
   is_public: boolean;
+  is_listed: boolean;
   password: string | null;
   dropbox_cover_album_id: string | null;
   dropbox_cover_image_name: string | null;
@@ -25,6 +26,7 @@ export interface EventRecord {
   dropbox_cover_album_id: string | null;
   dropbox_cover_image_name: string | null;
   is_public: boolean;
+  is_listed: boolean;
   password: string | null;
 }
 
@@ -40,6 +42,7 @@ export interface AlbumRecord {
   source_type: 'upload' | 'dropbox';
   dropbox_folder_url: string | null;
   is_public: boolean;
+  is_listed: boolean;
   password: string | null;
 }
 
@@ -53,6 +56,22 @@ export interface PhotoRecord {
   sort_order: number;
   created_at: string;
   file_modified_at: string | null;
+}
+
+/**
+ * One row of public.photographer_directory(). Listed profiles only; private
+ * ones carry `has_pin` instead of the hash and no cover fields.
+ */
+export interface PhotographerDirectoryRow {
+  id: string;
+  slug: string;
+  display_name: string | null;
+  created_at: string;
+  is_public: boolean;
+  has_pin: boolean;
+  cover_photo_id: string | null;
+  dropbox_cover_album_id: string | null;
+  dropbox_cover_image_name: string | null;
 }
 
 export interface Database {
@@ -119,10 +138,11 @@ export interface Database {
       // share_links and its three RPCs (create_share_link, verify_share_password,
       // get_shared_gallery_by_slugs) were dropped by migration 20260624000000 but
       // stayed declared here for months. Removed so the types describe the DB
-      // that actually exists.
-      get_public_photographers: {
+      // that actually exists. get_public_photographers was dropped by
+      // 20260921002000 (it returned every profile, public or not).
+      photographer_directory: {
         Args: Record<string, never>;
-        Returns: unknown;
+        Returns: PhotographerDirectoryRow[];
       };
     };
   };

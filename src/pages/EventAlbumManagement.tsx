@@ -4,7 +4,6 @@ import {
   Check,
   Cloud,
   AlertCircle,
-  Copy,
   ArrowLeft,
   FolderOpen,
   ImagePlus,
@@ -62,7 +61,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from '@/hooks/use-toast';
 import { ObjectCoverPickerDialog } from '@/components/ObjectCoverPickerDialog';
 
-import { PrivacySettings } from '@/components/PrivacySettings';
+import { isPrivacyValid, type PendingPinChange, PrivacySettings } from '@/components/PrivacySettings';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto, resolveAlbumCover, resolveEventCover } from '@/lib/galleryUtils';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
 
@@ -91,7 +90,7 @@ function buildPublicUrl(profileSlug: string, eventSlug?: string, albumSlug?: str
 
 export default function EventAlbumManagement() {
   const { eventId, albumId } = useParams();
-  const { isAuthenticated, isLoading: isAuthLoading, profile, user, refreshProfile } = useAuth();
+  const { isAuthenticated, isAdmin, isLoading: isAuthLoading, profile, user, refreshProfile } = useAuth();
   const [searchParams] = useSearchParams();
   const [galleryData, setGalleryData] = useState<GalleryData>({ events: [], albums: [], photos: [] });
   const [isLoading, setIsLoading] = useState(false);
@@ -169,7 +168,11 @@ export default function EventAlbumManagement() {
   const [profilePasswordDirty, setProfilePasswordDirty] = useState(false);
   const [eventPasswordDirty, setEventPasswordDirty] = useState(false);
   const [albumPasswordDirty, setAlbumPasswordDirty] = useState(false);
-  //const [shareLinks, setShareLinks] = useState<any[]>([]); // Replace 'any' with your ShareLinkRecord type
+  // Listing is independent of access: an unlisted page is reachable only by its
+  // link, whether or not it also asks for a PIN.
+  const [profileIsListed, setProfileIsListed] = useState(true);
+  const [eventIsListed, setEventIsListed] = useState(true);
+  const [albumIsListed, setAlbumIsListed] = useState(true);
 
   const loadData = useCallback(() => {
     let cancelled = false;
@@ -177,7 +180,10 @@ export default function EventAlbumManagement() {
     async function run() {
       setIsLoading(true);
       try {
-        const data = await fetchGalleryData();
+        // Scoped to the signed-in photographer: RLS returns every public row to
+        // any caller, so an unscoped read listed other photographers' public
+        // events here as if they were editable. Admins keep the unscoped read.
+        const data = await fetchGalleryData(isAdmin ? undefined : profile?.id);
         if (!cancelled) {
           setGalleryData(data);
         }
@@ -196,12 +202,12 @@ export default function EventAlbumManagement() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAdmin, profile?.id]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !profile) return;
     return loadData();
-  }, [isAuthenticated, loadData]);
+  }, [isAuthenticated, profile, loadData]);
 
   useEffect(() => {
     if (!profile) return;
@@ -211,6 +217,7 @@ export default function EventAlbumManagement() {
     setProfileDropboxCoverAlbumId((profile as any).dropbox_cover_album_id ?? null);
     setProfileDropboxCoverImageName((profile as any).dropbox_cover_image_name ?? null);
     setProfileIsPublic(profile.is_public ?? true);
+    setProfileIsListed(profile.is_listed ?? true);
     setProfilePasswordDirty(false);
   }, [profile]);
 
@@ -543,45 +550,37 @@ export default function EventAlbumManagement() {
     }
   };
 
-/* --------Removed the following code block because it was commented out and not used in the current implementation. If you need to use share links in the future, you can uncomment and adapt this code as necessary.
-  const findActiveShareLink = useCallback(
-    (matchesScope: (shareLink: ShareLinkRecord) => boolean) =>
-      shareLinks.find((shareLink) => {
-        const isExpired = shareLink.expires_at ? Date.parse(shareLink.expires_at) <= Date.now() : false;
-        return shareLink.is_active && !isExpired && matchesScope(shareLink);
-      }) ?? null,
-    [shareLinks],
-  );
-  const activeProfileShareLink = useMemo(() => {
-    if (!profile) return null;
-
-    return findActiveShareLink((shareLink) => shareLink.scope === 'profile' && shareLink.profile_id === profile.id);
-  }, [findActiveShareLink, profile]);
-  const activeEventShareLink = useMemo(() => {
-    if (!selectedEvent) return null;
-
-    return findActiveShareLink((shareLink) => shareLink.scope === 'event' && shareLink.event_id === selectedEvent.id);
-  }, [findActiveShareLink, selectedEvent]);
-  const profileShareUrl = profileSlug ? buildPublicUrl(profileSlug) : '';
-  const eventShareUrl = selectedEvent && profileSlug ? buildPublicUrl(profileSlug, selectedEvent.slug) : '';
+  // Share links are the public routes themselves. Built from the SAVED slugs
+  // (profile.slug, selectedEvent.slug) rather than the form fields, since the
+  // link only changes once Save has run; the `stale` flags say when they differ.
+  const savedProfileSlug = profile?.slug ?? '';
+  const profileShareUrl = savedProfileSlug ? buildPublicUrl(savedProfileSlug) : '';
+  const eventShareUrl =
+    selectedEvent && savedProfileSlug ? buildPublicUrl(savedProfileSlug, selectedEvent.slug) : '';
   const albumShareUrl =
-    selectedAlbum && selectedAlbumEvent && profileSlug ? buildPublicUrl(profileSlug, selectedAlbumEvent.slug, selectedAlbum.slug) : '';
+    selectedAlbum && selectedAlbumEvent && savedProfileSlug
+      ? buildPublicUrl(savedProfileSlug, selectedAlbumEvent.slug, selectedAlbum.slug)
+      : '';
 
- const renderSharedUrlField = (url: string, className = '') => {
-    if (!url) return null;
+  const profilePendingPin: PendingPinChange = profilePasswordDirty ? (profilePassword ? 'set' : 'clear') : null;
+  const eventPendingPin: PendingPinChange = eventPasswordDirty ? (eventPassword ? 'set' : 'clear') : null;
+  const albumPendingPin: PendingPinChange = albumPasswordDirty ? (albumPassword ? 'set' : 'clear') : null;
 
-    return (
-      <div className={`flex min-w-0 items-center gap-2 ${className}`}>
-        <p className="min-w-0 flex-1 select-all truncate rounded-md bg-secondary px-2.5 py-1.5 text-xs text-muted-foreground">
-          {url}
-        </p>
-        <Button size="sm" variant="secondary" className="h-8 shrink-0 gap-1 px-2" onClick={() => copyShareUrl(url)}>
-          <Copy className="h-3.5 w-3.5" />
-          Copy
-        </Button>
-      </div>
-    );
-  };*/
+  const profilePrivacyValid = isPrivacyValid({
+    isPublic: profileIsPublic,
+    passwordSet: !!profile?.password,
+    pendingChange: profilePendingPin,
+  });
+  const eventPrivacyValid = isPrivacyValid({
+    isPublic: eventIsPublic,
+    passwordSet: !!selectedEvent?.password,
+    pendingChange: eventPendingPin,
+  });
+  const albumPrivacyValid = isPrivacyValid({
+    isPublic: albumIsPublic,
+    passwordSet: !!selectedAlbum?.password,
+    pendingChange: albumPendingPin,
+  });
 
 
   useEffect(() => {
@@ -593,6 +592,7 @@ export default function EventAlbumManagement() {
     setEventDropboxCoverAlbumId(selectedEvent.dropbox_cover_album_id);
     setEventDropboxCoverImageName(selectedEvent.dropbox_cover_image_name);
     setEventIsPublic(selectedEvent.is_public ?? true);
+    setEventIsListed(selectedEvent.is_listed ?? true);
     setEventPasswordDirty(false);
   }, [selectedEvent]);
 
@@ -605,6 +605,7 @@ export default function EventAlbumManagement() {
     setAlbumDropboxCoverImageName(selectedAlbum.dropbox_cover_image_name);
     setAlbumDropboxUrl(selectedAlbum.dropbox_folder_url ?? '');
     setAlbumIsPublic(selectedAlbum.is_public ?? true);
+    setAlbumIsListed(selectedAlbum.is_listed ?? true);
     setAlbumPasswordDirty(false);
   }, [selectedAlbum]);
 
@@ -664,6 +665,7 @@ export default function EventAlbumManagement() {
         dropboxCoverAlbumId: profileDropboxCoverAlbumId,
         dropboxCoverImageName: profileDropboxCoverImageName,
         isPublic: profileIsPublic,
+        isListed: profileIsListed,
         password: profilePasswordDirty ? profilePassword || null : undefined,
       });
       // Refresh before the success toast: updateProfilePresentation now throws
@@ -722,7 +724,8 @@ export default function EventAlbumManagement() {
         coverPhotoId: eventCoverPhotoId,
         dropboxCoverAlbumId: eventDropboxCoverAlbumId,
         dropboxCoverImageName: eventDropboxCoverImageName,
-        isPublic: eventIsPublic, // Add this
+        isPublic: eventIsPublic,
+        isListed: eventIsListed,
         password: eventPasswordDirty ? eventPassword || null : undefined,
       });
       toast({ title: 'Event saved' });
@@ -738,6 +741,7 @@ export default function EventAlbumManagement() {
                 dropbox_cover_album_id: eventDropboxCoverAlbumId,
                 dropbox_cover_image_name: eventDropboxCoverImageName,
                 is_public: eventIsPublic,
+                is_listed: eventIsListed,
                 password: eventPasswordDirty ? eventPassword || null : selectedEvent.password,
               }
             : event,
@@ -802,7 +806,8 @@ export default function EventAlbumManagement() {
         coverPhotoId: albumCoverPhotoId,
         dropboxCoverImageName: albumDropboxCoverImageName,
         dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
-        isPublic: albumIsPublic, // Add this
+        isPublic: albumIsPublic,
+        isListed: albumIsListed,
         password: albumPasswordDirty ? albumPassword || null : undefined,
       });
       toast({ title: 'Album saved' });
@@ -818,6 +823,7 @@ export default function EventAlbumManagement() {
                 dropbox_cover_image_name: albumDropboxCoverImageName,
                 dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
                 is_public: albumIsPublic,
+                is_listed: albumIsListed,
                 password: albumPasswordDirty ? albumPassword || null : selectedAlbum.password,
               }
             : album,
@@ -975,14 +981,20 @@ export default function EventAlbumManagement() {
                 </div>
                 <div className="md:col-span-3">
                   <PrivacySettings
+                    level="profile"
                     isPublic={profileIsPublic}
                     onIsPublicChange={setProfileIsPublic}
-                    passwordSet={!!profile?.password} // Assumes profile query payload tracks if password column is not null
+                    isListed={profileIsListed}
+                    onIsListedChange={setProfileIsListed}
+                    passwordSet={!!profile?.password}
                     onPasswordChange={handleProfilePasswordChange}
+                    pendingChange={profilePendingPin}
+                    shareUrl={profileShareUrl}
+                    shareUrlStale={profileSlug !== savedProfileSlug}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-3">
-                  <Button variant="secondary" onClick={saveProfile} disabled={!profileSlug || isSaving}>
+                  <Button variant="secondary" onClick={saveProfile} disabled={!profileSlug || isSaving || !profilePrivacyValid}>
                     Save Photographer Page
                   </Button>
                 </div>
@@ -1077,14 +1089,20 @@ export default function EventAlbumManagement() {
                 
                 <div className="md:col-span-3">
                   <PrivacySettings
+                    level="event"
                     isPublic={eventIsPublic}
                     onIsPublicChange={setEventIsPublic}
+                    isListed={eventIsListed}
+                    onIsListedChange={setEventIsListed}
                     passwordSet={!!selectedEvent?.password}
                     onPasswordChange={handleEventPasswordChange}
+                    pendingChange={eventPendingPin}
+                    shareUrl={eventShareUrl}
+                    shareUrlStale={eventSlug !== selectedEvent.slug}
                   />
                 </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-1">
-                  <Button variant="secondary" onClick={saveEvent} disabled={!eventTitle || !eventSlug || isSaving}>
+                  <Button variant="secondary" onClick={saveEvent} disabled={!eventTitle || !eventSlug || isSaving || !eventPrivacyValid}>
                     Save Event
                   </Button>
                 </div>
@@ -1204,10 +1222,16 @@ export default function EventAlbumManagement() {
                 
                 <div className="md:col-span-3">
                   <PrivacySettings
+                    level="album"
                     isPublic={albumIsPublic}
                     onIsPublicChange={setAlbumIsPublic}
+                    isListed={albumIsListed}
+                    onIsListedChange={setAlbumIsListed}
                     passwordSet={!!selectedAlbum?.password}
                     onPasswordChange={handleAlbumPasswordChange}
+                    pendingChange={albumPendingPin}
+                    shareUrl={albumShareUrl}
+                    shareUrlStale={albumSlug !== selectedAlbum.slug}
                   />
                 </div>
                 {selectedAlbum.source_type === 'upload' && (
