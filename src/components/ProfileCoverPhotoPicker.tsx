@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { ArrowLeft, Cloud, FolderOpen, Images } from 'lucide-react';
 import type { AlbumRecord } from '@/types/database';
-import { fetchDropboxPhotos, type GalleryData, type GalleryPhoto, getFileExtension } from '@/services/galleryService';
+import { fetchDropboxFolderCover, fetchDropboxPhotos, type GalleryData, type GalleryPhoto, getFileExtension } from '@/services/galleryService';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { Button } from '@/components/ui/button';
@@ -54,9 +54,9 @@ export function ProfileCoverPhotoPicker({
     const fetchCovers = async () => {
       const results = await Promise.allSettled(
         albumsToFetch.map(async (album) => {
-          const photos = await fetchDropboxPhotos(album.dropbox_folder_url!);
-          if (photos.length > 0) {
-            return { albumId: album.id, src: photos[0].src, name: photos[0].name };
+          const photo = await fetchDropboxFolderCover(album.dropbox_folder_url!);
+          if (photo) {
+            return { albumId: album.id, src: photo.src, name: photo.name };
           }
           return null;
         }),

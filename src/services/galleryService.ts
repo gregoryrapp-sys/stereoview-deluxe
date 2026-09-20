@@ -284,6 +284,28 @@ export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile
   return deduped;
 }
 
+/**
+ * Resolves a single representative image for a folder, for use as a thumbnail.
+ *
+ * Callers wanting a cover previously called `fetchDropboxPhotos` and kept
+ * `[0]`, which costs one Dropbox metadata request per file in the folder. With
+ * ten uncovered events rendering at once that is a few hundred concurrent
+ * Dropbox calls per page load, which exhausts the app's quota and makes even
+ * `files/list_folder` return 429. This costs two calls regardless of folder
+ * size.
+ *
+ * Returns null for a folder that contains no images.
+ */
+export async function fetchDropboxFolderCover(folderUrl: string): Promise<DropboxFile | null> {
+  const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    body: { folderUrl, coverOnly: true },
+  });
+  if (error) {
+    throw new Error(error.message || 'Failed to fetch Dropbox cover');
+  }
+  return (data as DropboxFile | null) ?? null;
+}
+
 export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Promise<DropboxFile> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
     body: { folderUrl, fileName },
