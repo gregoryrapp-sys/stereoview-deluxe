@@ -1,12 +1,16 @@
 import type { Photo } from '@/data/photos';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
-import { photoObjectPath } from '@/lib/photoPaths';
+import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
+import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
 import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
   albumId?: string;
   eventId?: string;
   storagePath?: string;
+  /** Signed URL of the downscaled whole-SBS thumbnail, when one exists. Grids prefer it. */
+  thumbSrc?: string;
+  thumbPath?: string;
   rightSrc?: string; // For Dropbox pairs
   created_at?: string;
   extension?: string; // File extension (lowercase, without dot) when available
@@ -165,6 +169,16 @@ async function signStoragePaths(paths: string[]): Promise<Map<string, string>> {
   return resolved;
 }
 
+/** Drops cached URLs for objects that no longer exist at that path (delete / move). */
+function forgetSignedPaths(paths: string[]): void {
+  const cache = loadSignedUrlCache();
+  let changed = false;
+  for (const path of paths) {
+    if (cache.delete(path)) changed = true;
+  }
+  if (changed) persistSignedUrlCache();
+}
+
 function safeFileName(name: string) {
   return name.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/-+/g, '-');
 }
@@ -302,7 +316,14 @@ async function createStereoPairBlob(leftSource: UploadImageSource, rightSource: 
 
 async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: AlbumRecord[]): Promise<GalleryPhoto[]> {
   const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
-  const signedUrls = await signStoragePaths(photoRows.map((photo) => photo.storage_path));
+
+  // Originals and thumbnails are signed in the same batch. A thumbnail that
+  // fails to sign costs nothing but the fallback to the original; the photo
+  // itself is never dropped over it.
+  const paths = photoRows.flatMap((photo) =>
+    photo.thumb_path ? [photo.storage_path, photo.thumb_path] : [photo.storage_path],
+  );
+  const signedUrls = await signStoragePaths(paths);
 
   return photoRows.flatMap((photo) => {
     const src = signedUrls.get(photo.storage_path);
@@ -315,10 +336,102 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       albumId: photo.album_id,
       eventId: albumEventIds.get(photo.album_id),
       storagePath: photo.storage_path,
+      thumbPath: photo.thumb_path ?? undefined,
+      thumbSrc: photo.thumb_path ? signedUrls.get(photo.thumb_path) : undefined,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: getFileExtension(photo.storage_path),
     }];
   });
+}
+
+/**
+ * Generates the grid thumbnail for an original that is already in hand.
+ * Never throws: a photo without a thumbnail renders from the original, whereas
+ * an upload that failed because of its thumbnail would be a lost photo.
+ */
+async function tryMakeThumbnail(source: Blob): Promise<SbsThumbnail | null> {
+  try {
+    return await makeSbsThumbnail(source);
+  } catch (error) {
+    console.warn('Thumbnail generation failed; the grid will use the original.', error);
+    return null;
+  }
+}
+
+/**
+ * Uploads a thumbnail beside its original and returns its path, or null if the
+ * upload failed. `upsert: true` because the path derives from the original's
+ * UUID path, so a regenerated thumbnail legitimately replaces the old one.
+ */
+async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail): Promise<string | null> {
+  const thumbPath = deriveThumbPath(storagePath, thumb.extension);
+  const { error } = await supabase.storage.from(PHOTOS_BUCKET).upload(thumbPath, thumb.blob, {
+    cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
+    contentType: thumb.blob.type,
+    upsert: true,
+  });
+  if (error) {
+    console.warn('Thumbnail upload failed; the grid will use the original.', error);
+    return null;
+  }
+  return thumbPath;
+}
+
+export interface PhotoMissingThumbnail {
+  id: string;
+  storage_path: string;
+}
+
+const PHOTO_PAGE_SIZE = 1000;
+
+/**
+ * Photos in the given albums that have no thumbnail yet, paged explicitly.
+ * PostgREST silently truncates at `max_rows = 1000`, so a single select would
+ * under-count a large album and the backfill would stop early.
+ */
+export async function fetchPhotosMissingThumbnails(albumIds: string[]): Promise<PhotoMissingThumbnail[]> {
+  if (albumIds.length === 0) return [];
+  const rows: PhotoMissingThumbnail[] = [];
+  for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('photos')
+      .select('id, storage_path')
+      .in('album_id', albumIds)
+      .is('thumb_path', null)
+      .order('id')
+      .range(from, from + PHOTO_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as PhotoMissingThumbnail[];
+    rows.push(...page);
+    if (page.length < PHOTO_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+/**
+ * Backfills one thumbnail: downloads the original through a signed URL,
+ * generates the thumb in the browser, uploads it and records the path. Runs
+ * as the owner, so RLS proves ownership; no service key leaves the server.
+ */
+export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Promise<void> {
+  const signed = await signStoragePaths([photo.storage_path]);
+  const url = signed.get(photo.storage_path);
+  if (!url) throw new Error('Original could not be signed');
+
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Original could not be downloaded (HTTP ${response.status})`);
+
+  const thumb = await makeSbsThumbnail(await response.blob());
+  const thumbPath = await uploadThumbnail(photo.storage_path, thumb);
+  if (!thumbPath) throw new Error('Thumbnail could not be uploaded');
+
+  const { data, error } = await supabase
+    .from('photos')
+    .update({ thumb_path: thumbPath })
+    .eq('id', photo.id)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
 
 export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
@@ -437,6 +550,7 @@ export async function uploadStereoPairPhoto({
   const baseName = safeFileName(alt || 'stereo-photo');
   const photoId = crypto.randomUUID();
   const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId);
+  const thumb = await tryMakeThumbnail(stereoBlob);
 
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
@@ -452,10 +566,13 @@ export async function uploadStereoPairPhoto({
     throw uploadResult.error;
   }
 
+  const thumbPath = thumb ? await uploadThumbnail(storagePath, thumb) : null;
+
   const insertResult = await supabase.from('photos').insert({
     id: photoId,
     album_id: albumId,
     storage_path: storagePath,
+    thumb_path: thumbPath,
     alt: baseName,
     file_modified_at: getSourceModifiedIso(leftSource) ?? getSourceModifiedIso(rightSource),
   });
@@ -481,6 +598,7 @@ export async function uploadSbsPhoto({
   const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-photo');
   const photoId = crypto.randomUUID();
   const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId);
+  const thumb = await tryMakeThumbnail(file);
 
   const uploadResult = await supabase.storage
     .from(PHOTOS_BUCKET)
@@ -494,10 +612,13 @@ export async function uploadSbsPhoto({
     throw uploadResult.error;
   }
 
+  const thumbPath = thumb ? await uploadThumbnail(storagePath, thumb) : null;
+
   const insertResult = await supabase.from('photos').insert({
     id: photoId,
     album_id: albumId,
     storage_path: storagePath,
+    thumb_path: thumbPath,
     alt: baseName,
     file_modified_at: getFileModifiedIso(file),
   });
@@ -846,18 +967,55 @@ export async function fetchPublicProfileBySlug(slug: string): Promise<SharedGall
   const galleryData = await fetchGalleryData(profile.id);
   return { ...galleryData, profile };
 }
+/** Storage `remove` takes a list; keep each call well under any practical limit. */
+const STORAGE_REMOVE_BATCH_SIZE = 100;
+
 async function removeStorageObjects(paths: string[]) {
-  if (paths.length === 0) return;
+  const unique = [...new Set(paths.filter(Boolean))];
+  if (unique.length === 0) return;
 
-  const { error } = await supabase.storage.from(PHOTOS_BUCKET).remove(paths);
-
-  if (error) {
-    throw error;
+  for (let offset = 0; offset < unique.length; offset += STORAGE_REMOVE_BATCH_SIZE) {
+    const { error } = await supabase.storage
+      .from(PHOTOS_BUCKET)
+      .remove(unique.slice(offset, offset + STORAGE_REMOVE_BATCH_SIZE));
+    if (error) throw error;
   }
+
+  forgetSignedPaths(unique);
 }
 
-export async function deletePhoto(photoId: string, storagePath: string): Promise<void> {
-  await removeStorageObjects([storagePath]);
+/**
+ * Every storage object belonging to photos in the given albums - originals and
+ * thumbnails - paged past PostgREST's `max_rows` cap so a large album is not
+ * silently half-deleted.
+ */
+async function collectPhotoObjectPaths(albumIds: string[]): Promise<string[]> {
+  if (albumIds.length === 0) return [];
+  const paths: string[] = [];
+  for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from('photos')
+      .select('storage_path, thumb_path')
+      .in('album_id', albumIds)
+      .order('id')
+      .range(from, from + PHOTO_PAGE_SIZE - 1);
+    if (error) throw error;
+    const page = (data ?? []) as Pick<PhotoRecord, 'storage_path' | 'thumb_path'>[];
+    for (const row of page) {
+      paths.push(row.storage_path);
+      if (row.thumb_path) paths.push(row.thumb_path);
+    }
+    if (page.length < PHOTO_PAGE_SIZE) break;
+  }
+  return paths;
+}
+
+export async function deletePhoto(
+  photoId: string,
+  storagePath: string,
+  thumbPath?: string | null,
+): Promise<void> {
+  await removeStorageObjects(thumbPath ? [storagePath, thumbPath] : [storagePath]);
 
   const { error } = await supabase.from('photos').delete().eq('id', photoId);
 
@@ -867,16 +1025,7 @@ export async function deletePhoto(photoId: string, storagePath: string): Promise
 }
 
 export async function deleteAlbumWithPhotos(albumId: string): Promise<void> {
-  const { data: photos, error: photosError } = await supabase
-    .from('photos')
-    .select('storage_path')
-    .eq('album_id', albumId);
-
-  if (photosError) {
-    throw photosError;
-  }
-
-  await removeStorageObjects(photos.map((photo) => photo.storage_path));
+  await removeStorageObjects(await collectPhotoObjectPaths([albumId]));
 
   const { error } = await supabase.from('albums').delete().eq('id', albumId);
 
@@ -895,20 +1044,7 @@ export async function deleteEventWithPhotos(eventId: string): Promise<void> {
     throw albumsError;
   }
 
-  const albumIds = albums.map((album) => album.id);
-
-  if (albumIds.length > 0) {
-    const { data: photos, error: photosError } = await supabase
-      .from('photos')
-      .select('storage_path')
-      .in('album_id', albumIds);
-
-    if (photosError) {
-      throw photosError;
-    }
-
-    await removeStorageObjects(photos.map((photo) => photo.storage_path));
-  }
+  await removeStorageObjects(await collectPhotoObjectPaths(albums.map((album) => album.id)));
 
   const { error } = await supabase.from('events').delete().eq('id', eventId);
 
@@ -942,30 +1078,55 @@ export async function movePhotos({
   if (!ownerId) throw new Error('Could not determine owner of photos.');
 
   // 2. Get source photo details
-  const { data: photos, error: photosError } = await supabase.from('photos').select('id, storage_path').in('id', photoIds);
+  const { data: photoRows, error: photosError } = await supabase
+    .from('photos')
+    .select('id, storage_path, thumb_path')
+    .in('id', photoIds);
 
   if (photosError) throw photosError;
+  const photos = (photoRows ?? []) as Pick<PhotoRecord, 'id' | 'storage_path' | 'thumb_path'>[];
   if (photos.length === 0) return;
 
-  // 3. Move each photo
+  // 3. Move each photo - the original and, when present, its thumbnail
   for (const photo of photos) {
     if (!photo.storage_path) continue;
 
-    const newStoragePath = photoObjectPath(ownerId, destinationEventId, destinationAlbumId, photo.id);
+    // Keep the original's extension rather than forcing `.jpg`: legacy admin
+    // uploads may be PNG/WebP, and the stored bytes do not change on a move.
+    const extension = getFileExtension(photo.storage_path) || 'jpg';
+    const newStoragePath = photoObjectPath(ownerId, destinationEventId, destinationAlbumId, photo.id, extension);
+    const newThumbPath = photo.thumb_path
+      ? deriveThumbPath(newStoragePath, (getFileExtension(photo.thumb_path) || 'webp') as ThumbExtension)
+      : null;
 
-    // 3a. Move file in storage
+    // 3a. Move files in storage
     const { error: moveError } = await supabase.storage.from(PHOTOS_BUCKET).move(photo.storage_path, newStoragePath);
-
     if (moveError) {
       throw new Error(`Failed to move file ${photo.id}: ${moveError.message}`);
     }
 
-    // 3b. Update database record
-    const { error: updateError } = await supabase.from('photos').update({ album_id: destinationAlbumId, storage_path: newStoragePath }).eq('id', photo.id);
+    if (photo.thumb_path && newThumbPath) {
+      const { error: thumbMoveError } = await supabase.storage.from(PHOTOS_BUCKET).move(photo.thumb_path, newThumbPath);
+      if (thumbMoveError) {
+        await supabase.storage.from(PHOTOS_BUCKET).move(newStoragePath, photo.storage_path);
+        throw new Error(`Failed to move thumbnail for ${photo.id}: ${thumbMoveError.message}`);
+      }
+    }
+
+    // 3b. Update database record; on failure put both objects back
+    const { error: updateError } = await supabase
+      .from('photos')
+      .update({ album_id: destinationAlbumId, storage_path: newStoragePath, thumb_path: newThumbPath })
+      .eq('id', photo.id);
 
     if (updateError) {
       await supabase.storage.from(PHOTOS_BUCKET).move(newStoragePath, photo.storage_path);
+      if (photo.thumb_path && newThumbPath) {
+        await supabase.storage.from(PHOTOS_BUCKET).move(newThumbPath, photo.thumb_path);
+      }
       throw new Error(`Failed to update database for photo ${photo.id}: ${updateError.message}`);
     }
+
+    forgetSignedPaths([photo.storage_path, ...(photo.thumb_path ? [photo.thumb_path] : [])]);
   }
 }
