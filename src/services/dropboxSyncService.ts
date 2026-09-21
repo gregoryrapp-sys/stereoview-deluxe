@@ -108,3 +108,24 @@ export function dropboxSyncStatus(albumId: string) {
 export function cancelDropboxSync(runId: string) {
   return invokeSync<{ runId: string; status: string }>({ action: 'cancel', runId });
 }
+
+export interface SyncApplyResponse {
+  runId: string;
+  status: 'applying' | 'verifying' | 'imported' | 'failed' | 'cancelled' | 'planned';
+  cursor: number;
+  total: number;
+  applied: SyncRunRecord['applied'];
+  errors: SyncRunRecord['errors'];
+  error?: string;
+  unresolvedCovers?: string[];
+}
+
+/**
+ * Executes one chunk of a planned run. The server does at most ~20 items or
+ * 80 seconds per call and returns its cursor; the caller loops while `status`
+ * is 'applying'. Every chunk commits, so an interrupted loop resumes from
+ * wherever it stopped.
+ */
+export function applyDropboxSync(runId: string, confirmation?: string) {
+  return invokeSync<SyncApplyResponse>({ action: 'apply', runId, confirmation });
+}

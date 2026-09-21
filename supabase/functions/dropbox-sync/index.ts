@@ -1,7 +1,16 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { corsHeaders } from "../_shared/cors.ts";
 import { type AdminClient, adminClient, userClient } from "../_shared/supabaseAdmin.ts";
-import { type DropboxEntry, isSharedLinkGone, listSharedFolder } from "../_shared/dropbox.ts";
+import {
+  downloadSharedFile,
+  type DropboxEntry,
+  dropboxContentHash,
+  getSharedFileThumbnail,
+  isSharedLinkGone,
+  isThumbnailUnsupported,
+  listSharedFolder,
+} from "../_shared/dropbox.ts";
+import { deriveThumbPath, photoObjectPath, type ThumbExtension } from "../_shared/photoPaths.ts";
 import {
   computeSyncPlan,
   DEFAULT_SYNC_OPTIONS,
@@ -9,6 +18,10 @@ import {
   type DropboxFileMeta,
   type Listing,
   type PlannedAddition,
+  type PlannedDeletion,
+  type PlannedRename,
+  type PlannedRestore,
+  type PlannedUpdate,
   type SyncPlan,
 } from "../_shared/syncPlan.ts";
 
@@ -43,6 +56,23 @@ const THUMB_BYTES_ESTIMATE = 90_000;
 const PLAN_TTL_MS = 60 * 60 * 1000;
 const DB_PAGE_SIZE = 1000;
 const ACTIVE_STATUSES = ["planned", "applying", "verifying"];
+
+// One `apply` call does at most this much, then returns its cursor and the
+// client calls again. Free-plan functions have a 150 s wall clock; 80 s of
+// work plus one stalled 40 s download still fits with room to persist state.
+const CHUNK_MAX_ITEMS = 20;
+const CHUNK_DEADLINE_MS = 80_000;
+const DOWNLOAD_TIMEOUT_MS = 40_000;
+const PHOTOS_BUCKET = "photos";
+/** Imported objects are write-once under a UUID path; cache them for a year. */
+const PHOTO_CACHE_CONTROL = "31536000";
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+};
 
 // deno-lint-ignore no-explicit-any
 type Row = Record<string, any>;
@@ -350,6 +380,471 @@ async function plan(req: Request, body: Row) {
 }
 
 // ---------------------------------------------------------------------------
+// apply
+// ---------------------------------------------------------------------------
+type PlanItem =
+  | { kind: "add"; item: PlannedAddition & { photoId: string } }
+  | { kind: "update"; item: PlannedUpdate }
+  | { kind: "rename"; item: PlannedRename }
+  | { kind: "restore"; item: PlannedRestore }
+  | { kind: "delete"; item: PlannedDeletion };
+
+/** Fixed order so `cursor` means the same thing on every call. */
+function flattenPlan(plan: StoredPlan): PlanItem[] {
+  return [
+    ...plan.additions.map((item) => ({ kind: "add", item }) as PlanItem),
+    ...plan.updates.map((item) => ({ kind: "update", item }) as PlanItem),
+    ...plan.renames.map((item) => ({ kind: "rename", item }) as PlanItem),
+    ...plan.restores.map((item) => ({ kind: "restore", item }) as PlanItem),
+    ...plan.deletions.map((item) => ({ kind: "delete", item }) as PlanItem),
+  ];
+}
+
+interface Applied {
+  added: number;
+  updated: number;
+  renamed: number;
+  restored: number;
+  deleted: number;
+  thumbsMissing: number;
+}
+
+interface ApplyError {
+  name: string;
+  fileId?: string;
+  stage: "download" | "verify" | "upload" | "thumb" | "db";
+  message: string;
+}
+
+class StageError extends Error {
+  constructor(readonly stage: ApplyError["stage"], message: string) {
+    super(message);
+  }
+}
+
+function extensionOf(name: string): string {
+  return (/\.([a-zA-Z0-9]+)$/.exec(name)?.[1] ?? "jpg").toLowerCase();
+}
+
+function baseName(name: string): string {
+  return name.replace(/\.[^.]+$/, "");
+}
+
+/**
+ * The service role bypasses the storage policy that pins every object under
+ * its owner's uid. This is the check that policy would have made.
+ */
+function assertOwnerPrefix(path: string, ownerId: string): void {
+  if (!path.startsWith(`${ownerId}/`)) {
+    throw new StageError("upload", `Refusing to write outside the owner's folder: ${path}`);
+  }
+}
+
+/**
+ * Downloads one file, proves it is the file Dropbox described, and stores it
+ * with its thumbnail. Idempotent: paths derive from the pre-assigned photo id,
+ * uploads upsert, and the row is upserted on id - so a retried chunk that
+ * already did this work simply does it again with the same result.
+ */
+async function importFile(
+  db: AdminClient,
+  album: AlbumContext,
+  photoId: string,
+  file: DropboxFileMeta,
+  thumbnailEligible: boolean,
+  applied: Applied,
+): Promise<{ storagePath: string; thumbPath: string | null }> {
+  const extension = extensionOf(file.name);
+  const storagePath = photoObjectPath(album.ownerId, album.eventId, album.albumId, photoId, extension);
+  assertOwnerPrefix(storagePath, album.ownerId);
+
+  // Download
+  let bytes: ArrayBuffer;
+  try {
+    const response = await downloadSharedFile(album.folderUrl, file.name, {
+      signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+    });
+    bytes = await response.arrayBuffer();
+  } catch (err) {
+    throw new StageError("download", err instanceof Error ? err.message : String(err));
+  }
+
+  // Verify: right length, and right bytes when Dropbox told us the hash.
+  if (file.size && bytes.byteLength !== file.size) {
+    throw new StageError("verify", `Downloaded ${bytes.byteLength} bytes, Dropbox reports ${file.size}`);
+  }
+  if (file.content_hash) {
+    const hash = await dropboxContentHash(bytes);
+    if (hash !== file.content_hash) {
+      throw new StageError("verify", "Content hash does not match Dropbox");
+    }
+  }
+
+  // Original
+  const { error: uploadError } = await db.storage.from(PHOTOS_BUCKET).upload(storagePath, bytes, {
+    contentType: MIME_BY_EXTENSION[extension] ?? "image/jpeg",
+    cacheControl: PHOTO_CACHE_CONTROL,
+    upsert: true,
+  });
+  if (uploadError) throw new StageError("upload", uploadError.message);
+
+  // Thumbnail, rendered by Dropbox. Never fatal: a missing thumb means the grid
+  // uses the original until the owner runs "Generate missing thumbnails".
+  let thumbPath: string | null = null;
+  if (thumbnailEligible) {
+    thumbPath = await importThumbnail(db, album, file, storagePath);
+    if (!thumbPath) applied.thumbsMissing += 1;
+  } else {
+    applied.thumbsMissing += 1;
+  }
+
+  return { storagePath, thumbPath };
+}
+
+async function importThumbnail(
+  db: AdminClient,
+  album: AlbumContext,
+  file: DropboxFileMeta,
+  storagePath: string,
+): Promise<string | null> {
+  for (const format of ["webp", "jpeg"] as const) {
+    try {
+      const response = await getSharedFileThumbnail(album.folderUrl, file.name, {
+        format,
+        signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+      });
+      const bytes = await response.arrayBuffer();
+      const extension: ThumbExtension = format === "webp" ? "webp" : "jpg";
+      const thumbPath = deriveThumbPath(storagePath, extension);
+      assertOwnerPrefix(thumbPath, album.ownerId);
+      const { error } = await db.storage.from(PHOTOS_BUCKET).upload(thumbPath, bytes, {
+        contentType: format === "webp" ? "image/webp" : "image/jpeg",
+        cacheControl: PHOTO_CACHE_CONTROL,
+        upsert: true,
+      });
+      if (error) {
+        console.warn(`dropbox-sync: thumbnail upload failed for ${file.name}: ${error.message}`);
+        return null;
+      }
+      return thumbPath;
+    } catch (err) {
+      // WebP output can be refused for some sources; JPEG is the retry. Anything
+      // the endpoint cannot render at all is not retried.
+      if (isThumbnailUnsupported(err) && format === "webp") continue;
+      console.warn(`dropbox-sync: thumbnail failed for ${file.name}:`, err instanceof Error ? err.message : err);
+      return null;
+    }
+  }
+  return null;
+}
+
+async function applyItem(
+  db: AdminClient,
+  album: AlbumContext,
+  entry: PlanItem,
+  applied: Applied,
+  now: string,
+): Promise<void> {
+  const rowFor = (photoId: string, file: DropboxFileMeta, paths: { storagePath: string; thumbPath: string | null }) => ({
+    id: photoId,
+    album_id: album.albumId,
+    storage_path: paths.storagePath,
+    thumb_path: paths.thumbPath,
+    alt: baseName(file.name),
+    file_modified_at: file.client_modified ?? null,
+    dropbox_file_id: file.id,
+    dropbox_name: file.name,
+    dropbox_rev: file.rev,
+    dropbox_content_hash: file.content_hash ?? null,
+    dropbox_size: file.size,
+    source_synced_at: now,
+    deleted_at: null,
+  });
+
+  const upsert = async (row: Row) => {
+    const { error } = await db.from("photos").upsert(row, { onConflict: "id" });
+    if (error) throw new StageError("db", error.message);
+  };
+
+  const update = async (photoId: string, patch: Row) => {
+    const { data, error } = await db.from("photos").update(patch).eq("id", photoId).select("id");
+    if (error) throw new StageError("db", error.message);
+    if (!data || data.length === 0) throw new StageError("db", "Photo row not found");
+  };
+
+  switch (entry.kind) {
+    case "add": {
+      const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied);
+      await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+      applied.added += 1;
+      return;
+    }
+    case "update": {
+      const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied);
+      await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+      applied.updated += 1;
+      return;
+    }
+    case "restore": {
+      if (entry.item.needsDownload) {
+        const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied);
+        await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+      } else {
+        await update(entry.item.photoId, {
+          deleted_at: null,
+          dropbox_name: entry.item.file.name,
+          dropbox_rev: entry.item.file.rev,
+          alt: baseName(entry.item.file.name),
+          source_synced_at: now,
+        });
+      }
+      applied.restored += 1;
+      return;
+    }
+    case "rename": {
+      await update(entry.item.photoId, {
+        dropbox_name: entry.item.file.name,
+        dropbox_rev: entry.item.file.rev,
+        alt: baseName(entry.item.file.name),
+        source_synced_at: now,
+      });
+      applied.renamed += 1;
+      return;
+    }
+    case "delete": {
+      // Soft. The object stays in Storage; Restore is one UPDATE away.
+      await update(entry.item.photoId, { deleted_at: now, source_synced_at: now });
+      applied.deleted += 1;
+      return;
+    }
+  }
+}
+
+/**
+ * Remaps covers that pointed at a Dropbox file NAME to the imported photo row.
+ * Unresolved names are returned, never nulled - the live-mode fallback still
+ * works for them if the album is flipped back.
+ */
+async function remapCovers(db: AdminClient, album: AlbumContext): Promise<string[]> {
+  const { data: rows } = await db
+    .from("photos")
+    .select("id, dropbox_name")
+    .eq("album_id", album.albumId)
+    .is("deleted_at", null)
+    .not("dropbox_name", "is", null);
+  const byName = new Map((rows ?? []).map((row) => [String(row.dropbox_name).toLowerCase(), row.id as string]));
+  const unresolved: string[] = [];
+
+  const resolve = (name: string | null): string | null | undefined => {
+    if (!name) return undefined;
+    const id = byName.get(name.toLowerCase());
+    if (!id) unresolved.push(name);
+    return id ?? undefined;
+  };
+
+  const albumCover = resolve(album.coverImageName);
+  if (albumCover) {
+    await db.from("albums").update({ cover_photo_id: albumCover, dropbox_cover_image_name: null }).eq("id", album.albumId);
+  }
+
+  const { data: events } = await db
+    .from("events")
+    .select("id, dropbox_cover_image_name")
+    .eq("dropbox_cover_album_id", album.albumId);
+  for (const event of events ?? []) {
+    const id = resolve(event.dropbox_cover_image_name);
+    if (id) {
+      await db
+        .from("events")
+        .update({ cover_photo_id: id, dropbox_cover_album_id: null, dropbox_cover_image_name: null })
+        .eq("id", event.id);
+    }
+  }
+
+  const { data: profiles } = await db
+    .from("profiles")
+    .select("id, dropbox_cover_image_name")
+    .eq("dropbox_cover_album_id", album.albumId);
+  for (const profile of profiles ?? []) {
+    const id = resolve(profile.dropbox_cover_image_name);
+    if (id) {
+      await db
+        .from("profiles")
+        .update({ cover_photo_id: id, dropbox_cover_album_id: null, dropbox_cover_image_name: null })
+        .eq("id", profile.id);
+    }
+  }
+
+  return unresolved;
+}
+
+/**
+ * The gate that flips import_state. All must hold:
+ *  1. no item errored;
+ *  2. the live synced-row count equals what the plan said would exist;
+ *  3. a sample of imported objects has the size Dropbox reported.
+ */
+async function verifyImport(
+  db: AdminClient,
+  album: AlbumContext,
+  plan: StoredPlan,
+  errors: ApplyError[],
+): Promise<string | null> {
+  if (errors.length > 0) {
+    return `${errors.length} ${errors.length === 1 ? "item" : "items"} failed; nothing was marked imported`;
+  }
+
+  const expected =
+    plan.additions.length + plan.updates.length + plan.renames.length + plan.restores.length + plan.unchanged;
+  const { count } = await db
+    .from("photos")
+    .select("id", { count: "exact", head: true })
+    .eq("album_id", album.albumId)
+    .is("deleted_at", null)
+    .not("dropbox_file_id", "is", null);
+  if (count !== expected) {
+    return `Expected ${expected} synced photos after applying, found ${count ?? "?"}`;
+  }
+
+  // Spot-check sizes: first, middle and last of what was downloaded.
+  const downloaded = [
+    ...plan.additions.map((a) => ({ photoId: a.photoId, file: a.file })),
+    ...plan.updates.map((u) => ({ photoId: u.photoId, file: u.file })),
+  ];
+  const picks = downloaded.length <= 3
+    ? downloaded
+    : [downloaded[0], downloaded[Math.floor(downloaded.length / 2)], downloaded[downloaded.length - 1]];
+
+  for (const pick of picks) {
+    const { data: row } = await db.from("photos").select("storage_path").eq("id", pick.photoId).maybeSingle();
+    if (!row?.storage_path) return `Imported row ${pick.photoId} has no storage path`;
+    const folder = row.storage_path.slice(0, row.storage_path.lastIndexOf("/"));
+    const name = row.storage_path.slice(row.storage_path.lastIndexOf("/") + 1);
+    const { data: objects } = await db.storage.from(PHOTOS_BUCKET).list(folder, { search: name });
+    const object = (objects ?? []).find((o) => o.name === name);
+    const size = Number((object?.metadata as Row | undefined)?.size ?? -1);
+    if (size !== pick.file.size) {
+      return `Stored object for ${pick.file.name} is ${size} bytes, Dropbox reports ${pick.file.size}`;
+    }
+  }
+
+  return null;
+}
+
+async function apply(req: Request, body: Row) {
+  const runId = body.runId as string | undefined;
+  if (!runId) throw new HttpError(400, "runId is required");
+
+  const db = adminClient();
+  const { data: run } = await db.from("sync_runs").select("*").eq("id", runId).maybeSingle();
+  if (!run) throw new HttpError(404, "Sync run not found.");
+
+  const album = await authorizeAlbum(req, run.album_id);
+  const respond = (status: string, extra: Row = {}) =>
+    json({ runId, status, cursor: run.cursor, total: run.total_items, applied: run.applied, errors: run.errors, ...extra }, 200);
+
+  if (!ACTIVE_STATUSES.includes(run.status)) return respond(run.status);
+
+  const plan = run.plan as StoredPlan;
+  const now = () => new Date().toISOString();
+
+  if (run.status === "planned") {
+    if (Date.now() - new Date(run.created_at).getTime() > PLAN_TTL_MS) {
+      await db.from("sync_runs").update({ status: "failed", error: "Plan expired before it was applied", finished_at: now(), updated_at: now() }).eq("id", runId);
+      throw new HttpError(409, "This plan is older than an hour. Plan again to pick up any changes.", { code: "plan_expired" });
+    }
+    if (plan.refusal?.code === "empty_listing") {
+      throw new HttpError(409, plan.refusal.message, { code: "refused" });
+    }
+    if (plan.requiresTypedConfirmation && !run.confirmed_at) {
+      const typed = String(body.confirmation ?? "").trim();
+      if (typed !== album.title.trim()) {
+        throw new HttpError(409, `This sync removes ${plan.deletions.length} photos. Type the album name to confirm.`, {
+          code: "confirmation_required",
+        });
+      }
+    }
+
+    // Only a FIRST import shows as 'importing'; a re-sync of an imported album
+    // keeps serving its rows while it runs.
+    if (album.importState !== "imported") {
+      await db.from("albums").update({ import_state: "importing" }).eq("id", album.albumId);
+    }
+    await db
+      .from("sync_runs")
+      .update({ status: "applying", confirmed_at: run.confirmed_at ?? (plan.requiresTypedConfirmation ? now() : null), updated_at: now() })
+      .eq("id", runId);
+    run.status = "applying";
+  }
+
+  const items = flattenPlan(plan);
+  let cursor = run.cursor as number;
+  const applied = run.applied as Applied;
+  const errors = run.errors as ApplyError[];
+  const started = Date.now();
+  let processed = 0;
+
+  while (cursor < items.length && processed < CHUNK_MAX_ITEMS && Date.now() - started < CHUNK_DEADLINE_MS) {
+    const entry = items[cursor];
+    try {
+      await applyItem(db, album, entry, applied, now());
+    } catch (err) {
+      // One bad file must not abandon the run. It is recorded, the item is
+      // skipped, and import_state will not flip while errors exist.
+      const file = "file" in entry.item ? entry.item.file : null;
+      errors.push({
+        name: file?.name ?? ("name" in entry.item ? entry.item.name : entry.kind),
+        fileId: file?.id,
+        stage: err instanceof StageError ? err.stage : "db",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    cursor += 1;
+    processed += 1;
+    // Durable progress after every item, so a killed isolate loses at most one.
+    await db.from("sync_runs").update({ cursor, applied, errors, updated_at: now() }).eq("id", runId);
+  }
+
+  if (cursor < items.length) {
+    return json({ runId, status: "applying", cursor, total: items.length, applied, errors }, 200);
+  }
+
+  // Everything attempted; verify before anything flips.
+  await db.from("sync_runs").update({ status: "verifying", updated_at: now() }).eq("id", runId);
+  const failure = await verifyImport(db, album, plan, errors);
+
+  if (failure) {
+    await db
+      .from("sync_runs")
+      .update({ status: "failed", error: failure, finished_at: now(), updated_at: now() })
+      .eq("id", runId);
+    // A failed FIRST import leaves the album live (nothing lost); a failed
+    // re-sync keeps the album imported and records the error.
+    await db
+      .from("albums")
+      .update({
+        import_state: album.importState === "imported" ? "imported" : "failed",
+        dropbox_last_sync_error: failure,
+      })
+      .eq("id", album.albumId);
+    return json({ runId, status: "failed", cursor, total: items.length, applied, errors, error: failure }, 200);
+  }
+
+  const unresolvedCovers = await remapCovers(db, album);
+  const finishedAt = now();
+  await db
+    .from("albums")
+    .update({ import_state: "imported", dropbox_last_synced_at: finishedAt, dropbox_last_sync_error: null })
+    .eq("id", album.albumId);
+  await db
+    .from("sync_runs")
+    .update({ status: "imported", finished_at: finishedAt, updated_at: finishedAt })
+    .eq("id", runId);
+
+  return json({ runId, status: "imported", cursor, total: items.length, applied, errors, unresolvedCovers }, 200);
+}
+
+// ---------------------------------------------------------------------------
 // status / cancel
 // ---------------------------------------------------------------------------
 async function status(req: Request, body: Row) {
@@ -379,7 +874,7 @@ async function cancel(req: Request, body: Row) {
   if (!run) throw new HttpError(404, "Sync run not found.");
 
   // Ownership is proven via the run's album, with the caller's own JWT.
-  await authorizeAlbum(req, run.album_id);
+  const album = await authorizeAlbum(req, run.album_id);
 
   if (!ACTIVE_STATUSES.includes(run.status)) {
     return json({ runId, status: run.status }, 200);
@@ -392,6 +887,13 @@ async function cancel(req: Request, body: Row) {
     .eq("id", runId)
     .in("status", ACTIVE_STATUSES);
   if (error) throw error;
+
+  // A cancelled FIRST import goes back to live streaming; rows already written
+  // stay (a later plan sees them as unchanged or as updates). A cancelled
+  // re-sync never left 'imported'.
+  if (album.importState === "importing") {
+    await db.from("albums").update({ import_state: "live" }).eq("id", album.albumId);
+  }
 
   return json({ runId, status: "cancelled" }, 200);
 }
@@ -415,9 +917,7 @@ serve(async (req) => {
       case "cancel":
         return await cancel(req, body);
       case "apply":
-        // Lands in the next release, once the plan/census has run against the
-        // real albums. Refusing loudly beats a half-implemented import.
-        return json({ error: "apply is not available in this release." }, 501);
+        return await apply(req, body);
       default:
         return json({ error: 'Invalid action. Use "validate", "plan", "status", "cancel" or "apply".' }, 400);
     }

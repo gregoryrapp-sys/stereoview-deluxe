@@ -26,6 +26,9 @@ import {
   deleteAlbumWithPhotos,
   deleteEventWithPhotos,
   deletePhoto,
+  fetchSoftDeletedPhotos,
+  restorePhoto,
+  type SoftDeletedPhoto,
   fetchGalleryData,
   movePhotos,
   GalleryData,
@@ -43,6 +46,8 @@ import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
+import DropboxSyncDialog from '@/components/DropboxSyncDialog';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -135,6 +140,9 @@ export default function EventAlbumManagement() {
   // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
   // to one album or to every upload album of an event.
   const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
+  const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
+  // Photos a Dropbox sync removed; restorable from the album page.
+  const [removedPhotos, setRemovedPhotos] = useState<SoftDeletedPhoto[]>([]);
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
@@ -377,7 +385,10 @@ export default function EventAlbumManagement() {
   }, [galleryData.photos]);
 
   const albumPhotos = selectedAlbum ? photosByAlbum[selectedAlbum.id] ?? [] : [];
-  const isDropboxAlbum = selectedAlbum?.source_type === 'dropbox';
+  // Live semantics: photos of an IMPORTED Dropbox album come from rows like
+  // any upload album. The folder URL field and the Sync button key on
+  // source_type instead.
+  const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
 
   const displayPhotos = useMemo(() => {
     if (isDropboxAlbum) {
@@ -609,6 +620,25 @@ export default function EventAlbumManagement() {
     setAlbumPasswordDirty(false);
   }, [selectedAlbum]);
 
+  // Sync-removed photos of an imported Dropbox album, for the Restore list.
+  useEffect(() => {
+    if (!selectedAlbum || selectedAlbum.source_type !== 'dropbox' || selectedAlbum.import_state !== 'imported') {
+      setRemovedPhotos([]);
+      return;
+    }
+    let cancelled = false;
+    fetchSoftDeletedPhotos(selectedAlbum.id)
+      .then((rows) => {
+        if (!cancelled) setRemovedPhotos(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setRemovedPhotos([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAlbum, galleryData.photos]);
+
   useEffect(() => {
     if (!isDropboxAlbum || !selectedAlbum?.dropbox_folder_url) {
       setDropboxPhotos([]);
@@ -779,7 +809,14 @@ export default function EventAlbumManagement() {
       setNewAlbumSourceType('upload');
       setNewAlbumDropboxUrl('');
       setIsAlbumDialogOpen(false);
-      toast({ title: 'Album created' });
+      toast(
+        newAlbumSourceType === 'dropbox'
+          ? {
+              title: 'Album created',
+              description: 'Open it and press "Import from Dropbox" to copy its photos into the app.',
+            }
+          : { title: 'Album created' },
+      );
       loadData();
     } catch (error) {
       console.error('Album creation failed:', error);
@@ -1155,7 +1192,7 @@ export default function EventAlbumManagement() {
                         <div>
                           <h3 className="truncate text-sm font-medium">{album.title}</h3>
                           <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-                            {album.source_type === 'dropbox' ? (
+                            {isLiveDropboxAlbum(album) ? (
                               <span className="flex items-center gap-1.5 font-medium text-sky-600 dark:text-sky-400">
                                 <Cloud className="h-3 w-3" />
                                 Dropbox Live
@@ -1218,6 +1255,64 @@ export default function EventAlbumManagement() {
                   <Input id="album-dropbox-url" value={albumDropboxUrl} onChange={(event) => setAlbumDropboxUrl(event.target.value)}
                     placeholder="Paste a public Dropbox folder link"
                   />
+                  {/* Import / re-sync. The button reads the SAVED folder URL; an
+                      edited-but-unsaved URL is not what gets synced. */}
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="gap-2"
+                      onClick={() => setIsSyncDialogOpen(true)}
+                      disabled={isSaving || !selectedAlbum.dropbox_folder_url}
+                    >
+                      <RefreshCw className="h-4 w-4" />
+                      {selectedAlbum.import_state === 'imported' ? 'Sync with Dropbox' : 'Import from Dropbox'}
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedAlbum.import_state === 'imported' && selectedAlbum.dropbox_last_synced_at
+                        ? `Serving from the app · last synced ${new Date(selectedAlbum.dropbox_last_synced_at).toLocaleString()}`
+                        : selectedAlbum.import_state === 'failed'
+                          ? `Last import failed: ${selectedAlbum.dropbox_last_sync_error ?? 'unknown error'}`
+                          : selectedAlbum.import_state === 'importing'
+                            ? 'Import in progress'
+                            : 'Streaming live from Dropbox - import to serve photos from the app'}
+                    </span>
+                  </div>
+                  {selectedAlbum.import_state === 'imported' && removedPhotos.length > 0 && (
+                    <div className="space-y-1.5 rounded-md border border-dashed p-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        Removed by sync ({removedPhotos.length}) - no longer in the Dropbox folder
+                      </p>
+                      <ul className="max-h-32 space-y-1 overflow-y-auto text-xs">
+                        {removedPhotos.map((photo) => (
+                          <li key={photo.id} className="flex items-center justify-between gap-2">
+                            <span className="truncate">{photo.dropbox_name ?? photo.alt}</span>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 px-2 text-xs"
+                              onClick={async () => {
+                                try {
+                                  await restorePhoto(photo.id);
+                                  setRemovedPhotos((list) => list.filter((p) => p.id !== photo.id));
+                                  loadData();
+                                } catch (error) {
+                                  toast({
+                                    title: 'Could not restore photo',
+                                    description: error instanceof Error ? error.message : 'Restore failed',
+                                    variant: 'destructive',
+                                  });
+                                }
+                              }}
+                            >
+                              Restore
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
                 
                 <div className="md:col-span-3">
@@ -1419,6 +1514,16 @@ export default function EventAlbumManagement() {
           eventId={selectedAlbumEvent.id}
           ownerId={selectedAlbumEvent.owner_id}
           onUploaded={loadData}
+        />
+      )}
+
+      {selectedAlbum && selectedAlbum.source_type === 'dropbox' && (
+        <DropboxSyncDialog
+          open={isSyncDialogOpen}
+          onOpenChange={setIsSyncDialogOpen}
+          albumId={selectedAlbum.id}
+          albumTitle={selectedAlbum.title}
+          onSynced={loadData}
         />
       )}
 

@@ -454,6 +454,40 @@ export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Prom
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
 
+export interface SoftDeletedPhoto {
+  id: string;
+  alt: string;
+  dropbox_name: string | null;
+  deleted_at: string;
+}
+
+/** Photos a Dropbox sync removed from the album. Their objects are still in Storage. */
+export async function fetchSoftDeletedPhotos(albumId: string): Promise<SoftDeletedPhoto[]> {
+  const { data, error } = await supabase
+    .from('photos')
+    .select('id, alt, dropbox_name, deleted_at')
+    .eq('album_id', albumId)
+    .not('deleted_at', 'is', null)
+    .order('deleted_at', { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return (data ?? []) as SoftDeletedPhoto[];
+}
+
+/**
+ * Undoes a sync removal. If the file is still absent from Dropbox, the next
+ * sync will list it as removed again - which is the honest outcome.
+ */
+export async function restorePhoto(photoId: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('photos')
+    .update({ deleted_at: null })
+    .eq('id', photoId)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) throw new Error('Photo could not be restored');
+}
+
 export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
   let query = supabase
     .from('events')

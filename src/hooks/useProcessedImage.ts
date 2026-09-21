@@ -9,6 +9,7 @@ import {
 } from '@/lib/imageProcessing';
 import type { DropboxFile, GalleryPhoto } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 
 interface UseProcessedImageResult {
   /** URL for the left half of the stereo image */
@@ -30,7 +31,9 @@ interface ProcessedImageOptions {
   eyes?: EyeSelection;
 }
 
-type SourceAlbum = Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
+type SourceAlbum =
+  | (Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> & { import_state?: AlbumRecord['import_state'] })
+  | null;
 
 function normalizePhoto(photo: ProcessablePhoto | string | null): ProcessablePhoto | null {
   // A bare string is a URL; treat it as a Supabase-style photo.
@@ -44,7 +47,9 @@ function normalizePhoto(photo: ProcessablePhoto | string | null): ProcessablePho
 }
 
 function dropboxFolderUrl(album: SourceAlbum): string | undefined {
-  return album?.source_type === 'dropbox' ? album.dropbox_folder_url ?? undefined : undefined;
+  // Imported albums have signed `src` URLs like uploads; only live albums go
+  // through the Dropbox proxy.
+  return isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
 }
 
 /**
