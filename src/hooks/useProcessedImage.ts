@@ -5,11 +5,13 @@ import {
   photoCacheKey,
   preloadStereoImages,
   type ProcessedStereoImage,
+  resolveAlignment,
   splitStereoImage,
 } from '@/lib/imageProcessing';
 import type { DropboxFile, GalleryPhoto } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
+import type { StereoAlignment } from '@/lib/stereoAlign/types';
 
 interface UseProcessedImageResult {
   /** URL for the left half of the stereo image */
@@ -22,6 +24,10 @@ interface UseProcessedImageResult {
   error: string | null;
   /** Dimensions of a single eye after downscaling */
   dimensions: { width: number; height: number } | null;
+  /** The alignment the split actually used (after clamping). */
+  appliedAlignment: StereoAlignment | null;
+  /** Output px per source px of one eye, for previewing nudges without a re-split. */
+  sourceScale: number | null;
 }
 
 type ProcessablePhoto = GalleryPhoto | DropboxFile;
@@ -29,6 +35,8 @@ type ProcessablePhoto = GalleryPhoto | DropboxFile;
 interface ProcessedImageOptions {
   /** `'left'` skips the right eye entirely - halves the work in portrait/2D mode. */
   eyes?: EyeSelection;
+  /** Overrides the photo's stored alignment (session swap, owner nudges). */
+  alignment?: StereoAlignment;
 }
 
 type SourceAlbum =
@@ -66,11 +74,12 @@ export function useProcessedImage(
   album: SourceAlbum,
   options: ProcessedImageOptions = {},
 ): UseProcessedImageResult {
-  const { eyes = 'both' } = options;
+  const { eyes = 'both', alignment: alignmentOverride } = options;
 
   const photoObject = normalizePhoto(photo);
   const folderUrl = dropboxFolderUrl(album);
-  const cacheKey = photoObject ? photoCacheKey(photoObject, eyes) : null;
+  const alignment = photoObject ? alignmentOverride ?? resolveAlignment(photoObject) : undefined;
+  const cacheKey = photoObject ? photoCacheKey(photoObject, eyes, alignment) : null;
 
   // Read through a ref so the effect can use the latest object without taking a
   // dependency on its identity.
@@ -80,7 +89,7 @@ export function useProcessedImage(
   // Seeding from the cache means a hit renders on the very first paint rather
   // than flashing a spinner and then swapping in.
   const [result, setResult] = useState<ProcessedStereoImage | null>(
-    () => (photoObject ? peekProcessedImage(photoObject, eyes) ?? null : null),
+    () => (photoObject ? peekProcessedImage(photoObject, eyes, alignment) ?? null : null),
   );
   const [isLoading, setIsLoading] = useState(() => (photoObject ? !result : false));
   const [error, setError] = useState<string | null>(null);
@@ -98,7 +107,11 @@ export function useProcessedImage(
     // A cache hit resolves synchronously. The previous implementation called
     // setIsLoading(true) and setResult(null) *before* awaiting, so even an
     // instant hit unmounted the image and flashed the loading state.
-    const hit = peekProcessedImage(current, eyes);
+    // The override is re-derived here rather than captured, so the effect keys
+    // on the string cacheKey (which already encodes it) and not on object identity.
+    const effectiveAlignment = alignmentOverride ?? resolveAlignment(current);
+
+    const hit = peekProcessedImage(current, eyes, effectiveAlignment);
     if (hit) {
       setResult(hit);
       setIsLoading(false);
@@ -111,7 +124,7 @@ export function useProcessedImage(
     setIsLoading(true);
     setError(null);
 
-    splitStereoImage(current, folderUrl, eyes)
+    splitStereoImage(current, folderUrl, eyes, { alignment: effectiveAlignment })
       .then((processed) => {
         if (cancelled) return;
         setResult(processed);
@@ -136,6 +149,8 @@ export function useProcessedImage(
     isLoading,
     error,
     dimensions: result ? { width: result.width, height: result.height } : null,
+    appliedAlignment: result?.alignment ?? null,
+    sourceScale: result?.sourceScale ?? null,
   };
 }
 

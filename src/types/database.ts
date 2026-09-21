@@ -49,6 +49,8 @@ export interface AlbumRecord {
   import_state: AlbumImportState;
   dropbox_last_synced_at: string | null;
   dropbox_last_sync_error: string | null;
+  /** The source camera writes right-eye-first; photos with lr_swapped null inherit this. */
+  lr_swapped_default: boolean;
   is_public: boolean;
   is_listed: boolean;
   password: string | null;
@@ -75,6 +77,16 @@ export interface PhotoRecord {
   source_synced_at: string | null;
   /** Soft delete by a Dropbox sync. Readers filter this null; restore is one update. */
   deleted_at: string | null;
+  /**
+   * Stereo alignment, applied at view time - see src/lib/stereoAlign/types.ts
+   * for the convention. Null = unknown; lr_swapped null inherits the album's
+   * lr_swapped_default; align_version 0 = set by hand.
+   */
+  align_dx: number | null;
+  align_dy: number | null;
+  lr_swapped: boolean | null;
+  align_version: number | null;
+  align_confidence: number | null;
 }
 
 export type SyncRunStatus = 'planned' | 'applying' | 'verifying' | 'imported' | 'failed' | 'cancelled';
@@ -161,6 +173,7 @@ export interface Database {
           source_type?: 'upload' | 'dropbox';
           dropbox_folder_url?: string | null;
           import_state?: AlbumImportState;
+          lr_swapped_default?: boolean;
           created_at?: string;
         };
         Update: Partial<Omit<AlbumRecord, 'id' | 'created_at'>>;
@@ -183,6 +196,11 @@ export interface Database {
           dropbox_size?: number | null;
           source_synced_at?: string | null;
           deleted_at?: string | null;
+          align_dx?: number | null;
+          align_dy?: number | null;
+          lr_swapped?: boolean | null;
+          align_version?: number | null;
+          align_confidence?: number | null;
         };
         Update: Partial<Omit<PhotoRecord, 'id' | 'created_at'>>;
       };

@@ -425,6 +425,13 @@ async function gallery(
       storagePath: photo.storage_path,
       thumbPath: photo.thumb_path ?? undefined,
       thumbSrc: photo.thumb_path ? signed.get(photo.thumb_path) : undefined,
+      // Raw alignment columns; the client resolves them against the album's
+      // lr_swapped_default with the same helper the PostgREST path uses.
+      alignDx: photo.align_dx ?? null,
+      alignDy: photo.align_dy ?? null,
+      lrSwapped: photo.lr_swapped ?? null,
+      alignVersion: photo.align_version ?? null,
+      alignConfidence: photo.align_confidence ?? null,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: (/\.([a-zA-Z0-9]+)$/.exec(photo.storage_path)?.[1] ?? "").toLowerCase(),
     }];
