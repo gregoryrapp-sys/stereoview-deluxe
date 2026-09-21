@@ -417,6 +417,7 @@ export async function fetchPhotosMissingThumbnails(albumIds: string[]): Promise<
       .select('id, storage_path')
       .in('album_id', albumIds)
       .is('thumb_path', null)
+      .is('deleted_at', null)
       .order('id')
       .range(from, from + PHOTO_PAGE_SIZE - 1);
     if (error) throw error;
@@ -485,10 +486,13 @@ export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
     return { events, albums, photos: [] };
   }
 
+  // Soft-deleted rows (a Dropbox sync found the file gone) stay out of every
+  // gallery; their storage objects remain for Restore.
   const { data: photoRows, error: photosError } = await supabase
     .from('photos')
     .select('*')
     .in('album_id', albumIds)
+    .is('deleted_at', null)
     .order('sort_order', { ascending: true })
     .order('created_at', { ascending: true });
 
@@ -1021,7 +1025,11 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
   const photoIds = profiles.map((p) => p.cover_photo_id).filter((id): id is string => !!id);
   const albumIds = profiles.map((p) => p.dropbox_cover_album_id).filter((id): id is string => !!id);
 
-  const { data: photos, error: photosError } = await supabase.from('photos').select('*').in('id', photoIds);
+  const { data: photos, error: photosError } = await supabase
+    .from('photos')
+    .select('*')
+    .in('id', photoIds)
+    .is('deleted_at', null);
   if (photosError) throw photosError;
 
   const { data: albums, error: albumsError } = await supabase.from('albums').select('*').in('id', albumIds);

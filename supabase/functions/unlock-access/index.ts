@@ -425,16 +425,25 @@ async function gallery(
     }
   }
 
+  // Soft-deleted rows (a Dropbox sync found the file gone) are invisible here,
+  // exactly as in fetchGalleryData; their objects stay for Restore.
   const { data: photoRows } = unlockedAlbumIds.size
     ? await db
         .from("photos")
         .select("*")
         .in("album_id", [...unlockedAlbumIds])
+        .is("deleted_at", null)
         .order("sort_order", { ascending: true })
         .order("created_at", { ascending: true })
     : { data: [] as Row[] };
 
-  const paths = (photoRows ?? []).map((photo) => photo.storage_path as string);
+  // Originals and thumbnails signed in the same batches; a thumbnail that fails
+  // to sign only costs the fallback to the original.
+  const paths = (photoRows ?? []).flatMap((photo) =>
+    photo.thumb_path
+      ? [photo.storage_path as string, photo.thumb_path as string]
+      : [photo.storage_path as string],
+  );
   const signed = new Map<string, string>();
 
   for (let offset = 0; offset < paths.length; offset += 500) {
@@ -460,6 +469,8 @@ async function gallery(
       albumId: photo.album_id,
       eventId: albumEventIds.get(String(photo.album_id)),
       storagePath: photo.storage_path,
+      thumbPath: photo.thumb_path ?? undefined,
+      thumbSrc: photo.thumb_path ? signed.get(photo.thumb_path) : undefined,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: (/\.([a-zA-Z0-9]+)$/.exec(photo.storage_path)?.[1] ?? "").toLowerCase(),
     }];
