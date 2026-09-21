@@ -498,6 +498,52 @@ export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Prom
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
 
+export interface PhotoForAlignment {
+  id: string;
+  album_id: string;
+  storage_path: string;
+  lr_swapped: boolean | null;
+  align_version: number | null;
+}
+
+/**
+ * Photos to run the estimator over. By default only rows with nothing stored;
+ * `includeAligned` re-runs estimator results too but never touches manual
+ * (version 0) ones unless `includeManual` is set.
+ */
+export async function fetchPhotosForAlignment(
+  albumIds: string[],
+  options: { includeAligned?: boolean; includeManual?: boolean } = {},
+): Promise<PhotoForAlignment[]> {
+  if (albumIds.length === 0) return [];
+  const rows: PhotoForAlignment[] = [];
+  for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
+    let query = supabase
+      .from('photos')
+      .select('id, album_id, storage_path, lr_swapped, align_version')
+      .in('album_id', albumIds)
+      .is('deleted_at', null)
+      .order('id')
+      .range(from, from + PHOTO_PAGE_SIZE - 1);
+    if (!options.includeAligned) query = query.is('align_version', null);
+    else if (!options.includeManual) query = query.or('align_version.is.null,align_version.gt.0');
+    const { data, error } = await query;
+    if (error) throw error;
+    const page = (data ?? []) as PhotoForAlignment[];
+    rows.push(...page);
+    if (page.length < PHOTO_PAGE_SIZE) break;
+  }
+  return rows;
+}
+
+/** Signs one original for a client-side pass (thumbnail backfill, alignment). */
+export async function signedOriginalUrl(storagePath: string): Promise<string> {
+  const signed = await signStoragePaths([storagePath]);
+  const url = signed.get(storagePath);
+  if (!url) throw new Error('Original could not be signed');
+  return url;
+}
+
 export interface SoftDeletedPhoto {
   id: string;
   alt: string;
@@ -705,18 +751,28 @@ export async function uploadStereoPairPhoto({
   }
 }
 
+/** An estimator result worth storing with a new photo. */
+export interface StoredAlignmentEstimate {
+  alignment: StereoAlignment;
+  version: number;
+  confidence: number;
+}
+
 export async function uploadSbsPhoto({
   albumId,
   eventId,
   ownerId,
   file,
   alt,
+  alignment = null,
 }: {
   albumId: string;
   eventId: string;
   ownerId: string;
   file: File;
   alt: string;
+  /** Computed in the browser before upload; null stores nothing (unknown). */
+  alignment?: StoredAlignmentEstimate | null;
 }): Promise<void> {
   const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-photo');
   const photoId = crypto.randomUUID();
@@ -744,6 +800,15 @@ export async function uploadSbsPhoto({
     thumb_path: thumbPath,
     alt: baseName,
     file_modified_at: getFileModifiedIso(file),
+    ...(alignment
+      ? {
+          align_dx: Math.round(alignment.alignment.dx),
+          align_dy: Math.round(alignment.alignment.dy),
+          lr_swapped: alignment.alignment.swapped,
+          align_version: alignment.version,
+          align_confidence: alignment.confidence,
+        }
+      : {}),
   });
 
   if (insertResult.error) {

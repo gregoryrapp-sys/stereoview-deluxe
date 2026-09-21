@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   FolderOpen,
   ImagePlus,
+  Crosshair,
   ImageDown,
   Images,
   Plus,
@@ -47,6 +48,7 @@ import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
+import AutoAlignDialog from '@/components/AutoAlignDialog';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -140,6 +142,7 @@ export default function EventAlbumManagement() {
   // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
   // to one album or to every upload album of an event.
   const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
+  const [autoAlignScope, setAutoAlignScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
   // The camera behind this album writes right-eye-first; photos without their
   // own setting are displayed with the halves exchanged.
@@ -1170,6 +1173,23 @@ export default function EventAlbumManagement() {
                     Generate missing thumbnails
                   </Button>
                 )}
+                {eventAlbums.some((album) => album.source_type === 'upload' || album.import_state === 'imported') && (
+                  <Button
+                    variant="ghost"
+                    className="gap-2"
+                    onClick={() =>
+                      setAutoAlignScope({
+                        albumIds: eventAlbums
+                          .filter((album) => album.source_type === 'upload' || album.import_state === 'imported')
+                          .map((album) => album.id),
+                        label: `every album in ${selectedEvent.title}`,
+                      })
+                    }
+                  >
+                    <Crosshair className="h-4 w-4" />
+                    Auto-align
+                  </Button>
+                )}
                 <Button onClick={() => setIsAlbumDialogOpen(true)} variant="secondary" className="gap-2">
                   <Plus className="h-4 w-4" />
                   Add Album
@@ -1381,6 +1401,15 @@ export default function EventAlbumManagement() {
                         <ImageDown className="h-4 w-4" />
                         Generate missing thumbnails
                       </Button>
+                      <Button
+                        variant="ghost"
+                        className="gap-2"
+                        onClick={() => setAutoAlignScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
+                        disabled={isSaving}
+                      >
+                        <Crosshair className="h-4 w-4" />
+                        Auto-align
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -1534,6 +1563,7 @@ export default function EventAlbumManagement() {
           albumTitle={selectedAlbum.title}
           eventId={selectedAlbumEvent.id}
           ownerId={selectedAlbumEvent.owner_id}
+          albumSwappedDefault={selectedAlbum.lr_swapped_default ?? false}
           onUploaded={loadData}
         />
       )}
@@ -1545,6 +1575,19 @@ export default function EventAlbumManagement() {
           albumId={selectedAlbum.id}
           albumTitle={selectedAlbum.title}
           onSynced={loadData}
+        />
+      )}
+
+      {autoAlignScope && (
+        <AutoAlignDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setAutoAlignScope(null);
+          }}
+          albumIds={autoAlignScope.albumIds}
+          scopeLabel={autoAlignScope.label}
+          albumSwapDefaults={Object.fromEntries(galleryData.albums.map((album) => [album.id, !!album.lr_swapped_default]))}
+          onAligned={loadData}
         />
       )}
 
