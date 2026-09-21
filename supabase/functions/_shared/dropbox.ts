@@ -167,7 +167,7 @@ export async function dropboxRpc<T>(path: string, body: unknown): Promise<T> {
  * with accents or CJK characters break the request otherwise, so escape
  * everything above U+007F into JSON \uXXXX form.
  */
-function toApiArg(value: unknown): string {
+export function toApiArg(value: unknown): string {
   return JSON.stringify(value).replace(
     /[-￿]/g,
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
@@ -235,11 +235,79 @@ export async function getSharedLinkMetadata(
 export async function downloadSharedFile(
   folderUrl: string,
   fileName: string,
+  init: { signal?: AbortSignal } = {},
 ): Promise<Response> {
   return await dropboxFetch(`${CONTENT_ENDPOINT}/sharing/get_shared_link_file`, {
     method: "POST",
     headers: {
       "Dropbox-API-Arg": toApiArg({ url: folderUrl, path: `/${fileName}` }),
     },
+    signal: init.signal,
   });
+}
+
+export type DropboxThumbnailFormat = "webp" | "jpeg" | "png";
+
+/**
+ * Asks Dropbox to render a thumbnail of a file in a shared folder.
+ *
+ * This is how imported photos get their grid thumbnail without the edge
+ * function ever decoding pixels: Dropbox scales the whole side-by-side image
+ * to fit `size` (bestfit -> 1024x512 for a 2:1 SBS at w1024h768) and streams
+ * it back. Sources above ~20 MB and non-image types are refused; see
+ * `isThumbnailUnsupported`.
+ */
+export async function getSharedFileThumbnail(
+  folderUrl: string,
+  fileName: string,
+  options: { format?: DropboxThumbnailFormat; size?: string; signal?: AbortSignal } = {},
+): Promise<Response> {
+  const { format = "webp", size = "w1024h768", signal } = options;
+  return await dropboxFetch(`${CONTENT_ENDPOINT}/files/get_thumbnail_v2`, {
+    method: "POST",
+    headers: {
+      "Dropbox-API-Arg": toApiArg({
+        resource: { ".tag": "link", url: folderUrl, path: `/${fileName}` },
+        format,
+        size,
+        mode: "bestfit",
+      }),
+    },
+    signal,
+  });
+}
+
+/** True when the thumbnail endpoint cannot serve this file at all; retrying is pointless. */
+export function isThumbnailUnsupported(err: unknown): boolean {
+  return (
+    err instanceof DropboxError &&
+    /unsupported_extension|unsupported_image|conversion_error|unsupported_output_format/.test(err.body)
+  );
+}
+
+/** Revoked or never-shared link, or the folder was moved. Reported, never retried. */
+export function isSharedLinkGone(err: unknown): boolean {
+  return err instanceof DropboxError && /shared_link_not_found|shared_link_access_denied/.test(err.body);
+}
+
+/**
+ * Dropbox's content_hash: SHA-256 over each 4 MiB block, then SHA-256 of the
+ * concatenated block digests, hex. Lets the importer prove it stored the same
+ * bytes Dropbox holds, not merely the same number of them.
+ */
+export async function dropboxContentHash(buffer: ArrayBuffer): Promise<string> {
+  const BLOCK = 4 * 1024 * 1024;
+  const digests: Uint8Array[] = [];
+  for (let offset = 0; offset < buffer.byteLength; offset += BLOCK) {
+    const block = buffer.slice(offset, Math.min(offset + BLOCK, buffer.byteLength));
+    digests.push(new Uint8Array(await crypto.subtle.digest("SHA-256", block)));
+  }
+  const joined = new Uint8Array(digests.reduce((n, d) => n + d.byteLength, 0));
+  let cursor = 0;
+  for (const digest of digests) {
+    joined.set(digest, cursor);
+    cursor += digest.byteLength;
+  }
+  const final = new Uint8Array(await crypto.subtle.digest("SHA-256", joined));
+  return Array.from(final).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
