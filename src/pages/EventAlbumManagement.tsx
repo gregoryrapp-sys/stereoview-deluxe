@@ -1291,34 +1291,41 @@ export default function EventAlbumManagement() {
                     </p>
                   </div>
                 </div>
-                <div className={`space-y-2 ${selectedAlbum.source_type === 'dropbox' ? '' : 'hidden'}`}>
+                {/* Spans the two field columns (under Name / Description) so the
+                    URL has room, with the Import / Sync button beside it. The
+                    button reads the SAVED folder URL; an edited-but-unsaved URL is
+                    not what gets synced. */}
+                <div className={`space-y-2 md:col-span-2 md:col-start-2 ${selectedAlbum.source_type === 'dropbox' ? '' : 'hidden'}`}>
                   <Label htmlFor="album-dropbox-url">Dropbox Folder URL</Label>
-                  <Input id="album-dropbox-url" value={albumDropboxUrl} onChange={(event) => setAlbumDropboxUrl(event.target.value)}
-                    placeholder="Paste a public Dropbox folder link"
-                  />
-                  {/* Import / re-sync. The button reads the SAVED folder URL; an
-                      edited-but-unsaved URL is not what gets synced. */}
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      id="album-dropbox-url"
+                      className="min-w-[16rem] flex-1"
+                      value={albumDropboxUrl}
+                      onChange={(event) => setAlbumDropboxUrl(event.target.value)}
+                      placeholder="Paste a public Dropbox folder link"
+                    />
                     <Button
                       type="button"
                       variant="secondary"
-                      className="gap-2"
+                      className="shrink-0 gap-2"
                       onClick={() => setIsSyncDialogOpen(true)}
                       disabled={isSaving || !selectedAlbum.dropbox_folder_url}
                     >
                       <RefreshCw className="h-4 w-4" />
                       {selectedAlbum.import_state === 'imported' ? 'Sync with Dropbox' : 'Import from Dropbox'}
                     </Button>
-                    <span className="text-xs text-muted-foreground">
-                      {selectedAlbum.import_state === 'imported' && selectedAlbum.dropbox_last_synced_at
-                        ? `Serving from the app · last synced ${new Date(selectedAlbum.dropbox_last_synced_at).toLocaleString()}`
-                        : selectedAlbum.import_state === 'failed'
-                          ? `Last import failed: ${selectedAlbum.dropbox_last_sync_error ?? 'unknown error'}`
-                          : selectedAlbum.import_state === 'importing'
-                            ? 'Import in progress'
-                            : 'Streaming live from Dropbox - import to serve photos from the app'}
-                    </span>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    {selectedAlbum.import_state === 'imported' && selectedAlbum.dropbox_last_synced_at
+                      ? `Serving from the app · last synced ${new Date(selectedAlbum.dropbox_last_synced_at).toLocaleString()}`
+                      : selectedAlbum.import_state === 'failed'
+                        ? `Last import failed: ${selectedAlbum.dropbox_last_sync_error ?? 'unknown error'}`
+                        : selectedAlbum.import_state === 'importing'
+                          ? 'Import in progress'
+                          : 'Streaming live from Dropbox - import to serve photos from the app'}
+                    {albumDropboxUrl !== (selectedAlbum.dropbox_folder_url ?? '') && ' · Save to use the new link'}
+                  </p>
                   {selectedAlbum.import_state === 'imported' && removedPhotos.length > 0 && (
                     <div className="space-y-1.5 rounded-md border border-dashed p-2">
                       <p className="text-xs font-medium text-muted-foreground">
