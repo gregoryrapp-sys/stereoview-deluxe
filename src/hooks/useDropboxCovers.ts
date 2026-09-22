@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AlbumRecord, EventRecord } from '@/types/database';
-import { fetchDropboxPhoto, fetchDropboxPhotos } from '@/services/galleryService';
+import { fetchDropboxFolderCover, fetchDropboxPhoto } from '@/services/galleryService';
 import type { DropboxCoverMap } from '@/lib/galleryUtils';
 
 /**
@@ -21,6 +21,19 @@ export function useDropboxCovers(
 ): { dropboxCoverUrls: DropboxCoverMap; setDropboxCoverUrls: React.Dispatch<React.SetStateAction<DropboxCoverMap>> } {
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<DropboxCoverMap>({});
 
+  // Every effect below re-runs on `dropboxCoverUrls` and selects its work with
+  // `!dropboxCoverUrls[key]`. A fetch that FAILS never writes that key, so a
+  // sibling's success re-renders and re-fires the failure immediately, with no
+  // backoff - the worst possible behaviour during the Dropbox 429 episode these
+  // effects can themselves cause. This ref makes each key at-most-once per
+  // mount, so the effects converge instead of drumming on a rate-limited API.
+  const attempted = useRef<Set<string>>(new Set());
+  const claim = (key: string): boolean => {
+    if (attempted.current.has(key)) return false;
+    attempted.current.add(key);
+    return true;
+  };
+
   useEffect(() => {
     if (!albumCoverSources || albumCoverSources.length === 0) return;
 
@@ -29,7 +42,8 @@ export function useDropboxCovers(
         album.source_type === 'dropbox' &&
         album.dropbox_cover_image_name &&
         album.dropbox_folder_url &&
-        !dropboxCoverUrls[album.id],
+        !dropboxCoverUrls[album.id] &&
+        claim(`album:${album.id}`),
     );
 
     if (coversToFetch.length === 0) return;
@@ -62,7 +76,9 @@ export function useDropboxCovers(
   useEffect(() => {
     if (!events || events.length === 0) return;
 
-    const eventsToFindCoversFor = events.filter((e) => !e.cover_photo_id && !dropboxCoverUrls[`event:${e.id}`]);
+    const eventsToFindCoversFor = events.filter(
+      (e) => !e.cover_photo_id && !dropboxCoverUrls[`event:${e.id}`] && claim(`event:${e.id}`),
+    );
 
     if (eventsToFindCoversFor.length === 0) return;
 
@@ -73,9 +89,9 @@ export function useDropboxCovers(
             (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
           );
           if (!dropboxAlbum) return null;
-          const photos = await fetchDropboxPhotos(dropboxAlbum.dropbox_folder_url!);
-          if (photos.length > 0) {
-            return { eventId: event.id, src: photos[0].src, name: photos[0].name };
+          const photo = await fetchDropboxFolderCover(dropboxAlbum.dropbox_folder_url!);
+          if (photo) {
+            return { eventId: event.id, src: photo.src, name: photo.name };
           }
           return null;
         }),
@@ -105,7 +121,8 @@ export function useDropboxCovers(
       (event) =>
         event.dropbox_cover_album_id &&
         event.dropbox_cover_image_name &&
-        !dropboxCoverUrls[`event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`],
+        !dropboxCoverUrls[`event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`] &&
+        claim(`event-cover:${event.dropbox_cover_album_id}:${event.dropbox_cover_image_name}`),
     );
 
     if (coversToFetch.length === 0) return;
