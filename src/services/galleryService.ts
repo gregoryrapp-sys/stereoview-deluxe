@@ -1,4 +1,5 @@
 import type { Photo } from '@/data/photos';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
 import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
 
@@ -536,7 +537,10 @@ export async function updateEvent({
     privacyUpdate.password = null;
   }
 
-  const { error } = await supabase
+  // `.select('id')` is what makes an RLS rejection visible. Postgres does not
+  // raise when a policy denies an UPDATE - it matches zero rows and reports
+  // success - so without this a save that never happened still toasts "saved".
+  const { data, error } = await supabase
     .from('events')
     .update({
       title,
@@ -545,10 +549,17 @@ export async function updateEvent({
       ...coverUpdate,
       ...privacyUpdate,
     })
-    .eq('id', eventId);
+    .eq('id', eventId)
+    .select('id');
 
   if (error) {
     throw error;
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Event could not be saved. You may not have permission to update this event.',
+    );
   }
 }
 
@@ -592,7 +603,10 @@ export async function updateAlbum({
     privacyUpdate.password = null;
   }
 
-  const { error } = await supabase
+  // `.select('id')` is what makes an RLS rejection visible. Postgres does not
+  // raise when a policy denies an UPDATE - it matches zero rows and reports
+  // success - so without this a save that never happened still toasts "saved".
+  const { data, error } = await supabase
     .from('albums')
     .update({
       title: title,
@@ -602,10 +616,17 @@ export async function updateAlbum({
       ...coverUpdate,
       ...privacyUpdate,
     })
-    .eq('id', albumId);
+    .eq('id', albumId)
+    .select('id');
 
   if (error) {
     throw error;
+  }
+
+  if (!data || data.length === 0) {
+    throw new Error(
+      'Album could not be saved. You may not have permission to update this album.',
+    );
   }
 }
 
@@ -693,7 +714,25 @@ export async function hashPassword(password: string): Promise<string> {
   });
 
   if (error) {
-    throw new Error(`Password hashing failed: ${error.message}`);
+    // supabase-js collapses every non-2xx into "Edge Function returned a
+    // non-2xx status code" and parks the real Response on `error.context`.
+    // The function always answers with `{ error: string }`, and that message
+    // ("Authentication required.", "Worker is not defined", ...) is what tells
+    // the owner - and us - what actually went wrong.
+    let detail = error.message;
+    if (error instanceof FunctionsHttpError) {
+      const response = error.context as Response;
+      try {
+        const body = await response.json();
+        detail = typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`;
+      } catch {
+        detail = `HTTP ${response.status}`;
+      }
+      if (response.status === 401) {
+        detail = 'Your session has expired. Please sign in again.';
+      }
+    }
+    throw new Error(`Could not set PIN: ${detail}`);
   }
   if (!data || !data.hash) {
     throw new Error('Password service did not return a hash.');
