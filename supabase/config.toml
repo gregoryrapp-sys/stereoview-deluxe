@@ -409,6 +409,11 @@ verify_jwt = false
 [functions.unlock-access]
 verify_jwt = false
 
+# Dropbox import / re-sync. Owner-only: the function additionally calls
+# auth.getUser() and reads the album through RLS before any service-role write.
+[functions.dropbox-sync]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

@@ -3,8 +3,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 // Web Worker, which the Supabase edge runtime does not provide, so they throw
 // "Worker is not defined" at runtime.
 import * as bcrypt from "https://deno.land/x/bcrypt@v0.4.1/mod.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.107.0";
 import { corsHeaders } from "../_shared/cors.ts";
+import { adminClient } from "../_shared/supabaseAdmin.ts";
 
 /**
  * PIN unlock and public-gallery serving for profiles, events and albums.
@@ -80,55 +80,9 @@ function json(body: unknown, status: number) {
   });
 }
 
-function requireEnv(name: string): string {
-  const value = Deno.env.get(name);
-  if (!value) throw new Error(`Missing required environment variable: ${name}`);
-  return value;
-}
-
-/**
- * Resolves the service-role credential.
- *
- * Prefers the bare SUPABASE_SERVICE_ROLE_KEY. It is marked deprecated in the
- * dashboard, but it is unambiguous and still injected, whereas
- * SUPABASE_SECRET_KEYS is a JSON dictionary whose shape is not guaranteed.
- * Guessing an entry out of that dictionary is the worse default by far: picking
- * a publishable key instead of a secret one would not raise anything. The client
- * would simply be subject to RLS, every private row would come back invisible,
- * and a correctly entered PIN would report "not found" - a misconfiguration that
- * looks exactly like a broken feature.
- */
-function serviceKey(): string {
-  const legacy = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (legacy) return legacy;
-
-  const dict = Deno.env.get("SUPABASE_SECRET_KEYS");
-  if (!dict) {
-    throw new Error(
-      "No service credential: set SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEYS",
-    );
-  }
-
-  let parsed: Record<string, string>;
-  try {
-    parsed = JSON.parse(dict);
-  } catch {
-    return dict.trim(); // Already a bare key.
-  }
-
-  const entries = Object.entries(parsed).filter(([, value]) => typeof value === "string" && value);
-  const preferred =
-    entries.find(([name]) => /secret|service/i.test(name)) ?? entries[0];
-
-  if (!preferred) throw new Error("SUPABASE_SECRET_KEYS contained no usable key");
-  return preferred[1];
-}
-
-function admin() {
-  return createClient(requireEnv("SUPABASE_URL"), serviceKey(), {
-    auth: { persistSession: false },
-  });
-}
+// Service-role client; credential resolution (and why the bare
+// SUPABASE_SERVICE_ROLE_KEY is preferred) is documented in _shared/supabaseAdmin.ts.
+const admin = adminClient;
 
 function newToken(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(32)))
