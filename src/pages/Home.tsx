@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, User } from 'lucide-react';
+import { Camera, Lock, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -115,7 +115,7 @@ export default function Home() {
         <div>
           <h1 className="text-3xl font-light tracking-wide">Stereo Photos</h1>
           <p className="text-sm text-muted-foreground">
-            {isLoading ? 'Loading public pages...' : 'Browse public photographer pages'}
+            {isLoading ? 'Loading photographer pages...' : 'Browse photographer pages'}
           </p>
         </div>
         {isAuthenticated ? (
@@ -154,7 +154,7 @@ export default function Home() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {!isLoading && sortedPhotographers.length === 0 && (
           <div className="rounded-md border border-border p-8 text-center text-sm text-muted-foreground sm:col-span-2 lg:col-span-3">
-            No public photographer pages are available yet.
+            No photographer pages are available yet.
           </div>
         )}
 
@@ -162,7 +162,14 @@ export default function Home() {
           <Link key={photographer.id} to={`/${photographer.slug}`}>
             <Card className="overflow-hidden transition-colors hover:bg-accent">
               <div className="aspect-[3/2] bg-secondary">
-                {photographer.coverPhoto?.src ? (
+                {photographer.locked ? (
+                  // Private but listed: the directory function withholds the
+                  // cover, so a lock stands in for it.
+                  <div className="flex h-full w-full flex-col items-center justify-center gap-1.5 text-muted-foreground">
+                    <Lock className="h-8 w-8" />
+                    <span className="text-xs font-medium">PIN required</span>
+                  </div>
+                ) : photographer.coverPhoto?.src ? (
                   <StereoThumbnail photo={photographer.coverPhoto} />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-muted-foreground">
@@ -173,7 +180,8 @@ export default function Home() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-lg">
                   <User className="h-5 w-5" />
-                  {photographer.display_name ?? photographer.slug}
+                  <span className="truncate">{photographer.display_name ?? photographer.slug}</span>
+                  {photographer.locked && <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />}
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
