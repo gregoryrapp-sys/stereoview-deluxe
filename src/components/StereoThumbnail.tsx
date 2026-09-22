@@ -1,28 +1,55 @@
+import { useEffect, useState } from 'react';
 import type { Photo } from '@/data/photos';
+import { cn } from '@/lib/utils';
 
 interface StereoThumbnailProps {
-  photo: Photo;
+  photo: Photo & { thumbSrc?: string };
+  /**
+   * Accepted for call-site compatibility (ObjectCoverPickerDialog passes it);
+   * the thumbnail itself has no Dropbox-specific behaviour.
+   */
+  album?: unknown;
+  /** Show the right half instead of the left (the pair is stored R-L). */
+  swapped?: boolean;
 }
 
-export default function StereoThumbnail({ photo }: StereoThumbnailProps) {
-  // To show only the left half of a side-by-side stereo image, we use a div
-  // with a background image.
-  // `background-size: 200% auto` makes the background image twice the width of
-  // the container, while maintaining its aspect ratio.
-  // `background-position: 0% 50%` (or `left center`) ensures that only the
-  // left half of the scaled background image is visible, and it's centered
-  // vertically. This effectively crops the image to the left eye's view
-  // while respecting the aspect ratio, similar to `object-fit: cover`.
+/**
+ * One eye of a side-by-side stereo image, as a grid tile.
+ *
+ * Renders an <img> twice the tile's width, clipped by the wrapper, so exactly
+ * one half is visible: `object-fit: cover` scales the whole SBS to the 2W x H
+ * box, and the left (or right) half of that box is one eye, cropped to the
+ * tile's aspect. This works for 2:1, 3:2 and 4:3 tiles alike.
+ *
+ * It loads `thumbSrc` - the ~80 KB downscaled copy - when the photo has one,
+ * and only falls back to the original when there is no thumbnail or it fails
+ * to load. Being a real <img> rather than a CSS background is what makes
+ * `loading="lazy"` possible: tiles below the fold are not fetched at all.
+ */
+export default function StereoThumbnail({ photo, swapped = false }: StereoThumbnailProps) {
+  const [thumbFailed, setThumbFailed] = useState(false);
+
+  // A new photo (or a re-signed URL) gets a fresh attempt at the thumbnail.
+  useEffect(() => setThumbFailed(false), [photo.thumbSrc]);
+
+  const src = photo.thumbSrc && !thumbFailed ? photo.thumbSrc : photo.src;
+
   return (
-    <div
-      style={{
-        backgroundImage: `url('${photo.src}')`,
-        backgroundSize: '200% auto',
-        backgroundPosition: '0% 50%',
-      }}
-      className="h-full w-full bg-no-repeat transition-opacity group-hover:opacity-90"
-      role="img"
-      aria-label={photo.alt}
-    />
+    <div className="relative h-full w-full overflow-hidden" role="img" aria-label={photo.alt}>
+      <img
+        src={src}
+        alt=""
+        loading="lazy"
+        decoding="async"
+        draggable={false}
+        className={cn(
+          'absolute inset-y-0 h-full w-[200%] max-w-none object-cover transition-opacity group-hover:opacity-90',
+          swapped ? 'right-0 object-right' : 'left-0 object-left',
+        )}
+        onError={() => {
+          if (photo.thumbSrc && !thumbFailed) setThumbFailed(true);
+        }}
+      />
+    </div>
   );
 }

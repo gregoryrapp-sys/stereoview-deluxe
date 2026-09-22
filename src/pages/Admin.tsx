@@ -3,6 +3,8 @@ import { Navigate } from 'react-router-dom';
 import { ImagePlus, Shield, Upload } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { deriveThumbPath } from '@/lib/photoPaths';
+import { makeSbsThumbnail } from '@/lib/makeThumbnail';
 import { PHOTO_CACHE_CONTROL_SECONDS } from '@/services/galleryService';
 import type { AlbumRecord, AppRole, EventRecord, Profile } from '@/types/database';
 import { Button } from '@/components/ui/button';
@@ -154,9 +156,23 @@ export default function Admin() {
       return;
     }
 
+    // Grid thumbnail beside the original; never fatal for the upload itself.
+    let thumbPath: string | null = null;
+    const thumb = await makeSbsThumbnail(selectedFile).catch(() => null);
+    if (thumb) {
+      const candidate = deriveThumbPath(storagePath, thumb.extension);
+      const thumbUpload = await supabase.storage.from(PHOTOS_BUCKET).upload(candidate, thumb.blob, {
+        cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
+        contentType: thumb.blob.type,
+        upsert: true,
+      });
+      if (!thumbUpload.error) thumbPath = candidate;
+    }
+
     const insertResult = await supabase.from('photos').insert({
       album_id: selectedAlbumId,
       storage_path: storagePath,
+      thumb_path: thumbPath,
       alt: photoAlt || selectedFile.name,
       file_modified_at: selectedFile.lastModified ? new Date(selectedFile.lastModified).toISOString() : null,
     });

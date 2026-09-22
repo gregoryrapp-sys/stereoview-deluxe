@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   FolderOpen,
   ImagePlus,
+  ImageDown,
   Images,
   Plus,
   RefreshCw,
@@ -41,6 +42,7 @@ import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
+import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -130,6 +132,9 @@ export default function EventAlbumManagement() {
   const [albumDropboxCoverImageName, setAlbumDropboxCoverImageName] = useState<string | null>(null);
   const [albumDropboxUrl, setAlbumDropboxUrl] = useState('');
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
+  // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
+  // to one album or to every upload album of an event.
+  const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
@@ -863,7 +868,7 @@ export default function EventAlbumManagement() {
         await deleteAlbumWithPhotos(deletingAlbum.id);
         toast({ title: 'Album deleted' });
       } else if (deletingPhoto && deletingPhoto.storagePath && !deletingPhoto.isDropbox) {
-        await deletePhoto(deletingPhoto.id, deletingPhoto.storagePath);
+        await deletePhoto(deletingPhoto.id, deletingPhoto.storagePath, deletingPhoto.thumbPath);
         toast({ title: 'Photo deleted' });
       } else if (deletingPhoto?.isDropbox) {
         throw new Error("Dropbox photos cannot be deleted from this interface.");
@@ -1106,10 +1111,27 @@ export default function EventAlbumManagement() {
 
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-light">Albums</h2>
-              <Button onClick={() => setIsAlbumDialogOpen(true)} variant="secondary" className="gap-2">
-                <Plus className="h-4 w-4" />
-                Add Album
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                {eventAlbums.some((album) => album.source_type === 'upload') && (
+                  <Button
+                    variant="ghost"
+                    className="gap-2"
+                    onClick={() =>
+                      setThumbBackfillScope({
+                        albumIds: eventAlbums.filter((album) => album.source_type === 'upload').map((album) => album.id),
+                        label: `every album in ${selectedEvent.title}`,
+                      })
+                    }
+                  >
+                    <ImageDown className="h-4 w-4" />
+                    Generate missing thumbnails
+                  </Button>
+                )}
+                <Button onClick={() => setIsAlbumDialogOpen(true)} variant="secondary" className="gap-2">
+                  <Plus className="h-4 w-4" />
+                  Add Album
+                </Button>
+              </div>
             </div>
 
             <ThumbnailGrid
@@ -1224,15 +1246,26 @@ export default function EventAlbumManagement() {
                     {/* The upload flow owns its own pending files. Previously the
                         file input lived here beside "Save Album", and selecting
                         files then clicking Save discarded them silently. */}
-                    <Button
-                      variant="secondary"
-                      className="gap-2"
-                      onClick={() => setIsUploadDialogOpen(true)}
-                      disabled={isSaving}
-                    >
-                      <ImagePlus className="h-4 w-4" />
-                      Select and upload photos
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="secondary"
+                        className="gap-2"
+                        onClick={() => setIsUploadDialogOpen(true)}
+                        disabled={isSaving}
+                      >
+                        <ImagePlus className="h-4 w-4" />
+                        Select and upload photos
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        className="gap-2"
+                        onClick={() => setThumbBackfillScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
+                        disabled={isSaving}
+                      >
+                        <ImageDown className="h-4 w-4" />
+                        Generate missing thumbnails
+                      </Button>
+                    </div>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-1">
@@ -1386,6 +1419,18 @@ export default function EventAlbumManagement() {
           eventId={selectedAlbumEvent.id}
           ownerId={selectedAlbumEvent.owner_id}
           onUploaded={loadData}
+        />
+      )}
+
+      {thumbBackfillScope && (
+        <ThumbnailBackfillDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setThumbBackfillScope(null);
+          }}
+          albumIds={thumbBackfillScope.albumIds}
+          scopeLabel={thumbBackfillScope.label}
+          onGenerated={loadData}
         />
       )}
 
