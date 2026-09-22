@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AlbumRecord, EventRecord } from '@/types/database';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { fetchDropboxFolderCover, fetchDropboxPhoto } from '@/services/galleryService';
 import type { DropboxCoverMap } from '@/lib/galleryUtils';
 
@@ -39,7 +40,7 @@ export function useDropboxCovers(
 
     const coversToFetch = albumCoverSources.filter(
       (album) =>
-        album.source_type === 'dropbox' &&
+        isLiveDropboxAlbum(album) &&
         album.dropbox_cover_image_name &&
         album.dropbox_folder_url &&
         !dropboxCoverUrls[album.id] &&
@@ -86,7 +87,7 @@ export function useDropboxCovers(
       const results = await Promise.allSettled(
         eventsToFindCoversFor.map(async (event) => {
           const dropboxAlbum = albums.find(
-            (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
+            (a) => a.event_id === event.id && isLiveDropboxAlbum(a) && a.dropbox_folder_url,
           );
           if (!dropboxAlbum) return null;
           const photo = await fetchDropboxFolderCover(dropboxAlbum.dropbox_folder_url!);

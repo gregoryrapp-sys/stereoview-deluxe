@@ -8,6 +8,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { fetchDropboxPhotos, GalleryData, GalleryPhoto, getFileExtension } from '@/services/galleryService';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import type { AlbumRecord, EventRecord } from '@/types/database';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { ProfileCoverPhotoPicker } from '@/components/ProfileCoverPhotoPicker';
@@ -74,7 +75,7 @@ export function ObjectCoverPickerDialog({
             .map((p) => ({ ...p, isDropbox: false, album: galleryData.albums.find((a) => a.id === p.albumId) ?? null }));
 
           const dropboxAlbums = galleryData.albums.filter(
-            (a) => a.event_id === event.id && a.source_type === 'dropbox' && a.dropbox_folder_url,
+            (a) => a.event_id === event.id && isLiveDropboxAlbum(a) && a.dropbox_folder_url,
           );
 
           const dropboxPhotosNested = await Promise.all(
@@ -101,7 +102,7 @@ export function ObjectCoverPickerDialog({
           // Album
           // Album covers can be uploaded photos or from a linked Dropbox folder.
           const album = object;
-          if (album.source_type === 'dropbox' && album.dropbox_folder_url) {
+          if (isLiveDropboxAlbum(album) && album.dropbox_folder_url) {
             const files = await fetchDropboxPhotos(album.dropbox_folder_url);
             fetchedPhotos = files.map((file) => ({
               id: file.id,

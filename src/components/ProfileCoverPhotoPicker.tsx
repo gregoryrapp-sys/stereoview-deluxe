@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { ArrowLeft, Cloud, FolderOpen, Images } from 'lucide-react';
 import type { AlbumRecord } from '@/types/database';
 import { fetchDropboxFolderCover, fetchDropboxPhotos, type GalleryData, type GalleryPhoto, getFileExtension } from '@/services/galleryService';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { Button } from '@/components/ui/button';
@@ -42,7 +43,7 @@ export function ProfileCoverPhotoPicker({
   useEffect(() => {
     const albumsToFetch = galleryData.albums.filter(
       (album) =>
-        album.source_type === 'dropbox' &&
+        isLiveDropboxAlbum(album) &&
         !album.dropbox_cover_image_name &&
         album.dropbox_folder_url &&
         !allDropboxCoverUrls[album.id],
@@ -116,7 +117,7 @@ export function ProfileCoverPhotoPicker({
   // Fetch photos when a dropbox album is selected
   const activePhotos = useMemo(
     () => {
-      if (selectedAlbum?.source_type === 'dropbox') {
+      if (isLiveDropboxAlbum(selectedAlbum)) {
         return dropboxPhotos.map((p) => ({ ...p, isDropbox: true, album: selectedAlbum, albumId: selectedAlbum.id }));
       }
       return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
@@ -127,7 +128,7 @@ export function ProfileCoverPhotoPicker({
   const sortedActivePhotos = usePhotoSort(activePhotos, profilePickerSort);
 
   useEffect(() => {
-    if (!selectedAlbum || selectedAlbum.source_type !== 'dropbox' || !selectedAlbum.dropbox_folder_url) {
+    if (!isLiveDropboxAlbum(selectedAlbum) || !selectedAlbum.dropbox_folder_url) {
       setDropboxPhotos([]);
       return;
     }
@@ -269,7 +270,7 @@ export function ProfileCoverPhotoPicker({
               const photos = photosByAlbum[album.id] ?? [];
               let albumCover: GalleryPhoto | null = null;
               
-              if (album.source_type === 'dropbox') {
+              if (isLiveDropboxAlbum(album)) {
                 // For dropbox albums, the cover URL (explicit or fallback) is in allDropboxCoverUrls
                 const coverInfo = allDropboxCoverUrls?.[album.id];
                 if (coverInfo) {

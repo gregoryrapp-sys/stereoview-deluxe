@@ -1,5 +1,6 @@
 import type { GalleryPhoto } from '@/services/galleryService';
 import type { AlbumRecord, EventRecord } from '@/types/database';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 
 export type DropboxCoverMap = Record<string, { src: string; name: string }>;
 
@@ -52,7 +53,7 @@ export function resolveAlbumCover(
   albumPhotos: GalleryPhoto[],
   dropboxCoverUrls: DropboxCoverMap,
 ): GalleryPhoto | null {
-  if (album.source_type === 'dropbox' && album.dropbox_cover_image_name) {
+  if (isLiveDropboxAlbum(album) && album.dropbox_cover_image_name) {
     const coverInfo = dropboxCoverUrls[album.id];
     if (coverInfo) {
       return {

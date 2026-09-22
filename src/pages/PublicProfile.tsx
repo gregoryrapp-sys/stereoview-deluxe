@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, Eye, FolderOpen, Images, Lock, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
@@ -139,7 +140,7 @@ export default function PublicProfile() {
       // Album covers
       data.albums.forEach(album => {
         const a = album as any;
-        if (a.source_type === 'dropbox' && a.dropbox_cover_image_name && a.dropbox_folder_url) {
+        if (isLiveDropboxAlbum(a) && a.dropbox_cover_image_name && a.dropbox_folder_url) {
           coversToFetch.push({
             id: `album:${a.id}`,
             folderUrl: a.dropbox_folder_url,
@@ -207,7 +208,7 @@ export default function PublicProfile() {
   );
 
   useEffect(() => {
-    if (selectedAlbum?.source_type !== 'dropbox' || !selectedAlbum.dropbox_folder_url) {
+    if (!isLiveDropboxAlbum(selectedAlbum) || !selectedAlbum.dropbox_folder_url) {
       setDropboxAlbumPhotos([]);
       return;
     }
@@ -285,7 +286,7 @@ export default function PublicProfile() {
 
   const activePhotos = useMemo(() => {
     if (!selectedAlbum) return [];
-    if (selectedAlbum.source_type === 'dropbox') {
+    if (isLiveDropboxAlbum(selectedAlbum)) {
       return dropboxAlbumPhotos;
     }
     return photosByAlbum[selectedAlbum.id] ?? [];
@@ -536,7 +537,7 @@ export default function PublicProfile() {
               let cover: GalleryPhoto | null = null;
               const a = album as any;
 
-              if (a.source_type === 'dropbox' && a.dropbox_cover_image_name) {
+              if (isLiveDropboxAlbum(a) && a.dropbox_cover_image_name) {
                 const coverInfo = dropboxCoverUrls[`album:${a.id}`];
                 if (coverInfo) {
                   cover = { id: `album-cover-${a.id}`, src: coverInfo.src, alt: coverInfo.name };
@@ -552,7 +553,7 @@ export default function PublicProfile() {
                   </div>
                   <div className="p-3">
                     <h2 className="truncate text-sm font-medium">{album.title}</h2>
-                    {album.source_type === 'dropbox' ? (
+                    {isLiveDropboxAlbum(album) ? (
                       <p className="mt-1 flex items-center gap-1.5 text-xs font-medium text-sky-600 dark:text-sky-400">
                         <Cloud className="h-3 w-3" />
                         Dropbox Live
@@ -574,7 +575,7 @@ export default function PublicProfile() {
                 <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
                 <p className="text-sm text-muted-foreground">
                   {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
-                  {selectedAlbum.source_type === 'dropbox' && (
+                  {isLiveDropboxAlbum(selectedAlbum) && (
                     <span className="font-medium text-sky-600 dark:text-sky-400">
                       {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
                     </span>

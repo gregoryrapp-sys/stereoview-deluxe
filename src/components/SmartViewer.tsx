@@ -11,7 +11,9 @@ interface SmartViewerProps {
   photo: Photo;
   photos: Photo[];
   photoIndex: number;
-  album: Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> | null;
+  album:
+    | (Pick<AlbumRecord, 'source_type' | 'dropbox_folder_url'> & { import_state?: AlbumRecord['import_state'] })
+    | null;
   onClose: () => void;
   onPrevious: () => void;
   onNext: () => void;

@@ -22,6 +22,7 @@ import { COLLECTION_SORT_OPTIONS, resolveAlbumCover, resolveEventCover } from '@
 import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { useViewerFullscreen } from '@/hooks/useViewerFullscreen';
 
 
@@ -92,7 +93,7 @@ export default function Gallery() {
     [galleryData.albums, selectedAlbumId],
   );
 
-  const isDropboxAlbum = selectedAlbum?.source_type === 'dropbox';
+  const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
 
   useEffect(() => {
   if (!selectedAlbum?.dropbox_folder_url) {
@@ -156,9 +157,10 @@ export default function Gallery() {
       return counts;
     }, {});
 
-    // For dropbox albums, we don't know the count until it's loaded.
+    // Live Dropbox albums have no rows, so the count is unknown until loaded.
+    // Imported ones are counted from their rows like any upload album.
     galleryData.albums.forEach((album) => {
-      if (album.source_type === 'dropbox') {
+      if (isLiveDropboxAlbum(album)) {
         if (selectedAlbumId === album.id) {
           // If this album is selected, show the count from the loaded dropboxPhotos
           counts[album.id] = dropboxPhotos.length;
@@ -449,7 +451,7 @@ export default function Gallery() {
                   <span className="block min-w-0 p-2">
                     <span className="block truncate text-sm font-medium">{album.title}</span>
                     <span className="block text-xs text-muted-foreground">
-                      {album.source_type === 'dropbox' ? (
+                      {isLiveDropboxAlbum(album) ? (
                         <span className="flex items-center gap-1.5 font-medium text-sky-600 dark:text-sky-400">
                           <Cloud className="h-3 w-3" />
                           Dropbox Live
