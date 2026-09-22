@@ -1,7 +1,13 @@
 import type { Photo } from '@/data/photos';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
-import type { AlbumRecord, EventRecord, PhotoRecord, Profile } from '@/types/database';
+import type {
+  AlbumRecord,
+  EventRecord,
+  PhotoRecord,
+  PhotographerDirectoryRow,
+  Profile,
+} from '@/types/database';
 
 export interface GalleryPhoto extends Photo {
   albumId?: string;
@@ -26,13 +32,25 @@ export interface GalleryData {
   photos: GalleryPhoto[];
 }
 
-export type PublicProfile = Omit<Profile, 'email'>;
+/**
+ * Rows as unlock-access/gallery returns them: never with the bcrypt hash, and
+ * with `locked: true` on a private row the viewer has not unlocked (a stub with
+ * id, slug, title and little else).
+ */
+export type PublicProfile = Omit<Profile, 'email' | 'password'> & { locked?: boolean };
+export type PublicEvent = Omit<EventRecord, 'password'> & { locked?: boolean };
+export type PublicAlbum = Omit<AlbumRecord, 'password'> & { locked?: boolean };
 
-export interface SharedGalleryData extends GalleryData {
+export interface SharedGalleryData {
   profile: PublicProfile;
+  events: PublicEvent[];
+  albums: PublicAlbum[];
+  photos: GalleryPhoto[];
 }
 
-export interface PhotographerDirectoryItem extends PublicProfile {
+export interface PhotographerDirectoryItem extends PhotographerDirectoryRow {
+  /** Private profile: shown with a lock, PIN required to open. */
+  locked: boolean;
   coverPhoto?: GalleryPhoto | null;
   dropboxCoverFolderUrl?: string | null;
   dropboxCoverImageName?: string | null;
@@ -500,6 +518,7 @@ export async function updateEvent({
   dropboxCoverAlbumId,
   dropboxCoverImageName,
   isPublic,
+  isListed,
   password,
 }: {
   eventId: string;
@@ -510,6 +529,7 @@ export async function updateEvent({
   dropboxCoverAlbumId?: string | null;
   dropboxCoverImageName?: string | null;
   isPublic?: boolean;
+  isListed?: boolean;
   password?: string | null;
 }): Promise<void> {
   const coverUpdate: {
@@ -527,9 +547,12 @@ export async function updateEvent({
     coverUpdate.dropbox_cover_image_name = null;
   }
 
-  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  const privacyUpdate: { is_public?: boolean; is_listed?: boolean; password?: string | null } = {};
   if (isPublic !== undefined) {
     privacyUpdate.is_public = isPublic;
+  }
+  if (isListed !== undefined) {
+    privacyUpdate.is_listed = isListed;
   }
   if (password) {
     privacyUpdate.password = await hashPassword(password);
@@ -572,6 +595,7 @@ export async function updateAlbum({
   dropboxCoverImageName,
   dropbox_folder_url,
   isPublic,
+  isListed,
   password,
 }: {
   albumId: string;
@@ -582,6 +606,7 @@ export async function updateAlbum({
   dropboxCoverImageName?: string | null;
   dropbox_folder_url?: string | null;
   isPublic?: boolean;
+  isListed?: boolean;
   password?: string | null;
 }): Promise<void> {
   const coverUpdate: { cover_photo_id?: string | null; dropbox_cover_image_name?: string | null } = {};
@@ -593,9 +618,12 @@ export async function updateAlbum({
     coverUpdate.dropbox_cover_image_name = null;
   }
 
-  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  const privacyUpdate: { is_public?: boolean; is_listed?: boolean; password?: string | null } = {};
   if (isPublic !== undefined) {
     privacyUpdate.is_public = isPublic;
+  }
+  if (isListed !== undefined) {
+    privacyUpdate.is_listed = isListed;
   }
   if (password) {
     privacyUpdate.password = await hashPassword(password);
@@ -639,6 +667,7 @@ export async function updateProfilePresentation({
   dropboxCoverAlbumId,
   dropboxCoverImageName,
   isPublic,
+  isListed,
   password,
 }: {
   profileId: string;
@@ -648,6 +677,7 @@ export async function updateProfilePresentation({
   dropboxCoverAlbumId?: string | null;
   dropboxCoverImageName?: string | null;
   isPublic?: boolean;
+  isListed?: boolean;
   password?: string | null;
 }): Promise<void> {
   const coverUpdate: {
@@ -671,9 +701,12 @@ export async function updateProfilePresentation({
     coverUpdate.dropbox_cover_image_name = null;
   }
 
-  const privacyUpdate: { is_public?: boolean; password?: string | null } = {};
+  const privacyUpdate: { is_public?: boolean; is_listed?: boolean; password?: string | null } = {};
   if (isPublic !== undefined) {
     privacyUpdate.is_public = isPublic;
+  }
+  if (isListed !== undefined) {
+    privacyUpdate.is_listed = isListed;
   }
   if (password) {
     privacyUpdate.password = await hashPassword(password);
@@ -740,17 +773,23 @@ export async function hashPassword(password: string): Promise<string> {
   return data.hash;
 }
 
+/**
+ * The Photographers page.
+ *
+ * Reads public.photographer_directory() rather than the profiles table: listed
+ * private profiles must appear (with a lock), and a direct table read would
+ * either miss them (RLS hides private rows) or hand out their bcrypt hashes.
+ * The function returns `has_pin` instead, and no cover fields for private rows.
+ */
 export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryItem[]> {
-  const { data: profiles, error: profilesError } = await supabase
-    .from('profiles')
-    .select('*, cover_photo_id, dropbox_cover_album_id, dropbox_cover_image_name')
-    .eq('is_public', true);
+  const { data: rows, error: directoryError } = await supabase.rpc('photographer_directory');
+  if (directoryError) throw directoryError;
 
-  if (profilesError) throw profilesError;
+  const profiles = (rows ?? []) as PhotographerDirectoryRow[];
 
-  // To avoid fetching all photos/albums, we'll fetch only what's needed for covers.
+  // Only what the covers need - never every photo of every album.
   const photoIds = profiles.map((p) => p.cover_photo_id).filter((id): id is string => !!id);
-  const albumIds = profiles.map((p) => (p as any).dropbox_cover_album_id).filter((id): id is string => !!id);
+  const albumIds = profiles.map((p) => p.dropbox_cover_album_id).filter((id): id is string => !!id);
 
   const { data: photos, error: photosError } = await supabase.from('photos').select('*').in('id', photoIds);
   if (photosError) throw photosError;
@@ -760,16 +799,16 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
 
   const photoMap = new Map((await mapPhotoRowsToGalleryPhotos(photos, albums)).map((p) => [p.id, p]));
 
-  const photographers = profiles.map((profile) => {
+  return profiles.map((profile) => {
     let coverPhoto: GalleryPhoto | null = null;
     let dropboxCoverFolderUrl: string | null = null;
     let dropboxCoverImageName: string | null = null;
 
-    if ((profile as any).dropbox_cover_album_id && (profile as any).dropbox_cover_image_name) {
-      const album = albums.find((a) => a.id === (profile as any).dropbox_cover_album_id);
+    if (profile.dropbox_cover_album_id && profile.dropbox_cover_image_name) {
+      const album = albums.find((a) => a.id === profile.dropbox_cover_album_id);
       if (album?.dropbox_folder_url) {
         dropboxCoverFolderUrl = album.dropbox_folder_url;
-        dropboxCoverImageName = (profile as any).dropbox_cover_image_name;
+        dropboxCoverImageName = profile.dropbox_cover_image_name;
         coverPhoto = {
           id: `dropbox-cover-${profile.id}`,
           src: '',
@@ -780,23 +819,14 @@ export async function fetchPublicPhotographers(): Promise<PhotographerDirectoryI
       coverPhoto = photoMap.get(profile.cover_photo_id) ?? null;
     }
 
-    return { ...profile, coverPhoto, dropboxCoverFolderUrl, dropboxCoverImageName };
+    return {
+      ...profile,
+      locked: !profile.is_public,
+      coverPhoto,
+      dropboxCoverFolderUrl,
+      dropboxCoverImageName,
+    };
   });
-
-  return photographers;
-}
-
-export async function fetchPublicProfileBySlug(slug: string): Promise<SharedGalleryData | null> {
-  const { data: profile, error } = await supabase.from('profiles').select('*').eq('slug', slug).single();
-
-  if (error) {
-    if (error.code === 'PGRST116') return null; // Not found
-    throw error;
-  }
-
-  // The RLS policies will ensure only public data is returned.
-  const galleryData = await fetchGalleryData(profile.id);
-  return { ...galleryData, profile };
 }
 async function removeStorageObjects(paths: string[]) {
   if (paths.length === 0) return;

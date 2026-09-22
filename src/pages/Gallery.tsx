@@ -188,7 +188,11 @@ export default function Gallery() {
       setLoadError(null);
 
       try {
-        const data = await fetchGalleryData();
+        // Scoped to the signed-in photographer. RLS returns every public row to
+        // any caller, so an unscoped read here showed a photographer every other
+        // photographer's public events as if they were their own. Admins manage
+        // everyone's content and keep the unscoped read.
+        const data = await fetchGalleryData(isAdmin ? undefined : profile?.id);
 
         if (cancelled) return;
 
@@ -214,13 +218,15 @@ export default function Gallery() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAdmin, profile?.id]);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    // The profile arrives a beat after the session; wait for it so the first
+    // load is already scoped rather than loading twice.
+    if (!isAuthenticated || !profile) return;
 
     return loadGallery();
-  }, [isAuthenticated, loadGallery]);
+  }, [isAuthenticated, profile, loadGallery]);
 
   if (isAuthLoading) {
     return (

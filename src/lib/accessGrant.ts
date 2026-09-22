@@ -10,10 +10,14 @@ import type { SharedGalleryData } from '@/services/galleryService';
  * keys - Supabase holds the private key - so a self-signed token would be
  * rejected by PostgREST and storage alike.
  *
- * So unlocked content is fetched from the function instead of from PostgREST, and
- * the photo URLs come back already signed by the service role. That is also the
- * only way the images can load at all: storage RLS sees nothing but the bearer
- * token, so it could never be persuaded by a grant held anywhere else.
+ * So the public gallery is fetched from the function instead of from PostgREST,
+ * and the photo URLs come back already signed by the service role. That is also
+ * the only way private images can load at all: storage RLS sees nothing but the
+ * bearer token, so it could never be persuaded by a grant held anywhere else.
+ *
+ * Every public-profile page load goes through here - with or without grants -
+ * because the function is what can return a private-but-listed row as a locked
+ * stub without its bcrypt hash, and an unlisted row only when the URL names it.
  *
  * Tokens live in sessionStorage - an unlock should not outlive the browser
  * session, and they expire server-side after 12 hours regardless.
@@ -23,10 +27,20 @@ const GRANT_STORAGE_KEY = 'svd:access-grants:v2';
 
 export type AccessLevel = 'profile' | 'event' | 'album';
 
-export interface AccessProbe {
-  found: boolean;
-  requires?: AccessLevel | null;
-  objectId?: string;
+export interface LockedInfo {
+  level: AccessLevel;
+  objectId: string;
+  /** Private with no PIN set: a legacy dead-end state. Nothing can unlock it. */
+  noPin?: boolean;
+}
+
+export interface GalleryResponse extends SharedGalleryData {
+  /** True when the caller is signed in as the profile's owner. */
+  ownerView: boolean;
+  /** Set when the addressed level (or an ancestor) wants a PIN. */
+  locked: LockedInfo | null;
+  /** Set when the URL names an event/album that does not exist. */
+  missing: 'event' | 'album' | null;
 }
 
 function readStoredGrants(): string[] {
@@ -44,10 +58,6 @@ let grants: string[] = readStoredGrants();
 
 export function getGrantTokens(): string[] {
   return grants;
-}
-
-export function hasAccessGrant(): boolean {
-  return grants.length > 0;
 }
 
 function persist(): void {
@@ -72,18 +82,6 @@ export function clearGrants(): void {
   persist();
 }
 
-export async function probeAccess(params: {
-  profileSlug: string;
-  eventSlug?: string;
-  albumSlug?: string;
-}): Promise<AccessProbe> {
-  const { data, error } = await supabase.functions.invoke('unlock-access', {
-    body: { action: 'probe', ...params },
-  });
-  if (error) throw new Error(error.message);
-  return data as AccessProbe;
-}
-
 export async function unlockWithPin(params: {
   objectType: AccessLevel;
   objectId: string;
@@ -101,17 +99,21 @@ export async function unlockWithPin(params: {
 }
 
 /**
- * Loads a gallery through the unlock function, which applies the same visibility
- * cascade as RLS and returns photo URLs already signed.
+ * Loads a public profile page through the unlock function.
  *
- * Returns null when the profile is not found or still not visible with the grants
- * currently held.
+ * `eventSlug` / `albumSlug` tell the server which rows the URL addresses, so an
+ * unlisted event or album is returned when it is the page being opened, and so
+ * `locked` / `missing` describe the addressed level rather than the profile.
+ *
+ * Returns null only when no profile has that slug.
  */
-export async function fetchUnlockedGallery(
-  profileSlug: string,
-): Promise<SharedGalleryData | null> {
+export async function fetchGallery(params: {
+  profileSlug: string;
+  eventSlug?: string;
+  albumSlug?: string;
+}): Promise<GalleryResponse | null> {
   const { data, error } = await supabase.functions.invoke('unlock-access', {
-    body: { action: 'gallery', profileSlug, tokens: grants },
+    body: { action: 'gallery', ...params, tokens: grants },
   });
 
   if (error) throw new Error(error.message);
@@ -122,5 +124,8 @@ export async function fetchUnlockedGallery(
     events: data.events ?? [],
     albums: data.albums ?? [],
     photos: data.photos ?? [],
-  } as SharedGalleryData;
+    ownerView: !!data.ownerView,
+    locked: data.locked ?? null,
+    missing: data.missing ?? null,
+  } as GalleryResponse;
 }
