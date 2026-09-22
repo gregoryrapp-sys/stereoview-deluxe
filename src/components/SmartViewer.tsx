@@ -18,15 +18,25 @@ import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
-import { resolveAlignment } from '@/lib/imageProcessing';
+import { loadStereoSourceImage, resolveAlignment } from '@/lib/imageProcessing';
+import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import {
   alignmentsEqual,
   MANUAL_ALIGN_VERSION,
   type StereoAlignment,
   toggleSwapped,
 } from '@/lib/stereoAlign/types';
-import { updatePhotoAlignment } from '@/services/galleryService';
+import type { AlignmentEstimate } from '@/lib/stereoAlign/estimator';
+import {
+  AUTO_PERSIST_MIN_CONFIDENCE,
+  estimateImageAlignment,
+  STORE_MIN_CONFIDENCE,
+} from '@/lib/stereoAlign/estimateForImage';
+import { type GalleryPhoto, updatePhotoAlignment } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
+
+/** Swap suggestions below this confidence stay silent. */
+const SWAP_SUGGEST_MIN_CONFIDENCE = 0.6;
 
 interface SmartViewerProps {
   photo: Photo;
@@ -92,6 +102,16 @@ export default function SmartViewer({
   const [alignMode, setAlignMode] = useState(false);
   const [draft, setDraft] = useState<{ dx: number; dy: number } | null>(null);
   const [isSavingAlignment, setIsSavingAlignment] = useState(false);
+
+  // Estimator state: the last measurement for this photo, a transient note
+  // ("Auto-aligned ..."), and whether the swap suggestion was waved away.
+  const [estimate, setEstimate] = useState<AlignmentEstimate | null>(null);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [autoNote, setAutoNote] = useState<string | null>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  const lazyAttemptedRef = useRef<Set<string>>(new Set());
+  const folderUrl = isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
+  const galleryPhoto = photo as GalleryPhoto;
 
   const effectiveAlignment: StereoAlignment = {
     ...committedAlignment,
@@ -200,7 +220,16 @@ export default function SmartViewer({
     // draft across photos.
     setAlignMode(false);
     setDraft(null);
+    setEstimate(null);
+    setAutoNote(null);
+    setSuggestionDismissed(false);
   }, [photo.id, resetTransform]);
+
+  useEffect(() => {
+    if (!autoNote) return;
+    const timer = window.setTimeout(() => setAutoNote(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [autoNote]);
 
   const handleContainerClick = () => {
     if (alignMode) return;
@@ -267,6 +296,90 @@ export default function SmartViewer({
       setIsSavingAlignment(false);
     }
   }, [canEdit, isSavingAlignment, effectiveAlignment, storedAlignment, photo.id, onAlignmentSaved, exitAlignMode]);
+
+  // --- Estimator -------------------------------------------------------------
+  const runEstimate = useCallback(
+    async (swapped: boolean): Promise<AlignmentEstimate | null> => {
+      setIsEstimating(true);
+      try {
+        const img = await loadStereoSourceImage(galleryPhoto, folderUrl);
+        const est = await estimateImageAlignment(img, { swapped });
+        setEstimate(est);
+        return est;
+      } catch (err) {
+        toast({
+          title: 'Could not measure alignment',
+          description: err instanceof Error ? err.message : 'Estimator failed',
+          variant: 'destructive',
+        });
+        return null;
+      } finally {
+        setIsEstimating(false);
+      }
+    },
+    [galleryPhoto, folderUrl],
+  );
+
+  /** The Auto button: measure, then stage the result as a draft for the owner to judge. */
+  const autoAlign = useCallback(async () => {
+    const est = await runEstimate(committedAlignment.swapped);
+    if (!est) return;
+    if (est.confidence < STORE_MIN_CONFIDENCE) {
+      toast({
+        title: 'Not confident enough to align this one',
+        description: 'Not enough matching detail between the eyes. Adjust by hand instead.',
+      });
+      return;
+    }
+    setDraft({ dx: effectiveAlignment.dx, dy: est.alignment.dy });
+    if (est.rotationSuspected) {
+      toast({
+        title: 'Rotation detected',
+        description: 'The eyes differ by a small rotation, which a vertical shift cannot fully fix.',
+      });
+    }
+  }, [runEstimate, committedAlignment.swapped, effectiveAlignment.dx]);
+
+  // Lazy path for the owner: a photo with nothing stored is measured once when
+  // viewed and, when the estimator is confident, saved silently - so the album
+  // aligns itself as the photographer looks through it. Swap is never applied
+  // here; only suggested. Skipped while a session swap is active, because the
+  // displayed order would not be the stored one.
+  useEffect(() => {
+    if (!canEdit || folderUrl || alignMode) return;
+    if (galleryPhoto.alignVersion !== null || !leftUrl) return;
+    if (sessionAlignments[photo.id]) return;
+    if (lazyAttemptedRef.current.has(photo.id)) return;
+    lazyAttemptedRef.current.add(photo.id);
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const img = await loadStereoSourceImage(galleryPhoto, folderUrl);
+        const est = await estimateImageAlignment(img, { swapped: storedAlignment.swapped });
+        if (cancelled) return;
+        setEstimate(est);
+        if (est.confidence < AUTO_PERSIST_MIN_CONFIDENCE) return;
+        const next: StereoAlignment = { dx: storedAlignment.dx, dy: est.alignment.dy, swapped: storedAlignment.swapped };
+        await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: est.version, confidence: est.confidence });
+        if (cancelled) return;
+        onAlignmentSaved?.(photo.id, next);
+        setAutoNote(
+          est.alignment.dy === 0
+            ? 'Checked: already aligned'
+            : `Auto-aligned (vertical ${est.alignment.dy > 0 ? '+' : ''}${est.alignment.dy} px)`,
+        );
+      } catch {
+        // Best effort; the owner can always press Auto.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [canEdit, folderUrl, alignMode, galleryPhoto, leftUrl, sessionAlignments, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
+
+  const showSwapSuggestion =
+    !!estimate && estimate.swapSuggested && estimate.swapConfidence >= SWAP_SUGGEST_MIN_CONFIDENCE && !suggestionDismissed;
 
   // Keyboard navigation. Desktop fullscreen is landscape, so it renders the
   // stereo view, where there is no other pointer affordance for paging. In
@@ -505,6 +618,15 @@ export default function SmartViewer({
         <span className="w-12 text-center font-mono text-xs">{effectiveAlignment.dx}px</span>
       </div>
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void autoAlign()}
+          disabled={isEstimating}
+          className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25 disabled:opacity-60"
+          title="Measure the vertical offset automatically"
+        >
+          {isEstimating ? 'Measuring...' : 'Auto'}
+        </button>
         <button type="button" onClick={resetDraft} className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25">
           Reset
         </button>
@@ -522,7 +644,45 @@ export default function SmartViewer({
       </div>
       <p className="basis-full text-center text-[11px] text-white/60">
         Drag to move the right eye over the left. Zoom in before aligning; arrow keys nudge, Shift for x5, Enter saves.
+        {estimate && (
+          <span className="block">
+            Measured: {Math.round(estimate.confidence * 100)}% confidence
+            {estimate.rotationSuspected && ' · rotation detected, shift alone cannot fully fix it'}
+            {estimate.swapSuggested && ' · eyes may be swapped'}
+          </span>
+        )}
       </p>
+    </div>
+  );
+
+  // Transient notes: what the lazy estimator did, and the swap suggestion.
+  const estimatorChips = (
+    <div className="pointer-events-none absolute left-1/2 top-16 flex -translate-x-1/2 flex-col items-center gap-2">
+      {autoNote && (
+        <span className="rounded-full bg-emerald-500/70 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
+          {autoNote}
+        </span>
+      )}
+      {showSwapSuggestion && !alignMode && (
+        <span className="pointer-events-auto flex items-center gap-1 rounded-full bg-amber-500/80 py-1 pl-3 pr-1 text-xs font-medium text-white backdrop-blur-sm">
+          Looks swapped?
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); swapEyes(); setSuggestionDismissed(true); }}
+            className="rounded-full bg-white/25 px-2 py-0.5 hover:bg-white/40"
+          >
+            Flip L/R
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); setSuggestionDismissed(true); }}
+            className="rounded-full p-1 hover:bg-white/25"
+            aria-label="Dismiss"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </span>
+      )}
     </div>
   );
 
@@ -592,6 +752,7 @@ export default function SmartViewer({
       {closeButton}
       {shareButton}
       {alignmentButtons}
+      {estimatorChips}
       {prevButton}
       {nextButton}
       {alignToolbar}

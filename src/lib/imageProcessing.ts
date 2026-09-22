@@ -200,12 +200,21 @@ async function extractEye(
   return await blobToDataUrl(await canvasToBlob(canvas));
 }
 
-async function processImage(
+/** A few decoded originals, so Auto-align in the viewer does not re-download the photo just split. */
+const sourceImageCache = new LruCache<HTMLImageElement>(3);
+
+/**
+ * The decoded side-by-side source for a photo. Shared by the split and by the
+ * alignment estimator, which samples the source rather than the split eyes.
+ */
+export async function loadStereoSourceImage(
   photo: DropboxFile | GalleryPhoto,
-  folderUrl: string | undefined,
-  eyes: EyeSelection,
-  alignment: StereoAlignment,
-): Promise<ProcessedStereoImage> {
+  folderUrl?: string,
+): Promise<HTMLImageElement> {
+  const identity = photoCacheKey(photo, 'both', IDENTITY_ALIGNMENT);
+  const cached = sourceImageCache.get(identity);
+  if (cached) return cached;
+
   const img = folderUrl
     // Dropbox `?raw=1` links do not serve CORS headers, so the bytes come back
     // through the edge-function proxy instead of straight into an <img>.
@@ -213,6 +222,18 @@ async function processImage(
         await fetchDropboxFileBlob({ folderUrl, fileName: dropboxFileName(photo) }),
       )
     : await loadImageFromUrl(photo.src);
+
+  sourceImageCache.set(identity, img);
+  return img;
+}
+
+async function processImage(
+  photo: DropboxFile | GalleryPhoto,
+  folderUrl: string | undefined,
+  eyes: EyeSelection,
+  alignment: StereoAlignment,
+): Promise<ProcessedStereoImage> {
+  const img = await loadStereoSourceImage(photo, folderUrl);
 
   const halfWidth = Math.floor(img.width / 2);
   const height = img.height;
@@ -290,6 +311,7 @@ export function peekProcessedImage(
 
 export function clearImageCache(): void {
   processedImageCache.clear();
+  sourceImageCache.clear();
 }
 
 /**
