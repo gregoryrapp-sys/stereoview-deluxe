@@ -524,6 +524,16 @@ export default function Gallery() {
             onNext={() => handleNavigate('next')}
             hasPrevious={selectedPhotoIndex > 0}
             hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
+            // This page is scoped to the signed-in photographer's own content, so
+            // anything with a row here is theirs to align. Live Dropbox photos have
+            // no row to write to.
+            canEdit={isAuthenticated && !isLiveDropboxAlbum(selectedAlbum)}
+            onAlignmentSaved={(photoId, alignment) =>
+              setGalleryData((current) => ({
+                ...current,
+                photos: current.photos.map((p) => (p.id === photoId ? { ...p, alignment, alignVersion: 0 } : p)),
+              }))
+            }
           />
         )}
       </div>

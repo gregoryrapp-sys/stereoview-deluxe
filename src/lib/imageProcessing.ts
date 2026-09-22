@@ -21,6 +21,8 @@
  * while a mounted <img> still points at one; that lands with the LRU rework.
  */
 import { fetchDropboxFileBlob, type DropboxFile, type GalleryPhoto } from '@/services/galleryService';
+import { computeEyeRects } from '@/lib/stereoAlign/geometry';
+import { IDENTITY_ALIGNMENT, type StereoAlignment } from '@/lib/stereoAlign/types';
 
 export interface ProcessedStereoImage {
   leftUrl: string;
@@ -28,6 +30,10 @@ export interface ProcessedStereoImage {
   rightUrl: string | null;
   width: number;
   height: number;
+  /** The alignment that was applied when splitting (after clamping). */
+  alignment: StereoAlignment;
+  /** Output px per SOURCE px of one eye; the viewer needs it to preview nudges in CSS. */
+  sourceScale: number;
 }
 
 /** Portrait/2D mode renders only the left eye, so encoding the right is pure waste. */
@@ -92,10 +98,22 @@ const inFlight = new Map<string, Promise<ProcessedStereoImage>>();
 export function photoCacheKey(
   photo: DropboxFile | GalleryPhoto,
   eyes: EyeSelection = 'both',
+  alignment: StereoAlignment = resolveAlignment(photo),
 ): string {
   const candidate = photo as Partial<GalleryPhoto> & Partial<DropboxFile>;
   const identity = candidate.storagePath ?? candidate.id ?? candidate.path_lower ?? candidate.src;
-  return `${identity}:${eyes}`;
+  // Alignment is part of the identity: the same photo split with a different
+  // offset or swap is a different pair of eyes.
+  return `${identity}:${eyes}:${alignment.swapped ? 1 : 0}:${alignment.dx}:${alignment.dy}`;
+}
+
+/**
+ * The alignment to split with when the caller gives none: what the photo row
+ * carries (already resolved against the album default by the service), else
+ * identity. A raw DropboxFile has none.
+ */
+export function resolveAlignment(photo: DropboxFile | GalleryPhoto): StereoAlignment {
+  return (photo as Partial<GalleryPhoto>).alignment ?? IDENTITY_ALIGNMENT;
 }
 
 /**
@@ -162,9 +180,7 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
  */
 async function extractEye(
   img: HTMLImageElement,
-  sourceX: number,
-  halfWidth: number,
-  height: number,
+  rect: { sx: number; sy: number; sw: number; sh: number },
   targetWidth: number,
   targetHeight: number,
 ): Promise<string> {
@@ -177,7 +193,9 @@ async function extractEye(
 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, sourceX, 0, halfWidth, height, 0, 0, targetWidth, targetHeight);
+  // The source rectangle carries the alignment: the right eye's rect is shifted
+  // by (dx, dy) and both are cropped to the overlap (see stereoAlign/geometry).
+  ctx.drawImage(img, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, targetWidth, targetHeight);
 
   return await blobToDataUrl(await canvasToBlob(canvas));
 }
@@ -186,6 +204,7 @@ async function processImage(
   photo: DropboxFile | GalleryPhoto,
   folderUrl: string | undefined,
   eyes: EyeSelection,
+  alignment: StereoAlignment,
 ): Promise<ProcessedStereoImage> {
   const img = folderUrl
     // Dropbox `?raw=1` links do not serve CORS headers, so the bytes come back
@@ -201,16 +220,27 @@ async function processImage(
     throw new Error('The source image has no usable dimensions.');
   }
 
-  const scale = Math.min(1, MAX_EYE_DIMENSION / Math.max(halfWidth, height));
-  const targetWidth = Math.max(1, Math.round(halfWidth * scale));
-  const targetHeight = Math.max(1, Math.round(height * scale));
+  const rects = computeEyeRects(halfWidth, height, alignment);
 
-  const leftUrl = await extractEye(img, 0, halfWidth, height, targetWidth, targetHeight);
+  const scale = Math.min(1, MAX_EYE_DIMENSION / Math.max(rects.cropW, rects.cropH));
+  const targetWidth = Math.max(1, Math.round(rects.cropW * scale));
+  const targetHeight = Math.max(1, Math.round(rects.cropH * scale));
+
+  // 2D mode shows the displayed-left eye, which after `swapped` may be the
+  // right half of the file - so the crop and the swap apply here too.
+  const leftUrl = await extractEye(img, rects.left, targetWidth, targetHeight);
   const rightUrl = eyes === 'both'
-    ? await extractEye(img, halfWidth, halfWidth, height, targetWidth, targetHeight)
+    ? await extractEye(img, rects.right, targetWidth, targetHeight)
     : null;
 
-  return { leftUrl, rightUrl, width: targetWidth, height: targetHeight };
+  return {
+    leftUrl,
+    rightUrl,
+    width: targetWidth,
+    height: targetHeight,
+    alignment: { dx: rects.dx, dy: rects.dy, swapped: alignment.swapped },
+    sourceScale: targetWidth / rects.cropW,
+  };
 }
 
 /**
@@ -223,8 +253,10 @@ export async function splitStereoImage(
   photo: DropboxFile | GalleryPhoto, // eslint-disable-line
   folderUrl?: string,
   eyes: EyeSelection = 'both',
+  options: { alignment?: StereoAlignment } = {},
 ): Promise<ProcessedStereoImage> {
-  const key = photoCacheKey(photo, eyes);
+  const alignment = options.alignment ?? resolveAlignment(photo);
+  const key = photoCacheKey(photo, eyes, alignment);
 
   const cached = processedImageCache.get(key);
   if (cached) return cached;
@@ -234,7 +266,7 @@ export async function splitStereoImage(
   const pending = inFlight.get(key);
   if (pending) return pending;
 
-  const work = processImage(photo, folderUrl, eyes)
+  const work = processImage(photo, folderUrl, eyes, alignment)
     .then((result) => {
       processedImageCache.set(key, result);
       return result;
@@ -251,8 +283,9 @@ export async function splitStereoImage(
 export function peekProcessedImage(
   photo: DropboxFile | GalleryPhoto,
   eyes: EyeSelection = 'both',
+  alignment: StereoAlignment = resolveAlignment(photo),
 ): ProcessedStereoImage | undefined {
-  return processedImageCache.get(photoCacheKey(photo, eyes));
+  return processedImageCache.get(photoCacheKey(photo, eyes, alignment));
 }
 
 export function clearImageCache(): void {

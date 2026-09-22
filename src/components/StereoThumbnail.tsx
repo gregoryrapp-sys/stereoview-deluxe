@@ -3,13 +3,13 @@ import type { Photo } from '@/data/photos';
 import { cn } from '@/lib/utils';
 
 interface StereoThumbnailProps {
-  photo: Photo & { thumbSrc?: string };
+  photo: Photo & { thumbSrc?: string; alignment?: { swapped: boolean } };
   /**
    * Accepted for call-site compatibility (ObjectCoverPickerDialog passes it);
    * the thumbnail itself has no Dropbox-specific behaviour.
    */
   album?: unknown;
-  /** Show the right half instead of the left (the pair is stored R-L). */
+  /** Show the right half instead of the left. Defaults to the photo's resolved alignment. */
   swapped?: boolean;
 }
 
@@ -26,8 +26,11 @@ interface StereoThumbnailProps {
  * to load. Being a real <img> rather than a CSS background is what makes
  * `loading="lazy"` possible: tiles below the fold are not fetched at all.
  */
-export default function StereoThumbnail({ photo, swapped = false }: StereoThumbnailProps) {
+export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoThumbnailProps) {
   const [thumbFailed, setThumbFailed] = useState(false);
+  // A pair stored right-eye-first shows its true left eye, the same one the
+  // viewer displays, without regenerating any thumbnail.
+  const swapped = swappedProp ?? photo.alignment?.swapped ?? false;
 
   // A new photo (or a re-signed URL) gets a fresh attempt at the thumbnail.
   useEffect(() => setThumbFailed(false), [photo.thumbSrc]);

@@ -3,6 +3,7 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
 import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
 import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
+import { alignmentFromRow, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
   AlbumRecord,
   EventRecord,
@@ -18,6 +19,11 @@ export interface GalleryPhoto extends Photo {
   /** Signed URL of the downscaled whole-SBS thumbnail, when one exists. Grids prefer it. */
   thumbSrc?: string;
   thumbPath?: string;
+  /** Resolved against the album's lr_swapped_default; identity when nothing is stored. */
+  alignment?: StereoAlignment;
+  /** Null when no alignment was ever stored (candidate for estimation); 0 = manual. */
+  alignVersion?: number | null;
+  alignConfidence?: number | null;
   rightSrc?: string; // For Dropbox pairs
   created_at?: string;
   extension?: string; // File extension (lowercase, without dot) when available
@@ -335,6 +341,7 @@ async function createStereoPairBlob(leftSource: UploadImageSource, rightSource: 
 
 async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: AlbumRecord[]): Promise<GalleryPhoto[]> {
   const albumEventIds = new Map(albums.map((album) => [album.id, album.event_id]));
+  const albumSwapDefaults = new Map(albums.map((album) => [album.id, !!album.lr_swapped_default]));
 
   // Originals and thumbnails are signed in the same batch. A thumbnail that
   // fails to sign costs nothing but the fallback to the original; the photo
@@ -348,6 +355,8 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
     const src = signedUrls.get(photo.storage_path);
     if (!src) return [];
 
+    const { alignment, hasStored } = alignmentFromRow(photo, albumSwapDefaults.get(photo.album_id) ?? false);
+
     return [{
       id: photo.id,
       src,
@@ -357,10 +366,45 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       storagePath: photo.storage_path,
       thumbPath: photo.thumb_path ?? undefined,
       thumbSrc: photo.thumb_path ? signedUrls.get(photo.thumb_path) : undefined,
+      alignment,
+      alignVersion: hasStored ? photo.align_version ?? 0 : null,
+      alignConfidence: photo.align_confidence ?? null,
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: getFileExtension(photo.storage_path),
     }];
   });
+}
+
+/**
+ * Persists a photo's alignment. `version` 0 means set by hand in the viewer;
+ * an estimator writes its own version so results can be redone when it improves.
+ */
+export async function updatePhotoAlignment({
+  photoId,
+  alignment,
+  version,
+  confidence = null,
+}: {
+  photoId: string;
+  alignment: StereoAlignment;
+  version: number;
+  confidence?: number | null;
+}): Promise<void> {
+  const { data, error } = await supabase
+    .from('photos')
+    .update({
+      align_dx: Math.round(alignment.dx),
+      align_dy: Math.round(alignment.dy),
+      lr_swapped: alignment.swapped,
+      align_version: version,
+      align_confidence: confidence,
+    })
+    .eq('id', photoId)
+    .select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('Alignment could not be saved. You may not have permission to edit this photo.');
+  }
 }
 
 /**
@@ -862,6 +906,7 @@ export async function updateAlbum({
   coverPhotoId,
   dropboxCoverImageName,
   dropbox_folder_url,
+  lrSwappedDefault,
   isPublic,
   isListed,
   password,
@@ -873,6 +918,8 @@ export async function updateAlbum({
   coverPhotoId?: string | null;
   dropboxCoverImageName?: string | null;
   dropbox_folder_url?: string | null;
+  /** The camera behind this album writes right-eye-first. */
+  lrSwappedDefault?: boolean;
   isPublic?: boolean;
   isListed?: boolean;
   password?: string | null;
@@ -909,6 +956,7 @@ export async function updateAlbum({
       description: description || null,
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
       ...(dropbox_folder_url !== undefined ? { dropbox_folder_url: dropbox_folder_url } : {}),
+      ...(lrSwappedDefault !== undefined ? { lr_swapped_default: lrSwappedDefault } : {}),
       ...coverUpdate,
       ...privacyUpdate,
     })

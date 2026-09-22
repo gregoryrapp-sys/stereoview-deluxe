@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
-import type { SharedGalleryData } from '@/services/galleryService';
+import type { GalleryPhoto, SharedGalleryData } from '@/services/galleryService';
+import { alignmentFromRow } from '@/lib/stereoAlign/types';
 
 /**
  * PIN unlock grants for private profiles, events and albums.
@@ -119,11 +120,36 @@ export async function fetchGallery(params: {
   if (error) throw new Error(error.message);
   if (!data?.found) return null;
 
+  // The function returns raw alignment columns; resolve them against each
+  // album's lr_swapped_default exactly as mapPhotoRowsToGalleryPhotos does.
+  const albums = (data.albums ?? []) as Array<{ id: string; lr_swapped_default?: boolean }>;
+  const swapDefaults = new Map(albums.map((album) => [album.id, !!album.lr_swapped_default]));
+  const photos: GalleryPhoto[] = ((data.photos ?? []) as Array<Record<string, unknown>>).map((raw) => {
+    const { alignDx, alignDy, lrSwapped, alignVersion, alignConfidence, ...photo } = raw as Record<string, never> & {
+      alignDx?: number | null;
+      alignDy?: number | null;
+      lrSwapped?: boolean | null;
+      alignVersion?: number | null;
+      alignConfidence?: number | null;
+      albumId?: string;
+    };
+    const { alignment, hasStored } = alignmentFromRow(
+      { align_dx: alignDx, align_dy: alignDy, lr_swapped: lrSwapped },
+      swapDefaults.get(String(photo.albumId)) ?? false,
+    );
+    return {
+      ...(photo as unknown as GalleryPhoto),
+      alignment,
+      alignVersion: hasStored ? alignVersion ?? 0 : null,
+      alignConfidence: alignConfidence ?? null,
+    };
+  });
+
   return {
     profile: data.profile,
     events: data.events ?? [],
     albums: data.albums ?? [],
-    photos: data.photos ?? [],
+    photos,
     ownerView: !!data.ownerView,
     locked: data.locked ?? null,
     missing: data.missing ?? null,

@@ -141,6 +141,9 @@ export default function EventAlbumManagement() {
   // to one album or to every upload album of an event.
   const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
+  // The camera behind this album writes right-eye-first; photos without their
+  // own setting are displayed with the halves exchanged.
+  const [albumLrSwappedDefault, setAlbumLrSwappedDefault] = useState(false);
   // Photos a Dropbox sync removed; restorable from the album page.
   const [removedPhotos, setRemovedPhotos] = useState<SoftDeletedPhoto[]>([]);
   const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
@@ -617,6 +620,7 @@ export default function EventAlbumManagement() {
     setAlbumDropboxUrl(selectedAlbum.dropbox_folder_url ?? '');
     setAlbumIsPublic(selectedAlbum.is_public ?? true);
     setAlbumIsListed(selectedAlbum.is_listed ?? true);
+    setAlbumLrSwappedDefault(selectedAlbum.lr_swapped_default ?? false);
     setAlbumPasswordDirty(false);
   }, [selectedAlbum]);
 
@@ -845,6 +849,7 @@ export default function EventAlbumManagement() {
         dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
         isPublic: albumIsPublic,
         isListed: albumIsListed,
+        lrSwappedDefault: albumLrSwappedDefault,
         password: albumPasswordDirty ? albumPassword || null : undefined,
       });
       toast({ title: 'Album saved' });
@@ -861,6 +866,7 @@ export default function EventAlbumManagement() {
                 dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
                 is_public: albumIsPublic,
                 is_listed: albumIsListed,
+                lr_swapped_default: albumLrSwappedDefault,
                 password: albumPasswordDirty ? albumPassword || null : selectedAlbum.password,
               }
             : album,
@@ -1249,6 +1255,21 @@ export default function EventAlbumManagement() {
                 <div className="space-y-2 md:col-start-2">
                   <Label htmlFor="album-description">Description</Label>
                   <Textarea id="album-description" value={albumDescription} onChange={(event) => setAlbumDescription(event.target.value)} />
+                </div>
+                <div className="flex items-start gap-2 md:col-span-3">
+                  <Checkbox
+                    id="album-lr-swapped"
+                    checked={albumLrSwappedDefault}
+                    onCheckedChange={(value) => setAlbumLrSwappedDefault(value === true)}
+                    className="mt-0.5"
+                  />
+                  <div className="space-y-0.5">
+                    <Label htmlFor="album-lr-swapped">Camera writes right-eye first - swap L/R for this album</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Every photo here is shown with the halves exchanged unless it has its own alignment
+                      saved in the viewer. Viewers can also flip any photo for themselves.
+                    </p>
+                  </div>
                 </div>
                 <div className={`space-y-2 ${selectedAlbum.source_type === 'dropbox' ? '' : 'hidden'}`}>
                   <Label htmlFor="album-dropbox-url">Dropbox Folder URL</Label>

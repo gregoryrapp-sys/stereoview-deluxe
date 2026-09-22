@@ -52,4 +52,19 @@ describe('photoCacheKey', () => {
 
     expect(photoCacheKey(bare)).toContain('https://example.test/only.jpg');
   });
+
+  it('includes the alignment: a nudged or swapped split is a different pair of eyes', () => {
+    const subject = photo({ storagePath: 'one.jpg' });
+    const identity = photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: false });
+
+    expect(photoCacheKey(subject, 'both', { dx: 0, dy: 3, swapped: false })).not.toBe(identity);
+    expect(photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: true })).not.toBe(identity);
+    // No explicit alignment and no stored one resolves to identity.
+    expect(photoCacheKey(subject)).toBe(identity);
+  });
+
+  it('uses the photo\'s stored alignment when none is passed', () => {
+    const swapped = photo({ storagePath: 'one.jpg', alignment: { dx: 2, dy: -1, swapped: true } });
+    expect(photoCacheKey(swapped)).toBe(photoCacheKey(swapped, 'both', { dx: 2, dy: -1, swapped: true }));
+  });
 });
