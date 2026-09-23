@@ -13,13 +13,21 @@ import type { StereoAlignment } from './types';
  *
  * Horizontal shift (dx) is NOT a camera error to recover. Horizontal disparity
  * legitimately varies with depth; a global dx is the stereo-window placement,
- * a policy. The estimator returns the disparity distribution (p05/median/p95)
- * so a policy can be applied on top, and leaves dx at 0.
+ * a policy. The policy applied here mirrors the photographer's own pipeline
+ * (SingleCheckFlip-AutoAlign.py): a RANSAC similarity fit over ALL matches
+ * registers the dominant plane, which in block terms is the weighted median
+ * disparity. `windowPolicy: 'consensus'` (default) sets dx to that; 'none'
+ * leaves dx at 0 and only reports the distribution.
  *
  * Swap detection cannot use the sign of disparity alone: a raw correct pair
- * and a window-adjusted swapped pair look identical by sign. It uses depth
- * ordering instead - content lower in the frame is usually nearer - and only
- * ever SUGGESTS.
+ * and a window-adjusted swapped pair look identical by sign. It mirrors the
+ * script's `detect_stereo_order`: register the BACKGROUND band (rows 20-55%),
+ * then look at the FOREGROUND (rows >= 55%). After background registration,
+ * foreground content sits further right in the left eye - i.e. its residual
+ * disparity (x_R - x_L) is negative. A positive median residual with >= 80%
+ * direction agreement and >= 1.5 px magnitude suggests the halves are
+ * exchanged. Below those thresholds it stays silent rather than guess, exactly
+ * as the script raises rather than swaps. Here it only ever SUGGESTS.
  *
  * PIPELINE (per the convention in types.ts, L(x,y) ≈ R(x+dx, y+dy)):
  *  1. high-pass both eyes (removes exposure/vignetting differences)
@@ -65,6 +73,8 @@ export interface AlignmentEstimate {
   rotationSuspected: boolean;
   /** Horizontal disparity distribution in source px (positive = right eye content further right). */
   disparity: { p05: number; median: number; p95: number };
+  /** The dx the consensus policy would apply (weighted median disparity), whatever policy was used. */
+  windowDx: number;
   /** Blocks that passed the texture and correlation gates. */
   inliers: number;
   version: number;
@@ -83,8 +93,15 @@ const TEXTURE_MIN_STDDEV = 1.0; // in band-passed intensity units (0..255 scale)
 const COARSE_MIN_ZNCC = 0.3;
 const INLIER_MIN_ZNCC = 0.5;
 const ROTATION_SUSPECT_PX = 3; // dy drift across the frame width, in source px
-const SWAP_MIN_GRADIENT_PX = 6; // dx change top->bottom needed to speak, in source px
-const SWAP_MIN_AGREEMENT = 0.6;
+// Stereo-order check, calibrated to SingleCheckFlip-AutoAlign.py: background
+// band 20-55% of height, foreground >= 55%, >= 1.5 px parallax at its
+// 2200 px detection size, >= 80% of foreground agreeing on direction.
+const SWAP_BACKGROUND_TOP = 0.2;
+const SWAP_BACKGROUND_BOTTOM = 0.55;
+const SWAP_MIN_BACKGROUND_BLOCKS = 6;
+const SWAP_MIN_FOREGROUND_BLOCKS = 4;
+const SWAP_MIN_PARALLAX_PX_AT_2200 = 1.5;
+const SWAP_MIN_AGREEMENT = 0.8;
 
 // --- image helpers -----------------------------------------------------------
 
@@ -278,7 +295,19 @@ function toGray(width: number, height: number, data: Float32Array): GrayImage {
   return { width, height, data };
 }
 
-export function estimateAlignment(pyramid: SamplePyramid, swapped = false): AlignmentEstimate {
+export type WindowPolicy = 'consensus' | 'none';
+
+export interface EstimateOptions {
+  /** 'consensus' (default) registers the dominant plane like the RANSAC fit in the customer's script. */
+  windowPolicy?: WindowPolicy;
+}
+
+export function estimateAlignment(
+  pyramid: SamplePyramid,
+  swapped = false,
+  options: EstimateOptions = {},
+): AlignmentEstimate {
+  const windowPolicy = options.windowPolicy ?? 'consensus';
   const empty = (reason?: string): AlignmentEstimate => ({
     alignment: { dx: 0, dy: 0, swapped },
     confidence: 0,
@@ -286,6 +315,7 @@ export function estimateAlignment(pyramid: SamplePyramid, swapped = false): Alig
     swapConfidence: 0,
     rotationSuspected: false,
     disparity: { p05: 0, median: 0, p95: 0 },
+    windowDx: 0,
     inliers: 0,
     version: ALIGN_VERSION,
     ...(reason ? {} : {}),
@@ -378,28 +408,30 @@ export function estimateAlignment(pyramid: SamplePyramid, swapped = false): Alig
     p95: percentile(sortedDx, 0.95),
   };
 
-  // Swap cue via depth ordering. With L(x)≈R(x+dx), nearer content has MORE
-  // NEGATIVE dx (it sits further right in the left eye). Content lower in the
-  // frame is usually nearer, so in a correctly ordered pair dx DEcreases with
-  // row index. A positive gradient with real magnitude suggests the halves are
-  // exchanged. Flat scenes have no gradient and stay silent.
-  const ysSource = refined.map((m) => m.y * toSource);
-  const dxSlope = slope(ysSource, dxs, weights);
-  const gradientPx = dxSlope * pyramid.sourceHeight;
-  // Compare the upper and lower halves of the blocks that SURVIVED, so a band
-  // that fell outside the search window does not silence the cue.
-  const byRow = [...refined].sort((a, b) => a.y - b.y);
-  const upper = byRow.slice(0, Math.floor(byRow.length / 2));
-  const lower = byRow.slice(Math.ceil(byRow.length / 2));
-  let agreement = 0;
-  if (upper.length >= 2 && lower.length >= 2) {
-    const upperMedian = percentile([...upper.map((m) => m.dx)].sort((a, b) => a - b), 0.5);
-    agreement = lower.filter((m) => m.dx > upperMedian + 0.5).length / lower.length;
+  // Window policy: the dominant plane. The script's RANSAC similarity fit over
+  // all matches converges on the plane most matches lie on; the weighted median
+  // of block disparities is the same idea without RANSAC.
+  const windowDx = weightedMedian(dxs, weights);
+
+  // Stereo-order check (see header). Register the background band, then read
+  // the foreground residual. In L(x)≈R(x+dx) terms, correctly ordered
+  // foreground has residual < 0.
+  const rowFraction = (m: BlockMatch) => m.y / fineL.height;
+  const background = refined.filter((m) => rowFraction(m) >= SWAP_BACKGROUND_TOP && rowFraction(m) <= SWAP_BACKGROUND_BOTTOM);
+  const foreground = refined.filter((m) => rowFraction(m) > SWAP_BACKGROUND_BOTTOM);
+  let swapSuggested = false;
+  let swapConfidence = 0;
+  if (background.length >= SWAP_MIN_BACKGROUND_BLOCKS && foreground.length >= SWAP_MIN_FOREGROUND_BLOCKS) {
+    const backgroundDx = weightedMedian(background.map((m) => m.dx * toSource), background.map((m) => m.score));
+    const residuals = foreground.map((m) => m.dx * toSource - backgroundDx);
+    const medianResidual = weightedMedian(residuals, foreground.map((m) => m.score));
+    const minParallax = SWAP_MIN_PARALLAX_PX_AT_2200 * Math.max(1, pyramid.sourceHalfWidth / 2200);
+    const agreement = residuals.filter((r) => Math.sign(r) === Math.sign(medianResidual) && r !== 0).length / residuals.length;
+    if (Math.abs(medianResidual) >= minParallax && agreement >= SWAP_MIN_AGREEMENT && medianResidual > 0) {
+      swapSuggested = true;
+      swapConfidence = Math.min(1, 0.5 * agreement + 0.5 * Math.min(1, Math.abs(medianResidual) / (minParallax * 6)));
+    }
   }
-  const swapSuggested = gradientPx > SWAP_MIN_GRADIENT_PX && agreement >= SWAP_MIN_AGREEMENT;
-  const swapConfidence = swapSuggested
-    ? Math.min(1, 0.5 * agreement + 0.5 * Math.min(1, gradientPx / (SWAP_MIN_GRADIENT_PX * 4)))
-    : 0;
 
   // Confidence: how many blocks agreed, how tightly, how well they correlated.
   const inlierFraction = refined.length / Math.max(1, matches.length);
@@ -410,12 +442,17 @@ export function estimateAlignment(pyramid: SamplePyramid, swapped = false): Alig
   confidence = Math.max(0, Math.min(1, confidence));
 
   return {
-    alignment: { dx: 0, dy: Math.round(dy), swapped },
+    alignment: {
+      dx: windowPolicy === 'consensus' ? Math.round(windowDx) : 0,
+      dy: Math.round(dy),
+      swapped,
+    },
     confidence,
     swapSuggested,
     swapConfidence,
     rotationSuspected,
     disparity,
+    windowDx: Math.round(windowDx),
     inliers: refined.length,
     version: ALIGN_VERSION,
   };
