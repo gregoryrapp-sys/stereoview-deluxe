@@ -10,6 +10,7 @@ import {
   Crosshair,
   ImageDown,
   Images,
+  Loader2,
   Plus,
   RefreshCw,
   Settings,
@@ -49,6 +50,7 @@ import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
 import AutoAlignDialog from '@/components/AutoAlignDialog';
+import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -143,6 +145,8 @@ export default function EventAlbumManagement() {
   // to one album or to every upload album of an event.
   const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   const [autoAlignScope, setAutoAlignScope] = useState<{ albumIds: string[]; label: string } | null>(null);
+  // Per-photo "Re-align" in progress (one at a time; each downloads an original).
+  const [realigningPhotoId, setRealigningPhotoId] = useState<string | null>(null);
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
   // The camera behind this album writes right-eye-first; photos without their
   // own setting are displayed with the halves exchanged.
@@ -837,6 +841,44 @@ export default function EventAlbumManagement() {
     }
   };
 
+  const handleRealignPhoto = async (photo: GalleryPhoto) => {
+    setRealigningPhotoId(photo.id);
+    try {
+      const outcome = await realignPhoto(photo);
+      if (outcome.status === 'unsure') {
+        toast({
+          title: 'Not confident enough to align this photo',
+          description: 'Too little matching detail between the two eyes. Left unchanged; adjust it by hand in the viewer.',
+        });
+        return;
+      }
+      const { estimate, alignment } = outcome;
+      const notes = [
+        estimate.swapSuggested && 'The eyes may be swapped - check it in the viewer.',
+        estimate.rotationSuspected && 'Rotation detected; a shift alone cannot fully fix it.',
+      ].filter(Boolean);
+      toast({
+        title: 'Photo re-aligned',
+        description: [describeAlignment(alignment, estimate.confidence), ...notes].join(' '),
+      });
+      // Patch in place so the grid and viewer pick it up without a refetch.
+      setGalleryData((current) => ({
+        ...current,
+        photos: current.photos.map((p) =>
+          p.id === photo.id ? { ...p, alignment, alignVersion: estimate.version, alignConfidence: estimate.confidence } : p,
+        ),
+      }));
+    } catch (error) {
+      toast({
+        title: 'Could not re-align photo',
+        description: error instanceof Error ? error.message : 'Re-align failed',
+        variant: 'destructive',
+      });
+    } finally {
+      setRealigningPhotoId(null);
+    }
+  };
+
   const saveAlbum = async () => {
     if (!selectedAlbum) return;
     setIsSaving(true);
@@ -1515,16 +1557,36 @@ export default function EventAlbumManagement() {
                             )}
                           </div>
                           {!photo.isDropbox && (
-                            <Button
-                              variant="secondary"
-                              size="icon"
-                              className="h-9 w-9 shrink-0"
-                              onClick={() => setDeletingPhoto(photo)}
-                              disabled={isSaving}
-                              title="Delete Photo"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Button
+                                variant="secondary"
+                                size="icon"
+                                className="h-9 w-9"
+                                onClick={() => handleRealignPhoto(photo as GalleryPhoto)}
+                                disabled={isSaving || realigningPhotoId !== null}
+                                title={
+                                  (photo as GalleryPhoto).alignVersion == null
+                                    ? 'Re-align: measure and save the L/R alignment (not measured yet)'
+                                    : `Re-align: measure again (currently vertical ${(photo as GalleryPhoto).alignment?.dy ?? 0} px, horizontal ${(photo as GalleryPhoto).alignment?.dx ?? 0} px${(photo as GalleryPhoto).alignVersion === 0 ? ', set by hand' : ''})`
+                                }
+                              >
+                                {realigningPhotoId === photo.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Crosshair className="h-4 w-4" />
+                                )}
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="icon"
+                                className="h-9 w-9"
+                                onClick={() => setDeletingPhoto(photo)}
+                                disabled={isSaving}
+                                title="Delete Photo"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
                           )}
                         </CardContent>
                       </Card>
