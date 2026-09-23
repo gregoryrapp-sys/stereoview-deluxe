@@ -102,8 +102,12 @@ describe('estimateAlignment', () => {
     const left = makeTexture(SRC_W, SRC_H, 3);
     const est = estimateAlignment(pyramidFrom(left, shifted(left, 12, -5)));
     expect(Math.abs(est.alignment.dy - -5)).toBeLessThanOrEqual(1);
-    expect(est.alignment.dx).toBe(0); // dx is policy, not measurement
+    // Consensus window policy: the dominant plane is registered, as the
+    // customer's RANSAC similarity fit does.
+    expect(Math.abs(est.alignment.dx - 12)).toBeLessThanOrEqual(1);
     expect(Math.abs(est.disparity.median - 12)).toBeLessThanOrEqual(2);
+    // 'none' leaves dx for a manual convergence nudge.
+    expect(estimateAlignment(pyramidFrom(left, shifted(left, 12, -5)), false, { windowPolicy: 'none' }).alignment.dx).toBe(0);
   });
 
   it('is robust to gain and bias differences between the eyes', () => {
@@ -147,6 +151,18 @@ describe('estimateAlignment', () => {
     const est = estimateAlignment(pyramidFrom(left, right));
     expect(est.swapSuggested).toBe(true);
     expect(est.swapConfidence).toBeGreaterThan(0.5);
+  });
+
+  it('stays silent on a swap when the foreground parallax is below the 1.5 px threshold', () => {
+    // Same inverted ordering but a sub-threshold amount, as the script refuses to guess.
+    const left = makeTexture(SRC_W, SRC_H, 27);
+    const right = new Float32Array(SRC_W * SRC_H);
+    const bands = [{ from: 0, to: (2 * SRC_H) / 3, dx: 0 }, { from: (2 * SRC_H) / 3, to: SRC_H, dx: 1 }];
+    for (const band of bands) {
+      const s = shifted(left, band.dx, 0);
+      for (let y = Math.floor(band.from); y < Math.floor(band.to); y++) right.set(s.subarray(y * SRC_W, (y + 1) * SRC_W), y * SRC_W);
+    }
+    expect(estimateAlignment(pyramidFrom(left, right)).swapSuggested).toBe(false);
   });
 
   it('flags rotation when dy drifts across the frame', () => {

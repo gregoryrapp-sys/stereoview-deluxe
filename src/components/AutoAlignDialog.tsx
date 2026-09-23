@@ -126,7 +126,7 @@ export default function AutoAlignDialog({
           if (est.confidence >= STORE_MIN_CONFIDENCE) {
             await updatePhotoAlignment({
               photoId: photo.id,
-              alignment: { dx: 0, dy: est.alignment.dy, swapped },
+              alignment: { dx: est.alignment.dx, dy: est.alignment.dy, swapped },
               version: est.version,
               confidence: est.confidence,
             });

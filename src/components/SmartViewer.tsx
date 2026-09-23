@@ -331,7 +331,7 @@ export default function SmartViewer({
       });
       return;
     }
-    setDraft({ dx: effectiveAlignment.dx, dy: est.alignment.dy });
+    setDraft({ dx: est.alignment.dx, dy: est.alignment.dy });
     if (est.rotationSuspected) {
       toast({
         title: 'Rotation detected',
@@ -360,7 +360,7 @@ export default function SmartViewer({
         if (cancelled) return;
         setEstimate(est);
         if (est.confidence < AUTO_PERSIST_MIN_CONFIDENCE) return;
-        const next: StereoAlignment = { dx: storedAlignment.dx, dy: est.alignment.dy, swapped: storedAlignment.swapped };
+        const next: StereoAlignment = { dx: est.alignment.dx, dy: est.alignment.dy, swapped: storedAlignment.swapped };
         await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: est.version, confidence: est.confidence });
         if (cancelled) return;
         onAlignmentSaved?.(photo.id, next);

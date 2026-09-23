@@ -167,7 +167,7 @@ export default function AlbumUploadDialog({
             alignment:
               estimate && estimate.confidence >= STORE_MIN_CONFIDENCE
                 ? {
-                    alignment: { dx: 0, dy: estimate.alignment.dy, swapped: albumSwappedDefault },
+                    alignment: { dx: estimate.alignment.dx, dy: estimate.alignment.dy, swapped: albumSwappedDefault },
                     version: estimate.version,
                     confidence: estimate.confidence,
                   }
