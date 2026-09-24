@@ -852,9 +852,9 @@ export default function EventAlbumManagement() {
         });
         return;
       }
-      const { estimate, alignment } = outcome;
+      const { estimate, alignment, flipped } = outcome;
       const notes = [
-        estimate.swapSuggested && 'The eyes may be swapped - check it in the viewer.',
+        flipped && 'Left and right were exchanged.',
         estimate.rotationSuspected && 'Rotation detected; a shift alone cannot fully fix it.',
       ].filter(Boolean);
       toast({

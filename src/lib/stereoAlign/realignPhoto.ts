@@ -1,11 +1,11 @@
 import type { GalleryPhoto } from '@/services/galleryService';
 import { signedOriginalUrl, updatePhotoAlignment } from '@/services/galleryService';
 import type { AlignmentEstimate } from './estimator';
-import { estimateFileAlignment, STORE_MIN_CONFIDENCE } from './estimateForImage';
+import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from './estimateForImage';
 import type { StereoAlignment } from './types';
 
 export type RealignOutcome =
-  | { status: 'saved'; alignment: StereoAlignment; estimate: AlignmentEstimate }
+  | { status: 'saved'; alignment: StereoAlignment; estimate: AlignmentEstimate; flipped: boolean }
   | { status: 'unsure'; estimate: AlignmentEstimate };
 
 /**
@@ -14,9 +14,8 @@ export type RealignOutcome =
  * alignment - the owner asked for it by name, so that is the intent.
  *
  * Measured in the photo's current displayed order (`alignment.swapped`, which
- * already reflects the album default). Swap is never changed here; if the
- * estimator thinks the halves are exchanged, that comes back in the estimate
- * for the caller to mention.
+ * already reflects the album default). The left/right order is corrected when
+ * the depth cue is clear; `flipped` tells the caller it happened.
  */
 export async function realignPhoto(photo: GalleryPhoto): Promise<RealignOutcome> {
   if (!photo.storagePath) throw new Error('This photo has no stored original to measure.');
@@ -31,14 +30,14 @@ export async function realignPhoto(photo: GalleryPhoto): Promise<RealignOutcome>
     return { status: 'unsure', estimate };
   }
 
-  const alignment: StereoAlignment = { dx: estimate.alignment.dx, dy: estimate.alignment.dy, swapped };
+  const alignment = applyEstimate(estimate, swapped);
   await updatePhotoAlignment({
     photoId: photo.id,
     alignment,
     version: estimate.version,
     confidence: estimate.confidence,
   });
-  return { status: 'saved', alignment, estimate };
+  return { status: 'saved', alignment, estimate, flipped: alignment.swapped !== swapped };
 }
 
 /** One-line human summary for a toast. */

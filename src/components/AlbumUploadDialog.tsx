@@ -16,7 +16,7 @@ import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { uploadSbsPhoto } from '@/services/galleryService';
-import { estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
+import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
 
 /**
  * Guided upload flow for an album.
@@ -149,9 +149,9 @@ export default function AlbumUploadDialog({
         const { item, index } = batch[cursor++];
         setStatus(item.id, 'uploading');
         try {
-          // Measure the vertical misalignment while the file is in hand. The
-          // decode dominates and uploads already run a few at a time; a failed
-          // or unsure measurement stores nothing rather than a guess.
+          // Measure alignment and left/right order while the file is in hand.
+          // The decode dominates and uploads already run a few at a time; a
+          // failed or unsure measurement stores nothing rather than a guess.
           const estimate = autoAlign
             ? await estimateFileAlignment(item.file, { swapped: albumSwappedDefault }).catch(() => null)
             : null;
@@ -167,7 +167,7 @@ export default function AlbumUploadDialog({
             alignment:
               estimate && estimate.confidence >= STORE_MIN_CONFIDENCE
                 ? {
-                    alignment: { dx: estimate.alignment.dx, dy: estimate.alignment.dy, swapped: albumSwappedDefault },
+                    alignment: applyEstimate(estimate, albumSwappedDefault),
                     version: estimate.version,
                     confidence: estimate.confidence,
                   }
@@ -290,8 +290,8 @@ export default function AlbumUploadDialog({
                     className="mt-0.5"
                   />
                   <Label htmlFor="album-upload-autoalign" className="text-xs font-normal text-muted-foreground">
-                    Auto-align on upload: measure the vertical offset between the two eyes and save the
-                    correction. Photos are not modified.
+                    Auto-align on upload: measure the offset between the two eyes, correct the left/right
+                    order when the photo clearly shows it, and save the result. Photos are not modified.
                     {albumSwappedDefault && ' This album shows photos with L/R swapped.'}
                   </Label>
                 </div>
