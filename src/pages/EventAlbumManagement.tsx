@@ -769,7 +769,11 @@ export default function EventAlbumManagement() {
         isListed: eventIsListed,
         password: eventPasswordDirty ? eventPassword || null : undefined,
       });
-      toast({ title: 'Event saved' });
+      toast(
+        eventIsPublic
+          ? { title: 'Event saved' }
+          : { title: 'Event saved', description: 'Visitors will be asked for the PIN. You see it without one while signed in.' },
+      );
       setGalleryData((prevData) => {
         const newEvents = prevData.events.map((event) =>
           event.id === selectedEvent.id
@@ -897,7 +901,11 @@ export default function EventAlbumManagement() {
         lrSwappedDefault: albumLrSwappedDefault,
         password: albumPasswordDirty ? albumPassword || null : undefined,
       });
-      toast({ title: 'Album saved' });
+      toast(
+        albumIsPublic
+          ? { title: 'Album saved' }
+          : { title: 'Album saved', description: 'Visitors will be asked for the PIN. You see it without one while signed in.' },
+      );
       setGalleryData((prevData) => {
         const newAlbums = prevData.albums.map((album) =>
           album.id === selectedAlbum.id
