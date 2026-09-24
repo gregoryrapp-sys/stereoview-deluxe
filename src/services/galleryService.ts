@@ -426,7 +426,7 @@ async function tryMakeThumbnail(source: Blob): Promise<SbsThumbnail | null> {
  * upload failed. `upsert: true` because the path derives from the original's
  * UUID path, so a regenerated thumbnail legitimately replaces the old one.
  */
-async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail): Promise<string | null> {
+export async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail): Promise<string | null> {
   const thumbPath = deriveThumbPath(storagePath, thumb.extension);
   const { error } = await supabase.storage.from(PHOTOS_BUCKET).upload(thumbPath, thumb.blob, {
     cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
@@ -542,6 +542,40 @@ export async function signedOriginalUrl(storagePath: string): Promise<string> {
   const url = signed.get(storagePath);
   if (!url) throw new Error('Original could not be signed');
   return url;
+}
+
+/**
+ * One row update at the end of background preparation: the thumbnail path (if
+ * one was made) and the alignment measurement (if one was taken). Either part
+ * may be absent; a photo is never left half-written.
+ */
+export async function finishPhotoPreparation({
+  photoId,
+  thumbPath,
+  alignment,
+  version,
+  confidence,
+}: {
+  photoId: string;
+  thumbPath: string | null;
+  alignment: StereoAlignment | null;
+  version: number | null;
+  confidence: number | null;
+}): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if (thumbPath) patch.thumb_path = thumbPath;
+  if (alignment && version !== null) {
+    patch.align_dx = Math.round(alignment.dx);
+    patch.align_dy = Math.round(alignment.dy);
+    patch.lr_swapped = alignment.swapped;
+    patch.align_version = version;
+    patch.align_confidence = confidence;
+  }
+  if (Object.keys(patch).length === 0) return;
+
+  const { data, error } = await supabase.from('photos').update(patch).eq('id', photoId).select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
 
 export interface SoftDeletedPhoto {

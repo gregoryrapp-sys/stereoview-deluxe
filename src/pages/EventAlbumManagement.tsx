@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Check,
@@ -51,6 +51,7 @@ import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
 import AutoAlignDialog from '@/components/AutoAlignDialog';
 import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
+import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -226,6 +227,23 @@ export default function EventAlbumManagement() {
     if (!isAuthenticated || !profile) return;
     return loadData();
   }, [isAuthenticated, profile, loadData]);
+
+  // Background preparation: thumbnails + alignment for every photo that lacks
+  // them, while the owner is here. Patches rows in place as they finish; one
+  // refresh at the end picks up the signed thumbnail URLs the patch cannot mint.
+  const preparation = usePhotoPreparation(galleryData.photos, galleryData.albums, {
+    enabled: isAuthenticated && !!profile && !isLoading,
+    onPrepared: (photoId, patch) =>
+      setGalleryData((current) => ({
+        ...current,
+        photos: current.photos.map((p) => (p.id === photoId ? { ...p, ...patch } : p)),
+      })),
+  });
+  const preparationWasActive = useRef(false);
+  useEffect(() => {
+    if (preparationWasActive.current && !preparation.active) loadData();
+    preparationWasActive.current = preparation.active;
+  }, [preparation.active, loadData]);
 
   useEffect(() => {
     if (!profile) return;
@@ -989,6 +1007,24 @@ export default function EventAlbumManagement() {
       <div>
         <h1 className="text-2xl font-light tracking-wide">{title}</h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
+        {preparation.total > preparation.done + preparation.failed && (
+          <p className="mt-1 inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">
+            {preparation.paused ? (
+              <Crosshair className="h-3 w-3" />
+            ) : (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            )}
+            Preparing photos {preparation.done + preparation.failed} / {preparation.total}
+            {preparation.failed > 0 && ` · ${preparation.failed} failed`}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-foreground"
+              onClick={preparation.paused ? preparation.resume : preparation.pause}
+            >
+              {preparation.paused ? 'Resume' : 'Pause'}
+            </button>
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap gap-2">
         {backTo && (

@@ -112,11 +112,14 @@ export default function SmartViewer({
   const folderUrl = isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
   const galleryPhoto = photo as GalleryPhoto;
 
-  const effectiveAlignment: StereoAlignment = {
-    ...committedAlignment,
-    dx: draft?.dx ?? committedAlignment.dx,
-    dy: draft?.dy ?? committedAlignment.dy,
-  };
+  const effectiveAlignment = useMemo<StereoAlignment>(
+    () => ({
+      ...committedAlignment,
+      dx: draft?.dx ?? committedAlignment.dx,
+      dy: draft?.dy ?? committedAlignment.dy,
+    }),
+    [committedAlignment, draft],
+  );
 
   // --- Common Hooks ---
   // 2D mode renders the left eye only, so the right one is never worth decoding
@@ -344,7 +347,7 @@ export default function SmartViewer({
         description: 'The eyes differ by a small rotation, which a vertical shift cannot fully fix.',
       });
     }
-  }, [runEstimate, committedAlignment.swapped, effectiveAlignment.dx]);
+  }, [runEstimate, committedAlignment.swapped]);
 
   // Lazy path for the owner: a photo with nothing stored is measured once when
   // viewed and, when the estimator is confident, saved silently - so the album
@@ -537,9 +540,41 @@ export default function SmartViewer({
     </button>
   );
 
+  // While the original downloads and splits, show the grid thumbnail (a
+  // downscaled whole SBS, ~80 KB, usually already cached) in place of a blank
+  // screen: each pane shows its eye by clipping the 200%-wide image, the same
+  // trick StereoThumbnail uses, honouring the swap. It is soft and slightly
+  // blurred so the sharp eyes visibly replace it.
+  const thumbSrc = galleryPhoto.thumbSrc;
+  const placeholderEye = (eye: 'left' | 'right') => {
+    const rightHalf = eye === 'right' ? !committedAlignment.swapped : committedAlignment.swapped;
+    return (
+      <div className="relative h-full w-full overflow-hidden">
+        <img
+          src={thumbSrc}
+          alt=""
+          draggable={false}
+          className={cn(
+            'absolute inset-y-0 h-full w-[200%] max-w-none object-cover blur-[2px] opacity-80',
+            rightHalf ? 'right-0 object-right' : 'left-0 object-left',
+          )}
+        />
+      </div>
+    );
+  };
+
   const loadingIndicator = isLoading && (
-    <div className="absolute inset-0 flex items-center justify-center">
-      <Loader2 className="h-8 w-8 animate-spin text-white/60" />
+    <div className="absolute inset-0">
+      {thumbSrc && mode === 'stereo' && (
+        <div className="flex h-full w-full">
+          <div className="h-full w-1/2">{placeholderEye('left')}</div>
+          <div className="h-full w-1/2">{placeholderEye('right')}</div>
+        </div>
+      )}
+      {thumbSrc && mode === '2d' && <div className="h-full w-full">{placeholderEye('left')}</div>}
+      <div className="absolute inset-0 flex items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-white/60" />
+      </div>
     </div>
   );
 
