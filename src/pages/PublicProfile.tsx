@@ -28,6 +28,25 @@ export default function PublicProfile() {
   // full, and the page says so, so the photographer does not mistake what they
   // see for what a visitor sees.
   const [ownerView, setOwnerView] = useState(false);
+  // "View as a visitor": the owner's session is ignored server-side so the
+  // page shows exactly what a visitor gets (PIN prompts, hidden Private items).
+  // Kept in sessionStorage so it survives the reload after a PinGate unlock.
+  const [previewAsVisitor, setPreviewAsVisitor] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('svd:preview-as-visitor') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const togglePreviewAsVisitor = (next: boolean) => {
+    setPreviewAsVisitor(next);
+    try {
+      if (next) sessionStorage.setItem('svd:preview-as-visitor', '1');
+      else sessionStorage.removeItem('svd:preview-as-visitor');
+    } catch {
+      // Storage unavailable; the in-memory flag still works for this page view.
+    }
+  };
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
@@ -53,6 +72,7 @@ export default function PublicProfile() {
           profileSlug,
           eventSlug: eventSlug ?? undefined,
           albumSlug: albumSlug ?? undefined,
+          asVisitor: previewAsVisitor,
         });
 
         if (!result) {
@@ -79,7 +99,7 @@ export default function PublicProfile() {
       }
     }
     loadPublicData();
-  }, [profileSlug, eventSlug, albumSlug, reloadKey]);
+  }, [profileSlug, eventSlug, albumSlug, reloadKey, previewAsVisitor]);
 
   useEffect(() => {
     if (!data?.profile) return;
@@ -414,11 +434,33 @@ export default function PublicProfile() {
             </Button>
           </div>
         </div>
-        {ownerView && (
-          <p className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-            <Eye className="h-3.5 w-3.5" />
-            Owner preview - private and unlisted items are shown to you, not to visitors
-          </p>
+        {/* The owner sees their own PIN-protected and Private items. Said loudly,
+            with a way to see the visitor's view, because "I opened my link and
+            was not asked for the PIN" is the natural reading otherwise. */}
+        {ownerView && !previewAsVisitor && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+            <span className="flex items-start gap-2">
+              <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                <strong>You're signed in as the owner, so you see everything.</strong> Visitors are asked
+                for PINs and never see Private items.
+              </span>
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => togglePreviewAsVisitor(true)}>
+              View as a visitor
+            </Button>
+          </div>
+        )}
+        {previewAsVisitor && isAuthenticated && (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-500/50 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
+            <span className="flex items-center gap-2">
+              <Eye className="h-4 w-4 shrink-0" />
+              Viewing as a visitor - this is what someone with your link sees.
+            </span>
+            <Button size="sm" variant="secondary" onClick={() => togglePreviewAsVisitor(false)}>
+              Back to owner view
+            </Button>
+          </div>
         )}
       </header>
 
@@ -670,7 +712,7 @@ export default function PublicProfile() {
             hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
             // `ownerView` comes from the server: the session belongs to this
             // profile. Live Dropbox photos have no row to write an alignment to.
-            canEdit={ownerView && !isLiveDropboxAlbum(selectedAlbum)}
+            canEdit={ownerView && !previewAsVisitor && !isLiveDropboxAlbum(selectedAlbum)}
             onAlignmentSaved={(photoId, alignment) =>
               setData((current) =>
                 current

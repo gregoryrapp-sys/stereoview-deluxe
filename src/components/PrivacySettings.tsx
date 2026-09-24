@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -9,12 +10,26 @@ export type PrivacyLevel = 'profile' | 'event' | 'album';
 
 export type PendingPinChange = 'set' | 'clear' | null;
 
+/**
+ * Accessibility settings for a profile, event or album.
+ *
+ * Two independent choices, in the photographer's own vocabulary:
+ *
+ *   Where it appears   Public  = listed (Photographers page / event list / album list)
+ *                      Private = reachable only by link or QR code          -> is_listed
+ *   Require a PIN      off = anyone who reaches it can view
+ *                      on  = a 4-6 digit PIN is asked for                  -> !is_public
+ *
+ * That gives the four combinations they described: public/private x PIN/no PIN.
+ * The column names predate the wording (is_public means "no PIN"); nothing in
+ * the data model changed for this.
+ */
 interface PrivacySettingsProps {
   level: PrivacyLevel;
-  /** Access: true = anyone with the link can view; false = a PIN is required. */
+  /** DB `is_public`: true = no PIN; false = PIN required. */
   isPublic: boolean;
   onIsPublicChange: (value: boolean) => void;
-  /** Listing: true = shown in lists; false = reachable only by direct link. */
+  /** DB `is_listed`: true = shown in lists ("Public"); false = link-only ("Private"). */
   isListed: boolean;
   onIsListedChange: (value: boolean) => void;
   passwordSet: boolean; // Indicates if a password already exists in the DB
@@ -35,12 +50,11 @@ interface PrivacySettingsProps {
 }
 
 /**
- * Whether the access settings can be saved.
+ * Whether the settings can be saved.
  *
- * Private without a PIN is a dead end - there is nothing to unlock - so the
- * database refuses it (`*_private_requires_pin`) and the Save buttons should
- * too, with a reason shown next to the field rather than an error after the
- * fact.
+ * "Require a PIN" without a PIN is a dead end - there is nothing to unlock -
+ * so the database refuses it (`*_private_requires_pin`) and the Save buttons
+ * should too, with the reason shown next to the field.
  */
 export function isPrivacyValid({
   isPublic,
@@ -57,24 +71,11 @@ export function isPrivacyValid({
   return passwordSet;
 }
 
-const NOUN: Record<PrivacyLevel, string> = {
-  profile: 'photographer page',
-  event: 'event',
-  album: 'album',
+const PUBLIC_COPY: Record<PrivacyLevel, string> = {
+  profile: 'Public - shown on the Photographers page',
+  event: "Public - shown in your photographer page's event list",
+  album: "Public - shown in the event's album list",
 };
-
-const LISTED_COPY: Record<PrivacyLevel, string> = {
-  profile: 'Listed - shown on the Photographers page',
-  event: 'Listed - shown on your photographer page',
-  album: 'Listed - shown in the event',
-};
-
-function summarize(isPublic: boolean, isListed: boolean): string {
-  if (isPublic && isListed) return 'Shown in listings; anyone with the link can view.';
-  if (isPublic) return 'Not shown in listings; anyone with the link can view.';
-  if (isListed) return 'Shown in listings with a lock; a PIN is needed to open it.';
-  return 'Not shown in listings; needs both the link and the PIN.';
-}
 
 export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
   level,
@@ -89,6 +90,8 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
   shareUrlStale = false,
 }) => {
   const [passwordInput, setPasswordInput] = useState('');
+
+  const requirePin = !isPublic;
 
   const handlePasswordClear = () => {
     setPasswordInput('');
@@ -109,52 +112,57 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
 
   return (
     <div className="space-y-5 rounded-lg border p-4">
-      <div>
-        <h3 className="text-lg font-medium">Access &amp; visibility</h3>
-        <p className="text-xs text-muted-foreground">{summarize(isPublic, isListed)}</p>
-      </div>
+      <h3 className="text-lg font-medium">Accessibility</h3>
 
-      {/* Access */}
+      {/* Where it appears */}
       <div className="space-y-3">
-        <Label className="text-sm font-medium">Who can view</Label>
+        <Label className="text-sm font-medium">Where it appears</Label>
         <RadioGroup
-          value={isPublic ? 'public' : 'private'}
-          onValueChange={(value) => {
-            const nextIsPublic = value === 'public';
-            onIsPublicChange(nextIsPublic);
-            // Clear the PIN on the way back to public. RLS short-circuits on
-            // is_public, so a PIN left on a public row protects nothing while its
-            // bcrypt hash becomes world-readable along with the rest of the row -
-            // and the field is hidden in this state, so it could never be cleared
-            // by hand.
-            if (nextIsPublic && passwordSet) {
-              setPasswordInput('');
-              onPasswordChange(null);
-            }
-          }}
+          value={isListed ? 'public' : 'private'}
+          onValueChange={(value) => onIsListedChange(value === 'public')}
         >
           <div className="flex items-center space-x-2">
-            <RadioGroupItem value="public" id={`${level}-access-public`} />
-            <Label htmlFor={`${level}-access-public`} className="font-normal">
-              Public - anyone with the link can view
+            <RadioGroupItem value="public" id={`${level}-appears-public`} />
+            <Label htmlFor={`${level}-appears-public`} className="font-normal">
+              {PUBLIC_COPY[level]}
             </Label>
           </div>
           <div className="flex items-center space-x-2">
-            <RadioGroupItem value="private" id={`${level}-access-private`} />
-            <Label htmlFor={`${level}-access-private`} className="font-normal">
-              Private - a PIN is required to view
+            <RadioGroupItem value="private" id={`${level}-appears-private`} />
+            <Label htmlFor={`${level}-appears-private`} className="font-normal">
+              Private - only people with the link or QR code
             </Label>
           </div>
         </RadioGroup>
+      </div>
 
-        {!isPublic && (
+      {/* PIN */}
+      <div className="space-y-3">
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id={`${level}-require-pin`}
+            checked={requirePin}
+            onCheckedChange={(checked) => {
+              const next = checked === true;
+              onIsPublicChange(!next);
+              // Turning the PIN off clears a stored PIN. Rows without a PIN
+              // requirement are readable through PostgREST, and a bcrypt hash
+              // on such a row would be world-readable while protecting nothing.
+              if (!next && passwordSet) {
+                setPasswordInput('');
+                onPasswordChange(null);
+              }
+            }}
+          />
+          <Label htmlFor={`${level}-require-pin`} className="text-sm font-medium">
+            Require a PIN to view
+          </Label>
+        </div>
+
+        {requirePin && (
           <div className="space-y-3 rounded-md bg-secondary/40 p-3">
-            <p className="text-xs text-muted-foreground">
-              4-6 digits. Only you see this field; share the PIN with your guests.
-            </p>
             <div className="flex items-center space-x-2">
-              {/* Shown in clear: only the owner ever types here, and a masked
-                  4-6 digit field made people unsure what they had entered. */}
+              {/* Shown in clear: only the owner ever types here. */}
               <Input
                 className="flex-1 font-mono tracking-widest"
                 type="text"
@@ -162,7 +170,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
                 pattern="[0-9]*"
                 maxLength={6}
                 autoComplete="off"
-                placeholder={passwordSet ? 'PIN set - enter a new one to change it' : 'e.g. 2468'}
+                placeholder={passwordSet ? 'PIN set - enter a new one to change it' : '4-6 digits, e.g. 2468'}
                 value={passwordInput}
                 onChange={(e) => {
                   const digits = e.target.value.replace(/[^0-9]/g, '').slice(0, 6);
@@ -185,7 +193,7 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
             )}
             {pinMissing && (
               <p className="text-xs font-medium text-destructive">
-                A private {NOUN[level]} needs a PIN before it can be saved.
+                Set a PIN, or turn the PIN off, before saving.
               </p>
             )}
             {pendingChange && (
@@ -196,35 +204,6 @@ export const PrivacySettings: React.FC<PrivacySettingsProps> = ({
               </p>
             )}
           </div>
-        )}
-      </div>
-
-      {/* Listing */}
-      <div className="space-y-3">
-        <Label className="text-sm font-medium">Where it appears</Label>
-        <RadioGroup
-          value={isListed ? 'listed' : 'unlisted'}
-          onValueChange={(value) => onIsListedChange(value === 'listed')}
-        >
-          <div className="flex items-center space-x-2">
-            <RadioGroupItem value="listed" id={`${level}-listing-listed`} />
-            <Label htmlFor={`${level}-listing-listed`} className="font-normal">
-              {LISTED_COPY[level]}
-            </Label>
-          </div>
-          <div className="flex items-center space-x-2">
-            <RadioGroupItem value="unlisted" id={`${level}-listing-unlisted`} />
-            <Label htmlFor={`${level}-listing-unlisted`} className="font-normal">
-              Unlisted - reachable only by link or QR code
-            </Label>
-          </div>
-        </RadioGroup>
-        {!isListed && (
-          <p className="text-xs text-muted-foreground">
-            Nothing links here. Copy the link or QR code below to share it. The
-            address is not secret - anyone who has it can open the page
-            {isPublic ? '.' : ', and will then be asked for the PIN.'}
-          </p>
         )}
       </div>
 

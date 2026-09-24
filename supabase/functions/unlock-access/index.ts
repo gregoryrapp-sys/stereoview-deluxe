@@ -253,16 +253,26 @@ async function unlock(body: Record<string, string | undefined>) {
  * `missing` names an addressed level that does not exist.
  */
 async function gallery(
-  body: { profileSlug?: string; eventSlug?: string; albumSlug?: string; tokens?: string[] },
+  body: {
+    profileSlug?: string;
+    eventSlug?: string;
+    albumSlug?: string;
+    tokens?: string[];
+    /** Owner asks to see the page exactly as a visitor would: no owner view. */
+    asVisitor?: boolean;
+  },
   authHeader: string | null,
 ) {
-  const { profileSlug, eventSlug, albumSlug, tokens = [] } = body;
+  const { profileSlug, eventSlug, albumSlug, tokens = [], asVisitor = false } = body;
   if (!profileSlug) return json({ error: "profileSlug is required" }, 400);
 
   const db = admin();
   const [granted, userId] = await Promise.all([
     resolveGrants(db, tokens),
-    callerUserId(db, authHeader),
+    // A signed-in owner sees their own private rows by default, which reads as
+    // "the PIN did not work" when they test their own link. `asVisitor` drops
+    // the session so the page renders with the visitor cascade only.
+    asVisitor ? Promise.resolve(null) : callerUserId(db, authHeader),
   ]);
 
   const { data: profile } = await db

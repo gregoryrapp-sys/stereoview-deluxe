@@ -112,6 +112,8 @@ export async function fetchGallery(params: {
   profileSlug: string;
   eventSlug?: string;
   albumSlug?: string;
+  /** Signed-in owner previewing as a visitor: the server ignores the session. */
+  asVisitor?: boolean;
 }): Promise<GalleryResponse | null> {
   const { data, error } = await supabase.functions.invoke('unlock-access', {
     body: { action: 'gallery', ...params, tokens: grants },
