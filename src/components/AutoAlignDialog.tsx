@@ -13,7 +13,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
+import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
 import {
   fetchPhotosForAlignment,
   type PhotoForAlignment,
@@ -24,8 +24,8 @@ import {
 /**
  * Runs the alignment estimator over an album (or every upload album of an
  * event) in the owner's browser: download each original once, estimate the
- * vertical offset, store it when confident. Never auto-applies a swap - it
- * counts the photos that look swapped and tells the owner.
+ * offset and the left/right order, store it when confident. A flip is applied
+ * only when the depth cue is clear (the photographer's rule: unsure = leave it).
  *
  * Manual alignments (set in the viewer, version 0) are left alone unless the
  * owner explicitly asks to redo them.
@@ -38,12 +38,12 @@ type Step = 'counting' | 'ready' | 'running' | 'done';
 interface Outcome {
   stored: number;
   lowConfidence: number;
-  swapSuggested: number;
+  flipped: number;
   rotation: number;
   failed: Array<{ id: string; message: string }>;
 }
 
-const EMPTY_OUTCOME: Outcome = { stored: 0, lowConfidence: 0, swapSuggested: 0, rotation: 0, failed: [] };
+const EMPTY_OUTCOME: Outcome = { stored: 0, lowConfidence: 0, flipped: 0, rotation: 0, failed: [] };
 
 interface AutoAlignDialogProps {
   open: boolean;
@@ -120,17 +120,18 @@ export default function AutoAlignDialog({
           const swapped = photo.lr_swapped ?? albumSwapDefaults[photo.album_id] ?? false;
           const est = await estimateFileAlignment(await response.blob(), { swapped });
 
-          if (est.swapSuggested) tally.swapSuggested += 1;
           if (est.rotationSuspected) tally.rotation += 1;
 
           if (est.confidence >= STORE_MIN_CONFIDENCE) {
+            const alignment = applyEstimate(est, swapped);
             await updatePhotoAlignment({
               photoId: photo.id,
-              alignment: { dx: est.alignment.dx, dy: est.alignment.dy, swapped },
+              alignment,
               version: est.version,
               confidence: est.confidence,
             });
             tally.stored += 1;
+            if (alignment.swapped !== swapped) tally.flipped += 1;
           } else {
             tally.lowConfidence += 1;
           }
@@ -171,8 +172,9 @@ export default function AutoAlignDialog({
             Auto-align
           </DialogTitle>
           <DialogDescription>
-            Measures the vertical misalignment between the two eyes of each photo in {scopeLabel} and saves
-            the correction. Photos are not modified; the viewer applies the offset when it splits them.
+            Measures the misalignment between the two eyes of each photo in {scopeLabel}, corrects the
+            left/right order when the photo clearly shows it, and saves the result. Photos are not modified;
+            the viewer applies the correction when it splits them.
           </DialogDescription>
         </DialogHeader>
 
@@ -210,8 +212,8 @@ export default function AutoAlignDialog({
               </Label>
             </div>
             <p className="text-xs text-muted-foreground">
-              Left/right order is never changed automatically. Photos that look swapped are counted so you can
-              check them in the viewer.
+              Left/right order is corrected automatically when the photo clearly shows it; otherwise it is left
+              as uploaded.
             </p>
           </div>
         )}
@@ -222,7 +224,7 @@ export default function AutoAlignDialog({
             <p className="text-sm text-muted-foreground">
               {done} of {pending.length} measured · {outcome.stored} saved
               {outcome.lowConfidence > 0 && ` · ${outcome.lowConfidence} unsure (left unchanged)`}
-              {outcome.swapSuggested > 0 && <span className="text-amber-600 dark:text-amber-400"> · {outcome.swapSuggested} may be swapped</span>}
+              {outcome.flipped > 0 && ` · ${outcome.flipped} flipped L/R`}
               {outcome.rotation > 0 && ` · ${outcome.rotation} with rotation`}
               {outcome.failed.length > 0 && <span className="text-destructive"> · {outcome.failed.length} failed</span>}
             </p>

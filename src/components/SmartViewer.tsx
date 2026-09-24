@@ -28,15 +28,13 @@ import {
 } from '@/lib/stereoAlign/types';
 import type { AlignmentEstimate } from '@/lib/stereoAlign/estimator';
 import {
+  applyEstimate,
   AUTO_PERSIST_MIN_CONFIDENCE,
   estimateImageAlignment,
   STORE_MIN_CONFIDENCE,
 } from '@/lib/stereoAlign/estimateForImage';
 import { type GalleryPhoto, updatePhotoAlignment } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
-
-/** Swap suggestions below this confidence stay silent. */
-const SWAP_SUGGEST_MIN_CONFIDENCE = 0.6;
 
 interface SmartViewerProps {
   photo: Photo;
@@ -90,15 +88,17 @@ export default function SmartViewer({
   //
   // Three layers, in order of precedence:
   //   draft      uncommitted dx/dy nudges in Align mode, previewed with CSS
-  //   session    per-photo overrides for THIS viewing session (anyone may swap)
+  //   override   the owner's uncommitted flip in Align mode (re-splits)
   //   stored     what the photo row carries, resolved against the album default
   //
-  // Only the committed layer (session ?? stored) is fed to the split, so a nudge
-  // never re-encodes; the draft delta is rendered as a translate on the right
-  // stage and becomes real pixels only on Save.
+  // Visitors have no alignment controls at all: left/right order and offsets
+  // are decided when a photo is measured, not per viewer - the viewing
+  // experience stays simple. Only the committed layer (override ?? stored) is
+  // fed to the split, so a nudge never re-encodes; the draft delta is rendered
+  // as a translate on the right stage and becomes real pixels only on Save.
   const storedAlignment = resolveAlignment(photo);
-  const [sessionAlignments, setSessionAlignments] = useState<Record<string, StereoAlignment>>({});
-  const committedAlignment = sessionAlignments[photo.id] ?? storedAlignment;
+  const [ownerOverride, setOwnerOverride] = useState<StereoAlignment | null>(null);
+  const committedAlignment = ownerOverride ?? storedAlignment;
   const [alignMode, setAlignMode] = useState(false);
   const [draft, setDraft] = useState<{ dx: number; dy: number } | null>(null);
   const [isSavingAlignment, setIsSavingAlignment] = useState(false);
@@ -108,7 +108,6 @@ export default function SmartViewer({
   const [estimate, setEstimate] = useState<AlignmentEstimate | null>(null);
   const [isEstimating, setIsEstimating] = useState(false);
   const [autoNote, setAutoNote] = useState<string | null>(null);
-  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
   const lazyAttemptedRef = useRef<Set<string>>(new Set());
   const folderUrl = isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
   const galleryPhoto = photo as GalleryPhoto;
@@ -220,9 +219,9 @@ export default function SmartViewer({
     // draft across photos.
     setAlignMode(false);
     setDraft(null);
+    setOwnerOverride(null);
     setEstimate(null);
     setAutoNote(null);
-    setSuggestionDismissed(false);
   }, [photo.id, resetTransform]);
 
   useEffect(() => {
@@ -242,13 +241,14 @@ export default function SmartViewer({
   };
 
   // --- Alignment actions -----------------------------------------------------
-  const swapEyes = useCallback(() => {
+  /** Owner, Align mode only: exchange the halves. Persisted on Save. */
+  const flipEyes = useCallback(() => {
     // Per the convention, exchanging the halves negates the offsets. This is a
     // committed change (it re-splits) rather than a CSS preview, because the
     // draft's frame of reference would flip underneath it.
     setDraft(null);
-    setSessionAlignments((current) => ({ ...current, [photo.id]: toggleSwapped(committedAlignment) }));
-  }, [photo.id, committedAlignment]);
+    setOwnerOverride(toggleSwapped(effectiveAlignment));
+  }, [effectiveAlignment]);
 
   const nudge = useCallback(
     (dx: number, dy: number) => {
@@ -279,10 +279,7 @@ export default function SmartViewer({
       await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: MANUAL_ALIGN_VERSION });
       // The stored layer now matches; drop the session override so a later
       // parent patch is the single source of truth.
-      setSessionAlignments((current) => {
-        const { [photo.id]: _dropped, ...rest } = current;
-        return rest;
-      });
+      setOwnerOverride(null);
       onAlignmentSaved?.(photo.id, next);
       toast({ title: 'Alignment saved' });
       exitAlignMode();
@@ -331,7 +328,16 @@ export default function SmartViewer({
       });
       return;
     }
-    setDraft({ dx: est.alignment.dx, dy: est.alignment.dy });
+    // The verdict may flip the halves; a flip is committed (re-split) and the
+    // offsets are already expressed in the new order.
+    const next = applyEstimate(est, committedAlignment.swapped);
+    if (next.swapped !== committedAlignment.swapped) {
+      setDraft(null);
+      setOwnerOverride(next);
+      toast({ title: 'Left and right were exchanged', description: 'The photo was stored right-eye first. Save to keep it.' });
+    } else {
+      setDraft({ dx: next.dx, dy: next.dy });
+    }
     if (est.rotationSuspected) {
       toast({
         title: 'Rotation detected',
@@ -348,7 +354,7 @@ export default function SmartViewer({
   useEffect(() => {
     if (!canEdit || folderUrl || alignMode) return;
     if (galleryPhoto.alignVersion !== null || !leftUrl) return;
-    if (sessionAlignments[photo.id]) return;
+    if (ownerOverride) return;
     if (lazyAttemptedRef.current.has(photo.id)) return;
     lazyAttemptedRef.current.add(photo.id);
 
@@ -360,14 +366,17 @@ export default function SmartViewer({
         if (cancelled) return;
         setEstimate(est);
         if (est.confidence < AUTO_PERSIST_MIN_CONFIDENCE) return;
-        const next: StereoAlignment = { dx: est.alignment.dx, dy: est.alignment.dy, swapped: storedAlignment.swapped };
+        const next = applyEstimate(est, storedAlignment.swapped);
         await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: est.version, confidence: est.confidence });
         if (cancelled) return;
         onAlignmentSaved?.(photo.id, next);
+        const flipped = next.swapped !== storedAlignment.swapped;
         setAutoNote(
-          est.alignment.dy === 0
-            ? 'Checked: already aligned'
-            : `Auto-aligned (vertical ${est.alignment.dy > 0 ? '+' : ''}${est.alignment.dy} px)`,
+          flipped
+            ? 'Auto-aligned and flipped L/R'
+            : next.dy === 0 && next.dx === 0
+              ? 'Checked: already aligned'
+              : `Auto-aligned (vertical ${next.dy > 0 ? '+' : ''}${next.dy} px)`,
         );
       } catch {
         // Best effort; the owner can always press Auto.
@@ -376,10 +385,7 @@ export default function SmartViewer({
     return () => {
       cancelled = true;
     };
-  }, [canEdit, folderUrl, alignMode, galleryPhoto, leftUrl, sessionAlignments, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
-
-  const showSwapSuggestion =
-    !!estimate && estimate.swapSuggested && estimate.swapConfidence >= SWAP_SUGGEST_MIN_CONFIDENCE && !suggestionDismissed;
+  }, [canEdit, folderUrl, alignMode, galleryPhoto, leftUrl, ownerOverride, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
 
   // Keyboard navigation. Desktop fullscreen is landscape, so it renders the
   // stereo view, where there is no other pointer affordance for paging. In
@@ -393,7 +399,7 @@ export default function SmartViewer({
         else if (event.key === 'ArrowRight') nudge(step, 0);
         else if (event.key === 'ArrowUp') nudge(0, -step);
         else if (event.key === 'ArrowDown') nudge(0, step);
-        else if (event.key === 's' || event.key === 'S') swapEyes();
+        else if (event.key === 's' || event.key === 'S') flipEyes();
         else if (event.key === 'Enter') void saveAlignment();
         else if (event.key === 'Escape') exitAlignMode();
         else return;
@@ -416,7 +422,7 @@ export default function SmartViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [alignMode, nudge, swapEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose]);
+  }, [alignMode, nudge, flipEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose]);
 
   const viewportWidth = containerSize.width / 2;
   const viewportHeight = containerSize.height;
@@ -563,19 +569,10 @@ export default function SmartViewer({
     </button>
   );
 
-  // Top-centre: swap for everyone, Align for the owner. Session-only unless saved.
-  const alignmentButtons = (
+  // Top-centre: Align for the owner only. Visitors get no alignment controls.
+  const alignmentButtons = canEdit && (
     <div className={cn('absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 transition-opacity duration-200', controlVisibility)}>
-      <button
-        onClick={(e) => { e.stopPropagation(); swapEyes(); }}
-        className={cn('flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium text-white backdrop-blur-sm', committedAlignment.swapped ? 'bg-sky-500/60' : 'bg-white/20')}
-        aria-pressed={committedAlignment.swapped}
-        title="Swap left and right eyes (S)"
-      >
-        <ArrowLeftRight className="h-4 w-4" />
-        {committedAlignment.swapped ? 'L/R swapped' : 'Swap L/R'}
-      </button>
-      {canEdit && !alignMode && (
+      {!alignMode && (
         <button
           onClick={(e) => { e.stopPropagation(); setAlignMode(true); setDraft(null); }}
           className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-2 text-xs font-medium text-white backdrop-blur-sm"
@@ -627,6 +624,15 @@ export default function SmartViewer({
         >
           {isEstimating ? 'Measuring...' : 'Auto'}
         </button>
+        <button
+          type="button"
+          onClick={flipEyes}
+          className={cn('flex items-center gap-1 rounded-md px-3 py-2 text-xs hover:bg-white/25', effectiveAlignment.swapped ? 'bg-sky-500/60' : 'bg-white/15')}
+          title="Exchange left and right eyes (S)"
+        >
+          <ArrowLeftRight className="h-3.5 w-3.5" />
+          Flip L/R
+        </button>
         <button type="button" onClick={resetDraft} className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25">
           Reset
         </button>
@@ -648,7 +654,7 @@ export default function SmartViewer({
           <span className="block">
             Measured: {Math.round(estimate.confidence * 100)}% confidence
             {estimate.rotationSuspected && ' · rotation detected, shift alone cannot fully fix it'}
-            {estimate.swapSuggested && ' · eyes may be swapped'}
+            {estimate.swapSuggested && ' · the eyes looked exchanged'}
           </span>
         )}
       </p>
@@ -661,26 +667,6 @@ export default function SmartViewer({
       {autoNote && (
         <span className="rounded-full bg-emerald-500/70 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
           {autoNote}
-        </span>
-      )}
-      {showSwapSuggestion && !alignMode && (
-        <span className="pointer-events-auto flex items-center gap-1 rounded-full bg-amber-500/80 py-1 pl-3 pr-1 text-xs font-medium text-white backdrop-blur-sm">
-          Looks swapped?
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); swapEyes(); setSuggestionDismissed(true); }}
-            className="rounded-full bg-white/25 px-2 py-0.5 hover:bg-white/40"
-          >
-            Flip L/R
-          </button>
-          <button
-            type="button"
-            onClick={(e) => { e.stopPropagation(); setSuggestionDismissed(true); }}
-            className="rounded-full p-1 hover:bg-white/25"
-            aria-label="Dismiss"
-          >
-            <X className="h-3 w-3" />
-          </button>
         </span>
       )}
     </div>
@@ -700,17 +686,6 @@ export default function SmartViewer({
         {leftUrl && <img src={leftUrl} alt={photo.alt} className="max-h-full max-w-full object-contain" draggable={false} />}
         {closeButton}
         {shareButton}
-        {/* Only the swap is meaningful with one eye on screen. */}
-        <div className={cn('absolute left-1/2 top-4 -translate-x-1/2 transition-opacity duration-200', controlVisibility)}>
-          <button
-            onClick={(e) => { e.stopPropagation(); swapEyes(); }}
-            className={cn('flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-medium text-white backdrop-blur-sm', committedAlignment.swapped ? 'bg-sky-500/60' : 'bg-white/20')}
-            aria-pressed={committedAlignment.swapped}
-          >
-            <ArrowLeftRight className="h-4 w-4" />
-            {committedAlignment.swapped ? 'Showing right eye' : 'Show other eye'}
-          </button>
-        </div>
         {prevButton}
         {nextButton}
       </div>
