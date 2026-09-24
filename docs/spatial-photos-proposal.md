@@ -1,6 +1,6 @@
 # Apple Spatial Photos in StereoView
 
-*A proposal to discuss before anything is built. Written 2026-09-24.*
+*A proposal to discuss before anything is built. Written 2026-09-24; feasibility check passed the same day on a synthetic file.*
 
 ## What a Spatial Photo is
 
@@ -27,24 +27,34 @@ Browsers cannot decode the video codec (HEVC) inside a spatial photo. A small de
 
 | | |
 |---|---|
-| Feasibility check | **1 day** — decode one real spatial photo from your device in the browser and confirm both eyes come out correctly oriented. This is the step that proves or disproves the approach. |
+| Feasibility check | **Done (24 Sep).** A stereo HEIC written with Apple's own image library, laid out the way an iPhone writes it (two full-size images built from 512-pixel tiles, joined by a stereo-pair group), was opened in Chrome with the web decoder. Both eyes came out in under a second for a 4-megapixel pair, and the side-by-side result matched the original. What remains is the same check on photos from your own devices, which you can run yourself (next section). |
 | Build | **2–3 days** after a successful check: accept HEIC in the upload dialog, convert, plug into alignment and thumbnails. |
 | Ongoing cost | None. No server, no subscription; a one-time ~2–3 MB download for the owner's browser when uploading spatial files. |
 
 **What could go wrong**
 
-- Apple's way of packing two images into HEIF is newer than most decoders; the check exists to confirm `libheif` reads it (it is expected to, but has to be shown).
+- Apple's way of packing two images into HEIF is newer than most decoders. `libheif` reads it on a file built with Apple's own writer; photos straight from your iPhone or Vision Pro are the final confirmation.
 - Two 12-megapixel images decoded at once is heavy for a phone browser. Uploading spatial photos from a laptop is safe; from an iPhone it may need to be limited or done one at a time.
 - Photos carry an orientation flag that the app currently ignores; spatial photos would be the first case where it matters, so it would be handled as part of this work.
 - Vision Pro *videos* are not covered — photos only.
 
+## Check your own photos
+
+A small test page is ready: **https://claude.ai/artifact/DuyeWHDG8c4WnXBTA8GPQ1**
+
+1. In Photos on a Mac, select two or three spatial photos and choose File → Export → **Export Unmodified Original**. (A normal export strips the second eye.)
+2. Open the page and drop the files onto it.
+3. Each file gets a verdict: **Both eyes decoded**, with the pair shown side by side and the time it took, or **Not a stereo pair**.
+
+The page runs entirely in your browser; the photos are not uploaded anywhere.
+
 ## Questions for you
 
-1. Which device makes your spatial photos — iPhone (which model) or Vision Pro?
+1. Which devices make your spatial photos? Any of them will work: iPhone and Vision Pro write the same kind of file. The answer only tells us how large each eye is, which decides whether uploading from a phone browser needs to be limited.
 2. Roughly how many do you have, and how many per event going forward?
 3. Should the original HEIC be kept in the app as well, or is the SBS JPEG enough?
 4. Any interest in the reverse — turning your existing SBS photos into spatial photos for someone with a Vision Pro? (A separate, later piece of work.)
-5. Could you send **two or three real spatial photos** for the feasibility check?
+5. Could you run **two or three real spatial photos** through the check page above, or send them over?
 
 ## If the check fails
 
