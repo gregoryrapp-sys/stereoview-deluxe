@@ -113,14 +113,19 @@ async function authorizeAlbum(req: Request, albumId: string | undefined): Promis
   const { data: auth, error: authError } = await caller.auth.getUser();
   if (authError || !auth.user) throw new HttpError(401, "Authentication required.");
 
-  const { data: album } = await caller
+  // `events!albums_event_id_fkey`: albums and events are joined by two foreign
+  // keys (the album's event, and an event's Dropbox cover album), so a bare
+  // `events(...)` embed is ambiguous and PostgREST answers 300 instead of rows.
+  const { data: album, error: albumError } = await caller
     .from("albums")
     .select(
-      "id, title, event_id, source_type, dropbox_folder_url, import_state, dropbox_last_synced_at, dropbox_cover_image_name, events(owner_id)",
+      "id, title, event_id, source_type, dropbox_folder_url, import_state, dropbox_last_synced_at, dropbox_cover_image_name, events!albums_event_id_fkey(owner_id)",
     )
     .eq("id", albumId)
     .maybeSingle();
 
+  // A query error is not "no row": say what PostgREST said instead of 404.
+  if (albumError) throw new HttpError(500, `Album lookup failed: ${albumError.message}`);
   if (!album) throw new HttpError(404, "Album not found.");
 
   const ownerId = (album as Row).events?.owner_id as string | undefined;
