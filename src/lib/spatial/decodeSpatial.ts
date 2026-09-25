@@ -47,9 +47,15 @@ export class SpatialDecodeError extends Error {
   }
 }
 
-/** libheif-js error objects carry `code`; anything else is a live handle. */
+/**
+ * libheif-js reports failure as a plain `heif_error` value object. Its `code`
+ * is an embind enum (an object, truthy even when it means "ok"), so it must
+ * never be compared as a number; a live handle or a decoded image is an
+ * embind class instance with no `code` at all.
+ */
 interface HeifFailure {
-  code: number;
+  code: unknown;
+  subcode?: unknown;
   message?: string;
 }
 
@@ -89,7 +95,7 @@ export interface LibheifModule {
 }
 
 function isFailure(value: unknown): value is HeifFailure {
-  return !!value && typeof value === 'object' && typeof (value as HeifFailure).code === 'number';
+  return !!value && typeof value === 'object' && 'code' in value && !('channels' in value);
 }
 
 interface VisibleImage {
