@@ -17,6 +17,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { uploadSbsPhoto } from '@/services/galleryService';
 import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
+import { convertSpatialToSbs } from '@/lib/spatial/convertSpatial';
+import { isHeifFile } from '@/lib/spatial/heifBoxes';
 
 /**
  * Guided upload flow for an album.
@@ -30,7 +32,8 @@ import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/li
  * to use useBlocker).
  */
 
-type UploadStatus = 'pending' | 'uploading' | 'done' | 'failed';
+/** `converting` is the spatial-HEIC step: both eyes are decoded into an SBS JPEG before upload. */
+type UploadStatus = 'pending' | 'converting' | 'uploading' | 'done' | 'failed';
 
 interface QueuedFile {
   id: string;
@@ -44,7 +47,12 @@ type Step = 'select' | 'uploading' | 'summary';
 /** Uploads run a few at a time; sequential was needlessly slow for large batches. */
 const UPLOAD_CONCURRENCY = 3;
 
-const ACCEPTED_TYPES = 'image/jpeg,image/png,image/webp';
+/**
+ * Apple Spatial Photos arrive as .HEIC and are converted in the browser; the
+ * extension entries matter because Safari and Chrome disagree on the MIME type
+ * a picker reports for HEIC.
+ */
+const ACCEPTED_TYPES = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -147,20 +155,28 @@ export default function AlbumUploadDialog({
     const worker = async () => {
       while (cursor < batch.length) {
         const { item, index } = batch[cursor++];
-        setStatus(item.id, 'uploading');
         try {
+          // A spatial HEIC becomes an ordinary side-by-side JPEG first; from
+          // here on nothing downstream knows it was ever anything else.
+          let file = item.file;
+          if (isHeifFile(file)) {
+            setStatus(item.id, 'converting');
+            file = (await convertSpatialToSbs(file)).file;
+          }
+          setStatus(item.id, 'uploading');
+
           // Measure alignment and left/right order while the file is in hand.
           // The decode dominates and uploads already run a few at a time; a
           // failed or unsure measurement stores nothing rather than a guess.
           const estimate = autoAlign
-            ? await estimateFileAlignment(item.file, { swapped: albumSwappedDefault }).catch(() => null)
+            ? await estimateFileAlignment(file, { swapped: albumSwappedDefault }).catch(() => null)
             : null;
 
           await uploadSbsPhoto({
             albumId,
             eventId,
             ownerId,
-            file: item.file,
+            file,
             alt: namePrefix
               ? `${namePrefix} ${index + 1}`
               : item.file.name.replace(/\.[^.]+$/, ''),
@@ -218,8 +234,8 @@ export default function AlbumUploadDialog({
         <DialogHeader>
           <DialogTitle>Upload photos</DialogTitle>
           <DialogDescription>
-            Add side-by-side stereo images to {albumTitle}. You can select several files at
-            once.
+            Add side-by-side stereo images or Apple spatial photos (.HEIC) to {albumTitle}. You
+            can select several files at once.
           </DialogDescription>
         </DialogHeader>
 
@@ -256,6 +272,11 @@ export default function AlbumUploadDialog({
                       <li key={item.id} className="flex items-center gap-2 px-3 py-2 text-sm">
                         <ImagePlus className="h-4 w-4 shrink-0 text-muted-foreground" />
                         <span className="min-w-0 flex-1 truncate">{item.file.name}</span>
+                        {isHeifFile(item.file) && (
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Spatial
+                          </span>
+                        )}
                         <span className="shrink-0 text-xs text-muted-foreground">
                           {formatBytes(item.file.size)}
                         </span>
@@ -271,6 +292,14 @@ export default function AlbumUploadDialog({
                     ))}
                   </ul>
                 </ScrollArea>
+
+                {queue.some((item) => isHeifFile(item.file)) && (
+                  <p className="text-xs text-muted-foreground">
+                    Spatial photos are opened in your browser, both eyes are placed side by side, and
+                    the result is uploaded as a normal stereo JPEG. Nothing is sent anywhere for
+                    conversion.
+                  </p>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="album-upload-prefix">Name prefix (optional)</Label>
@@ -311,7 +340,7 @@ export default function AlbumUploadDialog({
               <ul className="divide-y">
                 {queue.map((item) => (
                   <li key={item.id} className="flex items-center gap-2 px-3 py-2 text-sm">
-                    {item.status === 'uploading' && (
+                    {(item.status === 'uploading' || item.status === 'converting') && (
                       <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
                     )}
                     {item.status === 'done' && (
@@ -331,6 +360,9 @@ export default function AlbumUploadDialog({
                     >
                       {item.file.name}
                     </span>
+                    {item.status === 'converting' && (
+                      <span className="shrink-0 text-xs text-muted-foreground">converting spatial photo</span>
+                    )}
                   </li>
                 ))}
               </ul>
