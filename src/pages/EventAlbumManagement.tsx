@@ -17,6 +17,7 @@ import {
   Trash2,
   Upload,
   User,
+  X,
 } from 'lucide-react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useAuth } from '@/contexts/AuthContext';
@@ -96,6 +97,12 @@ function CoverPreview({
 function buildPublicUrl(profileSlug: string, eventSlug?: string, albumSlug?: string) {
   const parts = [window.location.origin, profileSlug, eventSlug, albumSlug].filter(Boolean);
   return parts.join('/');
+}
+
+/** In-app route for the public page of the same object; the home page until the profile has a slug. */
+function buildPublicPath(profileSlug: string, eventSlug?: string, albumSlug?: string) {
+  const parts = [profileSlug, eventSlug, albumSlug].filter(Boolean);
+  return parts.length ? `/${parts.join('/')}` : '/';
 }
 
 export default function EventAlbumManagement() {
@@ -1002,6 +1009,14 @@ export default function EventAlbumManagement() {
     }
   };
 
+  // Where "Close" lands: the public page of the object being managed, from
+  // the SAVED slugs like the share links, so it always resolves.
+  const closeTo = selectedAlbum && selectedAlbumEvent
+    ? buildPublicPath(savedProfileSlug, selectedAlbumEvent.slug, selectedAlbum.slug)
+    : selectedEvent
+      ? buildPublicPath(savedProfileSlug, selectedEvent.slug)
+      : buildPublicPath(savedProfileSlug);
+
   const renderHeader = (title: string, subtitle: string, backTo?: string) => (
     <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -1050,6 +1065,12 @@ export default function EventAlbumManagement() {
         <Button variant="secondary" onClick={loadData} disabled={isLoading || isSaving} className="gap-2">
           <RefreshCw className="h-4 w-4" />
           Refresh
+        </Button>
+        <Button asChild className="gap-2" title="Leave management and open this page as visitors see it">
+          <Link to={closeTo}>
+            <X className="h-4 w-4" />
+            Close
+          </Link>
         </Button>
       </div>
     </header>

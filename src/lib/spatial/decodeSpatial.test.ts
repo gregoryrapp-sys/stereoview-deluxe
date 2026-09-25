@@ -24,7 +24,8 @@ function fakeLib(items: FakeItem[], log: string[] = []): LibheifModule {
     heif_item_is_item_hidden: (_c, id) => (items.find((i) => i.id === id)?.hidden ? 1 : 0),
     heif_js_context_get_image_handle: (_c, id) => {
       const item = items.find((i) => i.id === id);
-      return item?.image ? { id, ...item.image } : { code: 1, message: 'not an image' };
+      // Real libheif-js: `code` is an embind enum object, not a number.
+      return item?.image ? { id, ...item.image } : { code: { value: 1 }, subcode: { value: 0 }, message: 'not an image' };
     },
     heif_image_handle_get_width: (h: { width: number }) => h.width,
     heif_image_handle_get_height: (h: { height: number }) => h.height,
@@ -48,6 +49,7 @@ const iphoneLayout: FakeItem[] = [
   { id: 26, image: { width: 2064, height: 2066, primary: true } },
   { id: 52, image: { width: 2064, height: 2066 } },
   { id: 60 }, // depth / metadata item, not an image
+  { id: 61, hidden: false }, // visible non-image item (gain map, depth), as iPhone files carry
 ];
 
 describe('decodeSpatialEyes', () => {
@@ -58,7 +60,7 @@ describe('decodeSpatialEyes', () => {
     expect(eyes.left.rgba.length).toBe(2064 * 2066 * 4);
     expect(eyes.left.rgba[0]).toBe(26);
     expect(eyes.right.rgba[eyes.right.rgba.length - 1]).toBe(52);
-    expect(eyes.info).toMatchObject({ items: 7, hiddenItems: 4, stereoGroup: [26, 52] });
+    expect(eyes.info).toMatchObject({ items: 8, hiddenItems: 4, stereoGroup: [26, 52] });
     expect(eyes.info.visibleImages.map((v) => v.id)).toEqual([26, 52]);
     // Every handle, both images and the context are released.
     expect(log).toEqual(expect.arrayContaining(['release-handle-26', 'release-handle-52', 'release-image-26', 'release-image-52', 'free-ctx']));
@@ -95,7 +97,7 @@ describe('decodeSpatialEyes', () => {
   it('releases the context when decoding fails', async () => {
     const log: string[] = [];
     const lib = fakeLib(iphoneLayout, log);
-    lib.heif_js_decode_image2 = async () => ({ code: 5, message: 'bitstream error' });
+    lib.heif_js_decode_image2 = async () => ({ code: { value: 5 }, message: 'bitstream error' });
     await expect(decodeSpatialEyes(lib, spatialSkeleton(26, 52))).rejects.toMatchObject({ reason: 'decode-failed' });
     expect(log).toContain('free-ctx');
   });
