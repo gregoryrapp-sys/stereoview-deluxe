@@ -1371,7 +1371,8 @@ export async function movePhotos({
   // 1. Get destination album details to find destination event and owner
   const { data: destAlbum, error: destAlbumError } = await supabase
     .from('albums')
-    .select('id, event_id, events(owner_id)')
+    // Two foreign keys link albums and events; name the one we mean.
+    .select('id, event_id, events!albums_event_id_fkey(owner_id)')
     .eq('id', destinationAlbumId)
     .single();
 
