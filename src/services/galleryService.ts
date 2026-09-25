@@ -421,12 +421,25 @@ async function tryMakeThumbnail(source: Blob): Promise<SbsThumbnail | null> {
   }
 }
 
+/** Why a thumbnail upload was refused, with Storage's own words attached. */
+export class ThumbnailUploadError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode?: string | number,
+  ) {
+    super(message);
+    this.name = 'ThumbnailUploadError';
+  }
+}
+
 /**
- * Uploads a thumbnail beside its original and returns its path, or null if the
- * upload failed. `upsert: true` because the path derives from the original's
- * UUID path, so a regenerated thumbnail legitimately replaces the old one.
+ * Uploads a thumbnail beside its original and returns its path. Throws a
+ * ThumbnailUploadError carrying Storage's message on failure; callers that
+ * must not lose a photo over its thumbnail catch it (see uploadThumbnailSoft).
+ * `upsert: true` because the path derives from the original's UUID path, so a
+ * regenerated thumbnail legitimately replaces the old one.
  */
-export async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail): Promise<string | null> {
+export async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail): Promise<string> {
   const thumbPath = deriveThumbPath(storagePath, thumb.extension);
   const { error } = await supabase.storage.from(PHOTOS_BUCKET).upload(thumbPath, thumb.blob, {
     cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
@@ -434,10 +447,24 @@ export async function uploadThumbnail(storagePath: string, thumb: SbsThumbnail):
     upsert: true,
   });
   if (error) {
+    const status = (error as { statusCode?: string | number }).statusCode;
+    throw new ThumbnailUploadError(
+      `Thumbnail could not be uploaded: ${error.message}${status ? ` (HTTP ${status})` : ''} [${thumb.blob.type || 'no type'}, ${thumbPath.split('/').pop()}]`,
+      status,
+    );
+  }
+  return thumbPath;
+}
+
+/** Upload-time variant: a photo without a thumbnail renders from the original, a lost photo does not. */
+async function uploadThumbnailSoft(storagePath: string, thumb: SbsThumbnail | null): Promise<string | null> {
+  if (!thumb) return null;
+  try {
+    return await uploadThumbnail(storagePath, thumb);
+  } catch (error) {
     console.warn('Thumbnail upload failed; the grid will use the original.', error);
     return null;
   }
-  return thumbPath;
 }
 
 export interface PhotoMissingThumbnail {
@@ -487,7 +514,6 @@ export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Prom
 
   const thumb = await makeSbsThumbnail(await response.blob());
   const thumbPath = await uploadThumbnail(photo.storage_path, thumb);
-  if (!thumbPath) throw new Error('Thumbnail could not be uploaded');
 
   const { data, error } = await supabase
     .from('photos')
@@ -769,7 +795,7 @@ export async function uploadStereoPairPhoto({
     throw uploadResult.error;
   }
 
-  const thumbPath = thumb ? await uploadThumbnail(storagePath, thumb) : null;
+  const thumbPath = await uploadThumbnailSoft(storagePath, thumb);
 
   const insertResult = await supabase.from('photos').insert({
     id: photoId,
@@ -825,7 +851,7 @@ export async function uploadSbsPhoto({
     throw uploadResult.error;
   }
 
-  const thumbPath = thumb ? await uploadThumbnail(storagePath, thumb) : null;
+  const thumbPath = await uploadThumbnailSoft(storagePath, thumb);
 
   const insertResult = await supabase.from('photos').insert({
     id: photoId,

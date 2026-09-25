@@ -115,7 +115,12 @@ export function usePhotoPreparation(
             ? photo.thumbPath
             : await makeSbsThumbnail(blob)
                 .then((thumb) => uploadThumbnail(photo.storagePath!, thumb))
-                .catch(() => null);
+                .catch((error) => {
+                  // Keep going without a thumbnail, but say why: a silent null
+                  // hid a refused upload behind "prepared" counts.
+                  console.warn('Thumbnail could not be made for', photo.id, error);
+                  return null;
+                });
 
           const needsAlignment = photo.alignVersion === null || photo.alignVersion === undefined;
           const displayedSwapped = photo.alignment?.swapped ?? !!album?.lr_swapped_default;
