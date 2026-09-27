@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
 import { fetchGallery, type LockedInfo } from '@/lib/accessGrant';
-import { fetchDropboxFileBlob, fetchDropboxPhoto, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
+import { fetchDropboxThumbnailBlob, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension, mapWithConcurrency } from '@/services/galleryService';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
@@ -112,14 +112,15 @@ export default function PublicProfile() {
         let objectUrl: string | null = null;
         const fetchCover = async () => {
           try {
-            const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, profile.dropbox_cover_image_name);
-            const blob = await fetchDropboxFileBlob({
+            // The cover's file name is already known; no metadata lookup, and
+            // a cached thumbnail instead of the multi-megabyte original.
+            const blob = await fetchDropboxThumbnailBlob({
               folderUrl: album.dropbox_folder_url!,
-              fileName: photo.name,
+              fileName: profile.dropbox_cover_image_name,
             });
             objectUrl = URL.createObjectURL(blob);
             if (!cancelled) {
-              setDropboxProfileCover({ id: photo.id, src: objectUrl, alt: photo.name });
+              setDropboxProfileCover({ id: `profile-cover-${profile.id}`, src: objectUrl, alt: profile.dropbox_cover_image_name });
             } else if (objectUrl) {
               URL.revokeObjectURL(objectUrl);
             }
@@ -174,14 +175,10 @@ export default function PublicProfile() {
       const objectUrls: string[] = [];
       const results = await Promise.allSettled(
         coversToFetch.map(async (item) => {
-          const photo = await fetchDropboxPhoto(item.folderUrl, item.imageName);
-          const blob = await fetchDropboxFileBlob({
-            folderUrl: item.folderUrl,
-            fileName: photo.name,
-          });
+          const blob = await fetchDropboxThumbnailBlob({ folderUrl: item.folderUrl, fileName: item.imageName });
           const src = URL.createObjectURL(blob);
           objectUrls.push(src);
-          return { id: item.id, src, name: photo.name };
+          return { id: item.id, src, name: item.imageName };
         })
       );
 
@@ -244,25 +241,26 @@ export default function PublicProfile() {
         setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name, created_at: file.client_modified, extension: getFileExtension(file.name) })));
         setIsDropboxLoading(false);
 
-        files.forEach(async (file) => {
-          try {
-            const blob = await fetchDropboxFileBlob({
-              folderUrl: selectedAlbum.dropbox_folder_url!,
-              fileName: file.name,
-            });
-            const src = URL.createObjectURL(blob);
-            if (cancelled) {
-              URL.revokeObjectURL(src);
-              return;
-            }
-
-            objectUrls.push(src);
-            setDropboxAlbumPhotos((photos) =>
-              photos.map((photo) => (photo.id === file.id ? { ...photo, src } : photo)),
-            );
-          } catch (e) {
-            console.error(`Failed to fetch dropbox photo ${file.name}`, e);
+        // Grid tiles are thumbnails (cached by the proxy), a few at a time so
+        // a 70-photo album does not open 70 Dropbox requests at once. The
+        // viewer fetches the original of the photo being viewed, on demand.
+        void mapWithConcurrency(files, 6, async (file) => {
+          if (cancelled) return;
+          const blob = await fetchDropboxThumbnailBlob({
+            folderUrl: selectedAlbum.dropbox_folder_url!,
+            fileName: file.name,
+            modified: file.client_modified,
+          });
+          const src = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(src);
+            return;
           }
+
+          objectUrls.push(src);
+          setDropboxAlbumPhotos((photos) =>
+            photos.map((photo) => (photo.id === file.id ? { ...photo, src, thumbSrc: src } : photo)),
+          );
         });
       } catch (e) {
         console.error('Failed to fetch dropbox album photos', e);

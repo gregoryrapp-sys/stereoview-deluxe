@@ -788,6 +788,47 @@ export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Pr
  * Fetches the binary content (blob) of a single Dropbox file via our proxy edge function.
  * This is used for operations that need pixel data, like image processing, to avoid CORS issues.
  */
+/**
+ * A Dropbox-rendered thumbnail of one file (whole side-by-side image, ~1024 px
+ * wide), served and cached by the proxy function. Grids and covers use this;
+ * the viewer still pulls the original through fetchDropboxFileBlob on demand.
+ * `modified` (client_modified from a listing) makes the cache key change when
+ * the file is replaced in Dropbox.
+ */
+export async function fetchDropboxThumbnailBlob({
+  folderUrl,
+  fileName,
+  modified,
+}: {
+  folderUrl: string;
+  fileName: string;
+  modified?: string;
+}): Promise<Blob> {
+  const { data, error } = await supabase.functions.invoke('dropbox-file', {
+    region: FUNCTIONS_REGION,
+    body: { folderUrl, fileName, variant: 'thumbnail', modified },
+  });
+  if (error) throw error;
+  if (!(data instanceof Blob)) throw new Error('Thumbnail proxy returned no image');
+  return data;
+}
+
+/** Runs `fn` over `items` at most `limit` at a time; one failure does not stop the rest. */
+export async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await fn(items[index], index).catch((error) => console.error('Item failed:', error));
+    }
+  });
+  await Promise.all(workers);
+}
+
 export async function fetchDropboxFileBlob({folderUrl,fileName,}: {folderUrl: string;  fileName: string;}): Promise<Blob> {
   const { data, error } = await supabase.functions.invoke('dropbox-file', {
     region: FUNCTIONS_REGION,
