@@ -1,4 +1,5 @@
-import { supabase } from '@/lib/supabase';
+import { FUNCTIONS_REGION, supabase } from '@/lib/supabase';
+import { adoptSignedUrl, flushSignedUrlCache } from '@/services/galleryService';
 import type { GalleryPhoto, SharedGalleryData } from '@/services/galleryService';
 import { alignmentFromRow } from '@/lib/stereoAlign/types';
 
@@ -89,6 +90,7 @@ export async function unlockWithPin(params: {
   pin: string;
 }): Promise<void> {
   const { data, error } = await supabase.functions.invoke('unlock-access', {
+    region: FUNCTIONS_REGION,
     body: { action: 'unlock', ...params },
   });
   // A wrong PIN returns 401, which supabase-js surfaces as an error; anything
@@ -116,6 +118,7 @@ export async function fetchGallery(params: {
   asVisitor?: boolean;
 }): Promise<GalleryResponse | null> {
   const { data, error } = await supabase.functions.invoke('unlock-access', {
+    region: FUNCTIONS_REGION,
     body: { action: 'gallery', ...params, tokens: grants },
   });
 
@@ -139,13 +142,20 @@ export async function fetchGallery(params: {
       { align_dx: alignDx, align_dy: alignDy, lr_swapped: lrSwapped },
       swapDefaults.get(String(photo.albumId)) ?? false,
     );
+    const gallery = photo as unknown as GalleryPhoto;
     return {
-      ...(photo as unknown as GalleryPhoto),
+      ...gallery,
+      // Same object, same URL as last visit whenever possible: lets the
+      // browser cache answer for covers and thumbnails.
+      src: adoptSignedUrl(gallery.storagePath, gallery.src) ?? gallery.src,
+      thumbSrc: adoptSignedUrl(gallery.thumbPath, gallery.thumbSrc),
       alignment,
       alignVersion: hasStored ? alignVersion ?? 0 : null,
       alignConfidence: alignConfidence ?? null,
     };
   });
+
+  flushSignedUrlCache();
 
   return {
     profile: data.profile,

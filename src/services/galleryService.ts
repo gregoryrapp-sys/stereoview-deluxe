@@ -1,6 +1,6 @@
 import type { Photo } from '@/data/photos';
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { FUNCTIONS_REGION, PHOTOS_BUCKET, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
 import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
 import { alignmentFromRow, type StereoAlignment } from '@/lib/stereoAlign/types';
@@ -99,6 +99,8 @@ const SIGNED_URL_MIN_REMAINING_MS = 12 * 60 * 60 * 1000;
 const SIGNED_URL_BATCH_SIZE = 500;
 
 const SIGNED_URL_STORAGE_KEY = 'svd:signed-urls:v1';
+/** A URL handed to us by the server is worth keeping while it has at least this long to live. */
+const ADOPTED_URL_MIN_REMAINING_MS = 60 * 60 * 1000;
 
 /** One year. Photo objects are write-once under a UUID path, so they never change. */
 export const PHOTO_CACHE_CONTROL_SECONDS = '31536000';
@@ -119,7 +121,7 @@ function loadSignedUrlCache(): Map<string, SignedUrlEntry> {
     if (raw) {
       const now = Date.now();
       for (const [path, entry] of Object.entries(JSON.parse(raw) as Record<string, SignedUrlEntry>)) {
-        if (entry?.url && entry.expiresAt - now > SIGNED_URL_MIN_REMAINING_MS) {
+        if (entry?.url && entry.expiresAt - now > ADOPTED_URL_MIN_REMAINING_MS) {
           signedUrlCache.set(path, entry);
         }
       }
@@ -141,6 +143,41 @@ function persistSignedUrlCache(): void {
   } catch {
     // Quota exceeded or storage unavailable; the in-memory cache still works.
   }
+}
+
+/** `exp` of the JWT inside a Supabase signed URL, in ms; 0 when unreadable. */
+function signedUrlExpiry(url: string): number {
+  try {
+    const token = new URL(url).searchParams.get('token');
+    if (!token) return 0;
+    const payload = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Keeps a server-signed URL stable across page loads.
+ *
+ * The gallery function signs every path afresh on each request, so the same
+ * cover arrived under a different URL on every visit and the browser cache
+ * never matched. Prefer the URL this browser already holds for the path while
+ * it is still valid; otherwise remember the fresh one, with the expiry read
+ * from its own token. Call flushSignedUrlCache() once after a batch.
+ */
+export function adoptSignedUrl(path: string | undefined, freshUrl: string | undefined): string | undefined {
+  if (!path || !freshUrl) return freshUrl;
+  const cache = loadSignedUrlCache();
+  const now = Date.now();
+  const entry = cache.get(path);
+  if (entry && entry.expiresAt - now > ADOPTED_URL_MIN_REMAINING_MS) return entry.url;
+  cache.set(path, { url: freshUrl, expiresAt: signedUrlExpiry(freshUrl) || now + ADOPTED_URL_MIN_REMAINING_MS });
+  return freshUrl;
+}
+
+export function flushSignedUrlCache(): void {
+  persistSignedUrlCache();
 }
 
 /**
@@ -691,6 +728,7 @@ export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
 
 export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile[]> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    region: FUNCTIONS_REGION,
     body: { folderUrl },
   });
   if (error) {
@@ -725,6 +763,7 @@ export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile
  */
 export async function fetchDropboxFolderCover(folderUrl: string): Promise<DropboxFile | null> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    region: FUNCTIONS_REGION,
     body: { folderUrl, coverOnly: true },
   });
   if (error) {
@@ -735,6 +774,7 @@ export async function fetchDropboxFolderCover(folderUrl: string): Promise<Dropbo
 
 export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Promise<DropboxFile> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
+    region: FUNCTIONS_REGION,
     body: { folderUrl, fileName },
   });
   if (error) {
@@ -748,8 +788,50 @@ export async function fetchDropboxPhoto(folderUrl: string, fileName: string): Pr
  * Fetches the binary content (blob) of a single Dropbox file via our proxy edge function.
  * This is used for operations that need pixel data, like image processing, to avoid CORS issues.
  */
+/**
+ * A Dropbox-rendered thumbnail of one file (whole side-by-side image, ~1024 px
+ * wide), served and cached by the proxy function. Grids and covers use this;
+ * the viewer still pulls the original through fetchDropboxFileBlob on demand.
+ * `modified` (client_modified from a listing) makes the cache key change when
+ * the file is replaced in Dropbox.
+ */
+export async function fetchDropboxThumbnailBlob({
+  folderUrl,
+  fileName,
+  modified,
+}: {
+  folderUrl: string;
+  fileName: string;
+  modified?: string;
+}): Promise<Blob> {
+  const { data, error } = await supabase.functions.invoke('dropbox-file', {
+    region: FUNCTIONS_REGION,
+    body: { folderUrl, fileName, variant: 'thumbnail', modified },
+  });
+  if (error) throw error;
+  if (!(data instanceof Blob)) throw new Error('Thumbnail proxy returned no image');
+  return data;
+}
+
+/** Runs `fn` over `items` at most `limit` at a time; one failure does not stop the rest. */
+export async function mapWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      await fn(items[index], index).catch((error) => console.error('Item failed:', error));
+    }
+  });
+  await Promise.all(workers);
+}
+
 export async function fetchDropboxFileBlob({folderUrl,fileName,}: {folderUrl: string;  fileName: string;}): Promise<Blob> {
   const { data, error } = await supabase.functions.invoke('dropbox-file', {
+    region: FUNCTIONS_REGION,
     body: { folderUrl, fileName },
   });
 
@@ -1184,6 +1266,7 @@ export async function updateProfilePresentation({
 
 export async function hashPassword(password: string): Promise<string> {
   const { data, error } = await supabase.functions.invoke('password-service', {
+    region: FUNCTIONS_REGION,
     body: { type: 'hash', password: password },
   });
 

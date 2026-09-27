@@ -5,8 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  fetchDropboxFileBlob,
-  fetchDropboxPhoto,
+  fetchDropboxThumbnailBlob,
   fetchPublicPhotographers,
   PhotographerDirectoryItem,
 } from '@/services/galleryService';
@@ -43,13 +42,9 @@ export default function Home() {
             if (!photographer.dropboxCoverFolderUrl || !photographer.dropboxCoverImageName) return;
 
             try {
-              const photo = await fetchDropboxPhoto(
-                photographer.dropboxCoverFolderUrl,
-                photographer.dropboxCoverImageName,
-              );
-              const blob = await fetchDropboxFileBlob({
+              const blob = await fetchDropboxThumbnailBlob({
                 folderUrl: photographer.dropboxCoverFolderUrl,
-                fileName: photo.name,
+                fileName: photographer.dropboxCoverImageName,
               });
               const src = URL.createObjectURL(blob);
 
@@ -60,7 +55,7 @@ export default function Home() {
 
               loadedPhotographers = loadedPhotographers.map((item) =>
                 item.id === photographer.id
-                  ? { ...item, coverPhoto: { id: photo.id, src, alt: photo.name } }
+                  ? { ...item, coverPhoto: { id: `cover-${photographer.id}`, src, alt: photographer.dropboxCoverImageName! } }
                   : item,
               );
               setPhotographers(loadedPhotographers);

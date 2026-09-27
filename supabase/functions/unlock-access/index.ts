@@ -55,6 +55,8 @@ const GRANT_TTL_SECONDS = 12 * 60 * 60;
  *  URL works for anyone holding it, so private content should not hand out a
  *  week-long link. */
 const GRANTED_URL_TTL_SECONDS = GRANT_TTL_SECONDS;
+/** Objects anyone may read: signed long enough that a returning visitor's browser cache still matches. */
+const PUBLIC_URL_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const PHOTOS_BUCKET = "photos";
 
@@ -391,31 +393,95 @@ async function gallery(
 
   // Soft-deleted rows (a Dropbox sync found the file gone) are invisible here,
   // exactly as in fetchGalleryData; their objects stay for Restore.
-  const { data: photoRows } = unlockedAlbumIds.size
-    ? await db
-        .from("photos")
-        .select("*")
-        .in("album_id", [...unlockedAlbumIds])
-        .is("deleted_at", null)
-        .order("sort_order", { ascending: true })
-        .order("created_at", { ascending: true })
-    : { data: [] as Row[] };
+  //
+  // Only what the addressed page can show is fetched and signed. The album
+  // page needs its own album's photos; the profile and event pages render one
+  // cover per event and album, so they get the explicit covers plus the first
+  // photo of each album (the client's default cover, same order as here). The
+  // old shape returned and signed every photo of every unlocked album on every
+  // page: 282 signatures for a profile page that shows seven covers.
+  const photoQuery = () =>
+    db
+      .from("photos")
+      .select("*")
+      .is("deleted_at", null)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
 
-  // Originals and thumbnails signed in the same batches; a thumbnail that fails
-  // to sign only costs the fallback to the original.
-  const paths = (photoRows ?? []).flatMap((photo) =>
-    photo.thumb_path
-      ? [photo.storage_path as string, photo.thumb_path as string]
-      : [photo.storage_path as string],
+  const addressedAlbum = albumSlug
+    ? (allAlbums ?? []).find(
+        (album) =>
+          album.slug === albumSlug &&
+          unlockedEvents.get(String(album.event_id))?.slug === eventSlug &&
+          unlockedAlbumIds.has(String(album.id)),
+      )
+    : undefined;
+
+  let photoRows: Row[] = [];
+  if (addressedAlbum) {
+    const { data } = await photoQuery().eq("album_id", addressedAlbum.id);
+    photoRows = data ?? [];
+  } else if (unlockedAlbumIds.size) {
+    const albumIds = [...unlockedAlbumIds];
+    const wanted = new Set<string>();
+    if (profile.cover_photo_id) wanted.add(String(profile.cover_photo_id));
+    for (const event of unlockedEvents.values()) {
+      if (event.cover_photo_id) wanted.add(String(event.cover_photo_id));
+    }
+    for (const album of allAlbums ?? []) {
+      if (unlockedAlbumIds.has(String(album.id)) && album.cover_photo_id) wanted.add(String(album.cover_photo_id));
+    }
+    const { data: order } = await db
+      .from("photos")
+      .select("id, album_id")
+      .in("album_id", albumIds)
+      .is("deleted_at", null)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    const seen = new Set<string>();
+    for (const row of order ?? []) {
+      const albumId = String(row.album_id);
+      if (seen.has(albumId)) continue;
+      seen.add(albumId);
+      wanted.add(String(row.id));
+    }
+    if (wanted.size) {
+      // `.in("album_id")` again so an explicit cover that points into a locked
+      // album is not leaked through the profile or event cover.
+      const { data } = await photoQuery().in("id", [...wanted]).in("album_id", albumIds);
+      photoRows = data ?? [];
+    }
+  }
+
+  // Objects reachable without any grant are signed for a week so the URL, and
+  // with it the browser's cached copy, survives between visits; anything
+  // behind a PIN keeps the grant's own lifetime.
+  const publicAlbumIds = new Set(
+    (allAlbums ?? [])
+      .filter((album) => {
+        const parent = unlockedEvents.get(String(album.event_id));
+        return !!parent && !!profile.is_public && !!parent.is_public && !!album.is_public;
+      })
+      .map((album) => String(album.id)),
   );
+  const pathsFor = (rows: Row[]) =>
+    rows.flatMap((photo) =>
+      photo.thumb_path
+        ? [photo.storage_path as string, photo.thumb_path as string]
+        : [photo.storage_path as string],
+    );
+  const publicPaths = pathsFor(photoRows.filter((photo) => publicAlbumIds.has(String(photo.album_id))));
+  const grantedPaths = pathsFor(photoRows.filter((photo) => !publicAlbumIds.has(String(photo.album_id))));
   const signed = new Map<string, string>();
 
-  for (let offset = 0; offset < paths.length; offset += 500) {
-    const { data: urls } = await db.storage
-      .from(PHOTOS_BUCKET)
-      .createSignedUrls(paths.slice(offset, offset + 500), GRANTED_URL_TTL_SECONDS);
-    for (const item of urls ?? []) {
-      if (item.path && item.signedUrl) signed.set(item.path, item.signedUrl);
+  for (const [paths, ttl] of [[publicPaths, PUBLIC_URL_TTL_SECONDS], [grantedPaths, GRANTED_URL_TTL_SECONDS]] as const) {
+    for (let offset = 0; offset < paths.length; offset += 500) {
+      const { data: urls } = await db.storage
+        .from(PHOTOS_BUCKET)
+        .createSignedUrls(paths.slice(offset, offset + 500), ttl);
+      for (const item of urls ?? []) {
+        if (item.path && item.signedUrl) signed.set(item.path, item.signedUrl);
+      }
     }
   }
 
@@ -423,7 +489,7 @@ async function gallery(
     (allAlbums ?? []).map((album) => [String(album.id), album.event_id]),
   );
 
-  const photos = (photoRows ?? []).flatMap((photo) => {
+  const photos = photoRows.flatMap((photo) => {
     const src = signed.get(photo.storage_path);
     if (!src) return [];
     return [{
