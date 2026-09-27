@@ -25,7 +25,7 @@ import {
   createAlbum,
   createEvent,
   fetchDropboxPhotos,
-  fetchDropboxPhoto,
+  fetchDropboxThumbnailBlob,
   deleteAlbumWithPhotos,
   deleteEventWithPhotos,
   deletePhoto,
@@ -75,6 +75,7 @@ import { ObjectCoverPickerDialog } from '@/components/ObjectCoverPickerDialog';
 import { isPrivacyValid, type PendingPinChange, PrivacySettings } from '@/components/PrivacySettings';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto, resolveAlbumCover, resolveEventCover } from '@/lib/galleryUtils';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
+import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
 
 function CoverPreview({
   photo,
@@ -353,7 +354,7 @@ export default function EventAlbumManagement() {
     [eventId, galleryData.albums],
   );
 
-  const { dropboxCoverUrls, setDropboxCoverUrls } = useDropboxCovers(galleryData.events, galleryData.albums, eventAlbums);
+  const { dropboxCoverUrls, setDropboxCoverUrls, trackObjectUrl } = useDropboxCovers(galleryData.events, galleryData.albums, eventAlbums);
 
   useEffect(() => {
     if (!eventDropboxCoverAlbumId || !eventDropboxCoverImageName) return;
@@ -365,8 +366,9 @@ export default function EventAlbumManagement() {
 
     const fetchCover = async () => {
       try {
-        const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, eventDropboxCoverImageName);
-        setDropboxCoverUrls((prev) => ({ ...prev, [coverKey]: { src: photo.src, name: photo.name } }));
+        const blob = await fetchDropboxThumbnailBlob({ folderUrl: album.dropbox_folder_url!, fileName: eventDropboxCoverImageName });
+        const src = trackObjectUrl(URL.createObjectURL(blob));
+        setDropboxCoverUrls((prev) => ({ ...prev, [coverKey]: { src, name: eventDropboxCoverImageName } }));
       } catch (error) {
         console.error("Failed to fetch event's dropbox cover", error);
       }
@@ -384,8 +386,9 @@ export default function EventAlbumManagement() {
 
     const fetchCover = async () => {
       try {
-        const photo = await fetchDropboxPhoto(album.dropbox_folder_url!, profileDropboxCoverImageName);
-        setDropboxCoverUrls((prev) => ({ ...prev, [coverKey]: { src: photo.src, name: photo.name } }));
+        const blob = await fetchDropboxThumbnailBlob({ folderUrl: album.dropbox_folder_url!, fileName: profileDropboxCoverImageName });
+        const src = trackObjectUrl(URL.createObjectURL(blob));
+        setDropboxCoverUrls((prev) => ({ ...prev, [coverKey]: { src, name: profileDropboxCoverImageName } }));
       } catch (error) {
         console.error("Failed to fetch profile's dropbox cover", error);
       }
@@ -424,12 +427,15 @@ export default function EventAlbumManagement() {
   // any upload album. The folder URL field and the Sync button key on
   // source_type instead.
   const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
+  const dropboxThumbs = useDropboxThumbnails(isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null, dropboxPhotos);
 
   const displayPhotos = useMemo(() => {
     if (isDropboxAlbum) {
       return dropboxPhotos.map((file) => ({
         id: file.id,
-        src: file.src,
+        // Cached thumbnail for the tile; the viewer loads the original by name.
+        src: dropboxThumbs[file.id] ?? '',
+        thumbSrc: dropboxThumbs[file.id],
         alt: file.name,
         isDropbox: true,
         albumId: selectedAlbum?.id,
@@ -445,7 +451,7 @@ export default function EventAlbumManagement() {
       ...p,
       isDropbox: false,
     }));
-  }, [isDropboxAlbum, dropboxPhotos, albumPhotos, selectedAlbum]);
+  }, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, albumPhotos, selectedAlbum]);
 
   const sortedDisplayPhotos = usePhotoSort(displayPhotos as GalleryPhoto[], managePhotoSort);
 

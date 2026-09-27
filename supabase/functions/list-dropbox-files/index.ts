@@ -81,7 +81,7 @@ async function handler(req: Request) {
   }
 
   try {
-    const { folderUrl, fileName, coverOnly } = await req.json();
+    const { folderUrl, fileName, coverOnly, namesOnly } = await req.json();
 
     if (!folderUrl) {
       return new Response(JSON.stringify({ error: "folderUrl is required" }), {
@@ -108,6 +108,20 @@ async function handler(req: Request) {
     const entries = await listSharedFolder(folderUrl);
     const imageFiles = entries.filter(isImageEntry);
 
+    // Names-only mode: `list_folder` already carries name, id and modified
+    // time, which is all a grid needs now that tiles are thumbnails from the
+    // proxy and the viewer fetches originals by name. The per-file
+    // `get_shared_link_metadata` fan-out below only existed to mint direct
+    // links, so skipping it turns a 70-photo listing from 71 Dropbox calls
+    // into one.
+    const namesOnlyFile = (entry: DropboxEntry): DropboxFile => ({
+      name: entry.name,
+      path_lower: entry.path_lower,
+      id: entry.id,
+      src: "",
+      client_modified: entry.client_modified,
+    });
+
     // Cover mode: one listing plus ONE metadata call.
     //
     // Callers that only want a thumbnail used to request the whole folder and
@@ -127,8 +141,21 @@ async function handler(req: Request) {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      if (namesOnly) {
+        return new Response(JSON.stringify(namesOnlyFile(first)), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       const meta = await getSharedLinkMetadata(folderUrl, first.name);
       return new Response(JSON.stringify(toDropboxFile(meta)), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (namesOnly) {
+      return new Response(JSON.stringify(imageFiles.map(namesOnlyFile)), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
