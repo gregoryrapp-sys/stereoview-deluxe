@@ -231,7 +231,7 @@ export default function PublicProfile() {
     }
 
     let cancelled = false;
-    let objectUrls: string[] = [];
+    const objectUrls: string[] = [];
     const fetchAlbumPhotos = async () => {
       setIsDropboxLoading(true);
       try {
