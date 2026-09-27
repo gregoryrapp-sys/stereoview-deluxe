@@ -8,7 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
 import { fetchGallery, type LockedInfo } from '@/lib/accessGrant';
-import { fetchDropboxThumbnailBlob, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension, mapWithConcurrency } from '@/services/galleryService';
+import { type DropboxFile, fetchDropboxThumbnailBlob, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
+import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
@@ -50,7 +51,7 @@ export default function PublicProfile() {
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
-  const [dropboxAlbumPhotos, setDropboxAlbumPhotos] = useState<GalleryPhoto[]>([]);
+  const [dropboxFiles, setDropboxFiles] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const [dropboxProfileCover, setDropboxProfileCover] = useState<GalleryPhoto | null>(null);
@@ -226,60 +227,45 @@ export default function PublicProfile() {
 
   useEffect(() => {
     if (!isLiveDropboxAlbum(selectedAlbum) || !selectedAlbum.dropbox_folder_url) {
-      setDropboxAlbumPhotos([]);
+      setDropboxFiles([]);
       return;
     }
 
     let cancelled = false;
-    const objectUrls: string[] = [];
-    const fetchAlbumPhotos = async () => {
+    const fetchAlbumFiles = async () => {
       setIsDropboxLoading(true);
       try {
         const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
-        if (cancelled) return;
-
-        setDropboxAlbumPhotos(files.map((file) => ({ id: file.id, src: '', alt: file.name, created_at: file.client_modified, extension: getFileExtension(file.name) })));
-        setIsDropboxLoading(false);
-
-        // Grid tiles are thumbnails (cached by the proxy), a few at a time so
-        // a 70-photo album does not open 70 Dropbox requests at once. The
-        // viewer fetches the original of the photo being viewed, on demand.
-        void mapWithConcurrency(files, 6, async (file) => {
-          if (cancelled) return;
-          const blob = await fetchDropboxThumbnailBlob({
-            folderUrl: selectedAlbum.dropbox_folder_url!,
-            fileName: file.name,
-            modified: file.client_modified,
-          });
-          const src = URL.createObjectURL(blob);
-          if (cancelled) {
-            URL.revokeObjectURL(src);
-            return;
-          }
-
-          objectUrls.push(src);
-          setDropboxAlbumPhotos((photos) =>
-            photos.map((photo) => (photo.id === file.id ? { ...photo, src, thumbSrc: src } : photo)),
-          );
-        });
+        if (!cancelled) setDropboxFiles(files);
       } catch (e) {
         console.error('Failed to fetch dropbox album photos', e);
-        if (!cancelled) {
-          setError('Could not load photos for this Dropbox album.');
-        }
+        if (!cancelled) setError('Could not load photos for this Dropbox album.');
       } finally {
-        if (!cancelled) {
-          setIsDropboxLoading(false);
-        }
+        if (!cancelled) setIsDropboxLoading(false);
       }
     };
 
-    fetchAlbumPhotos();
+    fetchAlbumFiles();
     return () => {
       cancelled = true;
-      objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [selectedAlbum]);
+
+  // Grid tiles are cached thumbnails from the proxy; the viewer fetches the
+  // original of the photo being viewed, by name, on demand.
+  const dropboxThumbs = useDropboxThumbnails(selectedAlbum?.dropbox_folder_url, dropboxFiles);
+  const dropboxAlbumPhotos = useMemo<GalleryPhoto[]>(
+    () =>
+      dropboxFiles.map((file) => ({
+        id: file.id,
+        src: dropboxThumbs[file.id] ?? '',
+        thumbSrc: dropboxThumbs[file.id],
+        alt: file.name,
+        created_at: file.client_modified,
+        extension: getFileExtension(file.name),
+      })),
+    [dropboxFiles, dropboxThumbs],
+  );
 
   const photosByAlbum = useMemo(() => {
     return (data?.photos ?? []).reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {

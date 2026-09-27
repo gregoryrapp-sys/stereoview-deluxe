@@ -22,6 +22,7 @@ import { COLLECTION_SORT_OPTIONS, resolveAlbumCover, resolveEventCover } from '@
 import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
+import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { useViewerFullscreen } from '@/hooks/useViewerFullscreen';
 
@@ -132,11 +133,15 @@ export default function Gallery() {
   };
 }, [isDropboxAlbum, selectedAlbum?.dropbox_folder_url]);
 
+  const dropboxThumbs = useDropboxThumbnails(isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null, dropboxPhotos);
+
   const activePhotos = useMemo(() => {
   if (isDropboxAlbum) {
     return dropboxPhotos.map((file: any) => ({
         id: file.id,
-        src: file.src || '',
+        // Cached thumbnail for the tile; the viewer loads the original by name.
+        src: dropboxThumbs[file.id] ?? '',
+        thumbSrc: dropboxThumbs[file.id],
         alt: file.name,
         albumId: selectedAlbumId,
         eventId: selectedEventId,
@@ -145,7 +150,7 @@ export default function Gallery() {
       }));
   }
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
-}, [isDropboxAlbum, dropboxPhotos, galleryData.photos, selectedAlbumId, selectedEventId]);
+}, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, galleryData.photos, selectedAlbumId, selectedEventId]);
 
   const sortedActivePhotos = usePhotoSort(activePhotos, photoSort);
 

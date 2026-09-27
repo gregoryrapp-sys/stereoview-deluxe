@@ -729,7 +729,9 @@ export async function fetchGalleryData(ownerId?: string): Promise<GalleryData> {
 export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile[]> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
     region: FUNCTIONS_REGION,
-    body: { folderUrl },
+    // Names only: grids use proxy thumbnails and the viewer fetches originals
+    // by name, so the direct links (one metadata call per file) are unused.
+    body: { folderUrl, namesOnly: true },
   });
   if (error) {
     throw new Error(error.message || 'Failed to fetch Dropbox files');
@@ -764,7 +766,7 @@ export async function fetchDropboxPhotos(folderUrl: string): Promise<DropboxFile
 export async function fetchDropboxFolderCover(folderUrl: string): Promise<DropboxFile | null> {
   const { data, error } = await supabase.functions.invoke('list-dropbox-files', {
     region: FUNCTIONS_REGION,
-    body: { folderUrl, coverOnly: true },
+    body: { folderUrl, coverOnly: true, namesOnly: true },
   });
   if (error) {
     throw new Error(error.message || 'Failed to fetch Dropbox cover');
