@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, FunctionRegion } from '@supabase/supabase-js';
 import type { Database } from '@/types/database';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -18,3 +18,11 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
 });
 
 export const PHOTOS_BUCKET = 'photos';
+
+/**
+ * Edge functions run wherever the caller is unless told otherwise, while the
+ * database lives in East US. The gallery function alone makes six sequential
+ * database round trips, so a visitor in Europe was paying a transatlantic hop
+ * for each one. Every invoke passes this so the function runs beside the data.
+ */
+export const FUNCTIONS_REGION = FunctionRegion.UsEast1;

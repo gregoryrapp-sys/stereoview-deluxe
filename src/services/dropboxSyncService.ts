@@ -1,5 +1,5 @@
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { supabase } from '@/lib/supabase';
+import { FUNCTIONS_REGION, supabase } from '@/lib/supabase';
 import type { SyncRunRecord } from '@/types/database';
 import type {
   PlannedAddition,
@@ -67,7 +67,7 @@ export class DropboxSyncError extends Error {
 }
 
 async function invokeSync<T>(body: Record<string, unknown>): Promise<T> {
-  const { data, error } = await supabase.functions.invoke('dropbox-sync', { body });
+  const { data, error } = await supabase.functions.invoke('dropbox-sync', { body, region: FUNCTIONS_REGION });
 
   if (error) {
     let message = error.message;
