@@ -47,8 +47,13 @@ import {
  * flagged listings and stores what it returns.
  */
 
-// Supabase Free plan. Refuse to start an import that would land above 90%.
-const QUOTA_BYTES = 1024 * 1024 * 1024;
+// Storage included in the project's Supabase plan. Refuse to start an import
+// that would land above 90% of it, so an import never hits the hard limit
+// halfway through. The plan is Pro (100 GB) since 2026-09-29; the secret
+// STORAGE_QUOTA_GB overrides this without a redeploy
+// (`supabase secrets set STORAGE_QUOTA_GB=100`).
+const DEFAULT_QUOTA_GB = 100;
+const QUOTA_BYTES = (Number(Deno.env.get("STORAGE_QUOTA_GB")) || DEFAULT_QUOTA_GB) * 1024 * 1024 * 1024;
 const QUOTA_REFUSE_RATIO = 0.9;
 /** Rough per-photo allowance for the thumbnail written beside each import. */
 const THUMB_BYTES_ESTIMATE = 90_000;
