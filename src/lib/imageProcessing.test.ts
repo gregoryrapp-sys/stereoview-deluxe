@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { photoCacheKey } from '@/lib/imageProcessing';
+import { MAX_EYE_DIMENSION_CAP, MIN_EYE_DIMENSION, maxEyeDimensionFor, photoCacheKey } from '@/lib/imageProcessing';
 import type { DropboxFile, GalleryPhoto } from '@/services/galleryService';
 
 /**
@@ -66,5 +66,31 @@ describe('photoCacheKey', () => {
   it('uses the photo\'s stored alignment when none is passed', () => {
     const swapped = photo({ storagePath: 'one.jpg', alignment: { dx: 2, dy: -1, swapped: true } });
     expect(photoCacheKey(swapped)).toBe(photoCacheKey(swapped, 'both', { dx: 2, dy: -1, swapped: true }));
+  });
+});
+
+/**
+ * The eye size follows the screen. A fixed 1440 made every photo soft on a
+ * desktop or retina display: a 3600 px eye became 943x1440 and was stretched
+ * back up to fill 2160 device pixels.
+ */
+describe('maxEyeDimensionFor', () => {
+  it('keeps the phone size as the floor', () => {
+    expect(maxEyeDimensionFor(852, 3)).toBeGreaterThanOrEqual(MIN_EYE_DIMENSION);
+    expect(maxEyeDimensionFor(400, 1)).toBe(MIN_EYE_DIMENSION);
+  });
+
+  it('covers a retina laptop in 2D mode with zoom headroom', () => {
+    // 1512 CSS px wide at DPR 2 -> 3024 device px, plus 25% headroom.
+    expect(maxEyeDimensionFor(1512, 2)).toBe(3780);
+  });
+
+  it('caps very large displays so canvas and cache memory stay bounded', () => {
+    expect(maxEyeDimensionFor(3840, 2)).toBe(MAX_EYE_DIMENSION_CAP);
+  });
+
+  it('tolerates a missing or odd device pixel ratio', () => {
+    expect(maxEyeDimensionFor(1920, 0)).toBe(2400);
+    expect(maxEyeDimensionFor(1920, 5)).toBe(MAX_EYE_DIMENSION_CAP);
   });
 });
