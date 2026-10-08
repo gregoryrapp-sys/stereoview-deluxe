@@ -40,16 +40,39 @@ export interface ProcessedStereoImage {
 export type EyeSelection = 'left' | 'both';
 
 /**
- * Longest edge of one eye after downscaling.
+ * Longest edge of one eye after downscaling, sized to the screen it will be
+ * shown on.
  *
- * The binding constraint is device pixels, not CSS pixels: a phone in landscape
- * is ~393 CSS px tall at DPR 3, so ~1179 device px, and a split eye is roughly
- * square. 1440 covers that with headroom for pinch-zoom before softness shows.
+ * The binding constraint is device pixels, not CSS pixels. A fixed 1440 was
+ * chosen for a phone in landscape (~393 CSS px tall at DPR 3), but a desktop
+ * at DPR 2 shows an eye across 2160 device pixels in 2D mode and more under
+ * pinch-zoom, so a 3600x5498 eye was shrunk to 943x1440 and stretched back
+ * up: visibly softer than the same file opened in Dropbox. The eye now fits
+ * the screen's long edge in device pixels with headroom for a modest zoom,
+ * never above the source, and never above MAX_EYE_DIMENSION_CAP, which keeps
+ * canvas and cache memory bounded on large displays.
  */
-const MAX_EYE_DIMENSION = 1440;
-const JPEG_QUALITY = 0.85;
+export const MIN_EYE_DIMENSION = 1440;
+export const MAX_EYE_DIMENSION_CAP = 4096;
+/** Pinch-zoom starts to soften past this factor; full 5x is accepted as soft. */
+const ZOOM_HEADROOM = 1.25;
+/** Downscaled eyes are the only copy the viewer has; spend a little more on them. */
+const JPEG_QUALITY = 0.9;
 
-/** ~24 photos at roughly 0.5 MB of base64 each once downscaled. */
+/** Pure form for tests: screen long edge in CSS px and the device pixel ratio. */
+export function maxEyeDimensionFor(screenLongEdgeCss: number, devicePixelRatio: number): number {
+  const dpr = Math.min(Math.max(devicePixelRatio || 1, 1), 3);
+  const wanted = Math.ceil(screenLongEdgeCss * dpr * ZOOM_HEADROOM);
+  return Math.min(MAX_EYE_DIMENSION_CAP, Math.max(MIN_EYE_DIMENSION, wanted));
+}
+
+function maxEyeDimension(): number {
+  if (typeof window === 'undefined') return MIN_EYE_DIMENSION;
+  const edge = Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0, window.innerWidth, window.innerHeight);
+  return maxEyeDimensionFor(edge, window.devicePixelRatio);
+}
+
+/** ~24 photos at 0.5-2 MB of base64 each once downscaled (phone to 4K). */
 const MAX_CACHED_ENTRIES = 24;
 
 /** Neighbour preloads must not starve the photo the user is actually looking at. */
@@ -173,7 +196,7 @@ function canvasToBlob(canvas: HTMLCanvasElement): Promise<Blob> {
 }
 
 /**
- * Crops one eye out of the source and scales it to fit MAX_EYE_DIMENSION.
+ * Crops one eye out of the source and scales it to fit maxEyeDimension().
  *
  * `drawImage` does the crop and the downscale in a single GPU-accelerated pass;
  * the expensive part was never the draw, it was the encode, which is now async.
@@ -243,7 +266,7 @@ async function processImage(
 
   const rects = computeEyeRects(halfWidth, height, alignment);
 
-  const scale = Math.min(1, MAX_EYE_DIMENSION / Math.max(rects.cropW, rects.cropH));
+  const scale = Math.min(1, maxEyeDimension() / Math.max(rects.cropW, rects.cropH));
   const targetWidth = Math.max(1, Math.round(rects.cropW * scale));
   const targetHeight = Math.max(1, Math.round(rects.cropH * scale));
 
