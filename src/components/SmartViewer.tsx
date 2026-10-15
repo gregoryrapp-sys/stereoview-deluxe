@@ -16,6 +16,8 @@ import type { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { useTransformSettle } from '@/hooks/useTransformSettle';
+import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
+import { eyeSizeFromThumb, eyeViewport, fitContain } from '@/lib/viewerGeometry';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { loadStereoSourceImage, resolveAlignment } from '@/lib/imageProcessing';
@@ -64,6 +66,11 @@ const SHARE_EXTENSIONS: Record<string, string> = {
 };
 
 /** Nudge step in source pixels; Shift multiplies it. */
+/** The sharp eyes fade in over the placeholder this fast. */
+const FADE_MS = 200;
+/** Loads shorter than this show no spinner at all. */
+const SPINNER_DELAY_MS = 300;
+
 const NUDGE_STEP = 1;
 const NUDGE_STEP_LARGE = 5;
 
@@ -427,10 +434,56 @@ export default function SmartViewer({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [alignMode, nudge, flipEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose]);
 
-  const viewportWidth = containerSize.width / 2;
-  const viewportHeight = containerSize.height;
-  const containedImageScale = dimensions ? Math.min(viewportWidth / dimensions.width, viewportHeight / dimensions.height) : 1;
-  const imageStageSize = dimensions ? { width: dimensions.width * containedImageScale, height: dimensions.height * containedImageScale } : null;
+  // One stage for both the placeholder and the sharp eyes. Until the split
+  // result exists, the eye's shape comes from the grid thumbnail (half its
+  // width), so the placeholder is drawn in the box the sharp image will fill:
+  // same size, same letterboxing, and the fade-in later moves nothing. The
+  // alignment crop changes the final shape by a pixel or two at most.
+  const thumbSrc = galleryPhoto.thumbSrc;
+  const thumbSize = useNaturalImageSize(thumbSrc);
+  const eyeSource = dimensions ?? (thumbSize ? eyeSizeFromThumb(thumbSize.width, thumbSize.height) : null);
+  const viewport = eyeViewport(mode, containerSize.width, containerSize.height);
+  const stage = eyeSource ? fitContain(eyeSource.width, eyeSource.height, viewport.width, viewport.height) : null;
+  const containedImageScale = stage?.scale ?? 1;
+
+  // Reveal: the sharp eyes mount at opacity 0 over the placeholder and fade in
+  // once BOTH have decoded (a pair appearing one eye at a time is unpleasant
+  // to fuse). The fade only happens when a placeholder was actually shown;
+  // a cache hit renders the sharp eyes directly, so paging through prepared
+  // neighbours never flashes the thumbnail.
+  const [loadedUrls, setLoadedUrls] = useState<Set<string>>(() => new Set());
+  const [placeholderShown, setPlaceholderShown] = useState(false);
+  const [placeholderGone, setPlaceholderGone] = useState(false);
+  const [slowLoading, setSlowLoading] = useState(false);
+  const markLoaded = useCallback((url: string) => {
+    setLoadedUrls((current) => (current.has(url) ? current : new Set(current).add(url)));
+  }, []);
+  useEffect(() => {
+    setLoadedUrls(new Set());
+    setPlaceholderShown(false);
+    setPlaceholderGone(false);
+  }, [photo.id]);
+  const placeholderAvailable = !!thumbSrc && !!stage;
+  useEffect(() => {
+    if (isLoading && placeholderAvailable) setPlaceholderShown(true);
+  }, [isLoading, placeholderAvailable]);
+  const finalReady =
+    !!leftUrl && loadedUrls.has(leftUrl) && (mode === '2d' || (!!rightUrl && loadedUrls.has(rightUrl)));
+  useEffect(() => {
+    if (!finalReady || !placeholderShown) return;
+    const timer = window.setTimeout(() => setPlaceholderGone(true), FADE_MS + 50);
+    return () => window.clearTimeout(timer);
+  }, [finalReady, placeholderShown]);
+  // The spinner only appears for loads that are actually slow; quick ones
+  // show the placeholder sharpening and nothing else.
+  useEffect(() => {
+    if (!isLoading) {
+      setSlowLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowLoading(true), SPINNER_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [isLoading]);
   // A 3D transform plus will-change parks the stage on its own GPU layer, which
   // is what makes the gesture smooth. That layer is rasterized once and then
   // stretched, so holding it after the gesture leaves the image blurry while
@@ -540,42 +593,63 @@ export default function SmartViewer({
     </button>
   );
 
-  // While the original downloads and splits, show the grid thumbnail (a
-  // downscaled whole SBS, ~80 KB, usually already cached) in place of a blank
-  // screen: each pane shows its eye by clipping the 200%-wide image, the same
-  // trick StereoThumbnail uses, honouring the swap. It is soft and slightly
-  // blurred so the sharp eyes visibly replace it.
-  const thumbSrc = galleryPhoto.thumbSrc;
-  const placeholderEye = (eye: 'left' | 'right') => {
+  // One eye's stage: the grid thumbnail clipped to this eye underneath (crisp,
+  // not blurred - a low-resolution photo reads as "loading detail", a blurred
+  // one reads as broken), the sharp eye on top fading in. The 200%-wide clip
+  // is exact because the stage has the half-thumbnail's aspect.
+  const renderEye = (eye: 'left' | 'right', url: string | null, transform: string, willChange: string) => {
+    if (!stage) return null;
     const rightHalf = eye === 'right' ? !committedAlignment.swapped : committedAlignment.swapped;
     return (
-      <div className="relative h-full w-full overflow-hidden">
-        <img
-          src={thumbSrc}
-          alt=""
-          draggable={false}
-          className={cn(
-            'absolute inset-y-0 h-full w-[200%] max-w-none object-cover blur-[2px] opacity-80',
-            rightHalf ? 'right-0 object-right' : 'left-0 object-left',
-          )}
-        />
+      <div
+        className="viewer-stage relative overflow-hidden"
+        style={{ width: stage.width, height: stage.height, transform, willChange }}
+      >
+        {thumbSrc && !placeholderGone && (
+          <img
+            src={thumbSrc}
+            alt=""
+            draggable={false}
+            className={cn(
+              'absolute inset-y-0 h-full w-[200%] max-w-none object-cover',
+              rightHalf ? 'right-0 object-right' : 'left-0 object-left',
+            )}
+          />
+        )}
+        {url && (
+          <img
+            key={url}
+            src={url}
+            alt={eye === 'left' ? `${photo.alt} (left)` : `${photo.alt} (right)`}
+            draggable={false}
+            // A data URL that is already decoded never fires onLoad again.
+            ref={(element) => {
+              if (element && element.complete && element.naturalWidth > 0) markLoaded(url);
+            }}
+            onLoad={() => markLoaded(url)}
+            className={cn(
+              'absolute inset-0 h-full w-full',
+              placeholderShown && 'transition-opacity duration-200 ease-out',
+              placeholderShown && !finalReady ? 'opacity-0' : 'opacity-100',
+            )}
+          />
+        )}
       </div>
     );
   };
 
   const loadingIndicator = isLoading && (
-    <div className="absolute inset-0">
-      {thumbSrc && mode === 'stereo' && (
-        <div className="flex h-full w-full">
-          <div className="h-full w-1/2">{placeholderEye('left')}</div>
-          <div className="h-full w-1/2">{placeholderEye('right')}</div>
+    placeholderAvailable ? (
+      slowLoading && (
+        <div className="pointer-events-none absolute right-16 top-4 [padding-right:env(safe-area-inset-right)]">
+          <Loader2 className="h-5 w-5 animate-spin text-white/50" />
         </div>
-      )}
-      {thumbSrc && mode === '2d' && <div className="h-full w-full">{placeholderEye('left')}</div>}
-      <div className="absolute inset-0 flex items-center justify-center">
+      )
+    ) : (
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-white/60" />
       </div>
-    </div>
+    )
   );
 
   const errorIndicator = error && (
@@ -716,9 +790,11 @@ export default function SmartViewer({
         onTouchEnd={handleTouchEnd_2d}
         onClick={handleContainerClick}
       >
+        <div className="flex h-full w-full items-center justify-center overflow-hidden">
+          {renderEye('left', leftUrl, 'none', 'auto')}
+        </div>
         {loadingIndicator}
         {errorIndicator}
-        {leftUrl && <img src={leftUrl} alt={photo.alt} className="max-h-full max-w-full object-contain" draggable={false} />}
         {closeButton}
         {shareButton}
         {prevButton}
@@ -741,24 +817,18 @@ export default function SmartViewer({
       onPointerCancel={alignMode ? handleAlignPointerUp : undefined}
       onClick={handleContainerClick}
     >
+      <div className="flex h-full w-full">
+        <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
+          {renderEye('left', leftUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
+        </div>
+        <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
+          {/* The draft delta lives only here: the right eye moves on screen so
+              the owner can judge the nudge without re-encoding anything. */}
+          {renderEye('right', rightUrl, rightTransform, isTransforming || !!draft ? 'transform' : 'auto')}
+        </div>
+      </div>
       {loadingIndicator}
       {errorIndicator}
-      {leftUrl && rightUrl && (
-        <div className="flex h-full w-full">
-          <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: imageTransform, willChange: isTransforming ? 'transform' : 'auto' }}>
-              <img src={leftUrl} alt={`${photo.alt} (left)`} className="h-full w-full" draggable={false} />
-            </div>
-          </div>
-          <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-            {/* The draft delta lives only here: the right eye moves on screen so
-                the owner can judge the nudge without re-encoding anything. */}
-            <div className="viewer-stage" style={{ width: imageStageSize?.width, height: imageStageSize?.height, transform: rightTransform, willChange: isTransforming || !!draft ? 'transform' : 'auto' }}>
-              <img src={rightUrl} alt={`${photo.alt} (right)`} className="h-full w-full" draggable={false} />
-            </div>
-          </div>
-        </div>
-      )}
       {closeButton}
       {shareButton}
       {alignmentButtons}
