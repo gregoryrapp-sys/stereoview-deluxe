@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Photo } from '@/data/photos';
 import { cn } from '@/lib/utils';
+import { rememberNaturalSize } from '@/hooks/useNaturalImageSize';
 
 interface StereoThumbnailProps {
   photo: Photo & { thumbSrc?: string; alignment?: { swapped: boolean } };
@@ -49,6 +50,9 @@ export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoT
           'absolute inset-y-0 h-full w-[200%] max-w-none object-cover transition-opacity group-hover:opacity-90',
           swapped ? 'right-0 object-right' : 'left-0 object-left',
         )}
+        // The viewer sizes its loading placeholder from this; a tile that was
+        // on screen means the photo opens with no layout jump.
+        onLoad={(event) => rememberNaturalSize(src, event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
         onError={() => {
           if (photo.thumbSrc && !thumbFailed) setThumbFailed(true);
         }}
