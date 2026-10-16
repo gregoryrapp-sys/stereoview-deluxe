@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, ImagePlus, Loader2, Upload, X } from 'lucide-react';
+import type { DragEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -15,6 +16,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
+import { toast } from '@/hooks/use-toast';
 import { uploadSbsPhoto } from '@/services/galleryService';
 import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
 import { convertSpatialToSbs } from '@/lib/spatial/convertSpatial';
@@ -53,6 +55,14 @@ const UPLOAD_CONCURRENCY = 3;
  * a picker reports for HEIC.
  */
 const ACCEPTED_TYPES = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
+
+/**
+ * Dropped files bypass the picker's `accept` filter, so apply the same rule by
+ * hand. Extension first: HEIC arrives with an empty or vendor MIME type.
+ */
+export function isAcceptedFile(file: File): boolean {
+  return /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name) || /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type);
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -121,7 +131,9 @@ export default function AlbumUploadDialog({
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [isUploading]);
 
-  const addFiles = (files: FileList | null) => {
+  const [dragActive, setDragActive] = useState(false);
+
+  const addFiles = (files: FileList | File[] | null) => {
     if (!files?.length) return;
     setQueue((current) => [
       ...current,
@@ -131,6 +143,49 @@ export default function AlbumUploadDialog({
         status: 'pending' as const,
       })),
     ]);
+  };
+
+  // Drag and drop onto the dialog. A drop anywhere else in the window would
+  // make the browser open the image and leave the app, so while files can
+  // be chosen the whole window swallows drags; only the zone accepts them.
+  useEffect(() => {
+    if (!open || step !== 'select') return;
+    const swallow = (event: globalThis.DragEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener('dragover', swallow);
+    window.addEventListener('drop', swallow);
+    return () => {
+      window.removeEventListener('dragover', swallow);
+      window.removeEventListener('drop', swallow);
+    };
+  }, [open, step]);
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    if (!dragActive) setDragActive(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    // Leaving for a child element also fires dragleave; only react to leaving the zone.
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+    setDragActive(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setDragActive(false);
+    const dropped = Array.from(event.dataTransfer.files ?? []);
+    const accepted = dropped.filter(isAcceptedFile);
+    addFiles(accepted);
+    if (accepted.length < dropped.length) {
+      const skipped = dropped.length - accepted.length;
+      toast({
+        title: `${skipped} ${skipped === 1 ? 'file' : 'files'} skipped`,
+        description: 'Only JPG, PNG, WebP and HEIC images can be uploaded.',
+      });
+    }
   };
 
   const removeFile = (id: string) => {
@@ -240,7 +295,16 @@ export default function AlbumUploadDialog({
         </DialogHeader>
 
         {step === 'select' && (
-          <div className="space-y-4">
+          <div
+            className={cn(
+              'space-y-4 rounded-md border-2 border-dashed p-3 transition-colors',
+              dragActive ? 'border-primary bg-primary/5' : 'border-transparent',
+            )}
+            onDragOver={handleDragOver}
+            onDragEnter={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <div className="space-y-2">
               <Label htmlFor="album-upload-files">Choose files</Label>
               <Input
@@ -255,6 +319,9 @@ export default function AlbumUploadDialog({
                   event.target.value = '';
                 }}
               />
+              <p className="text-xs text-muted-foreground">
+                {dragActive ? 'Drop to add them to the list.' : 'Or drag photos from your computer and drop them here.'}
+              </p>
             </div>
 
             {queue.length > 0 && (
