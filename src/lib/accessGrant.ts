@@ -130,8 +130,10 @@ export async function fetchGallery(params: {
   const albums = (data.albums ?? []) as Array<{ id: string; lr_swapped_default?: boolean }>;
   const swapDefaults = new Map(albums.map((album) => [album.id, !!album.lr_swapped_default]));
   const photos: GalleryPhoto[] = ((data.photos ?? []) as Array<Record<string, unknown>>).map((raw) => {
-    const { alignDx, alignDy, lrSwapped, alignVersion, alignConfidence, ...photo } = raw as Record<string, never> & {
+    const { alignDx, alignDy, lrSwapped, alignRotation, alignScale, alignVersion, alignConfidence, ...photo } = raw as Record<string, never> & {
       alignDx?: number | null;
+      alignRotation?: number | null;
+      alignScale?: number | null;
       alignDy?: number | null;
       lrSwapped?: boolean | null;
       alignVersion?: number | null;
@@ -139,7 +141,7 @@ export async function fetchGallery(params: {
       albumId?: string;
     };
     const { alignment, hasStored } = alignmentFromRow(
-      { align_dx: alignDx, align_dy: alignDy, lr_swapped: lrSwapped },
+      { align_dx: alignDx, align_dy: alignDy, lr_swapped: lrSwapped, align_rotation: alignRotation, align_scale: alignScale },
       swapDefaults.get(String(photo.albumId)) ?? false,
     );
     const gallery = photo as unknown as GalleryPhoto;

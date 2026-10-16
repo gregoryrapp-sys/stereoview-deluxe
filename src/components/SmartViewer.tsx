@@ -766,7 +766,9 @@ export default function SmartViewer({
         {estimate && (
           <span className="block">
             Measured: {Math.round(estimate.confidence * 100)}% confidence
-            {estimate.rotationSuspected && ' · rotation detected, shift alone cannot fully fix it'}
+            {estimate.alignment.rotation !== undefined && ` · rotation ${estimate.alignment.rotation.toFixed(2)}° corrected`}
+            {estimate.alignment.scale !== undefined && ` · scale ${(estimate.alignment.scale * 100).toFixed(1)}%`}
+            {estimate.rotationSuspected && estimate.alignment.rotation === undefined && estimate.alignment.scale === undefined && ' · uneven vertical offset the model cannot fully fix'}
             {estimate.swapSuggested && ' · the eyes looked exchanged'}
           </span>
         )}

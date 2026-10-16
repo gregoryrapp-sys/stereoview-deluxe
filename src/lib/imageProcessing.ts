@@ -127,7 +127,10 @@ export function photoCacheKey(
   const identity = candidate.storagePath ?? candidate.id ?? candidate.path_lower ?? candidate.src;
   // Alignment is part of the identity: the same photo split with a different
   // offset or swap is a different pair of eyes.
-  return `${identity}:${eyes}:${alignment.swapped ? 1 : 0}:${alignment.dx}:${alignment.dy}`;
+  const rotation = alignment.rotation ?? 0;
+  const scale = alignment.scale ?? 1;
+  const transform = rotation !== 0 || scale !== 1 ? `:${rotation.toFixed(3)}:${scale.toFixed(4)}` : '';
+  return `${identity}:${eyes}:${alignment.swapped ? 1 : 0}:${alignment.dx}:${alignment.dy}${transform}`;
 }
 
 /**
@@ -206,6 +209,7 @@ async function extractEye(
   rect: { sx: number; sy: number; sw: number; sh: number },
   targetWidth: number,
   targetHeight: number,
+  transform?: { rotation: number; scale: number },
 ): Promise<string> {
   const canvas = document.createElement('canvas');
   canvas.width = targetWidth;
@@ -216,8 +220,18 @@ async function extractEye(
 
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  // The source rectangle carries the alignment: the right eye's rect is shifted
-  // by (dx, dy) and both are cropped to the overlap (see stereoAlign/geometry).
+  // The source rectangle carries the shift: the right eye's rect is moved by
+  // (dx, dy) and both are cropped to the overlap plus a margin (see
+  // stereoAlign/geometry). Rotation and scale are the model's s·R(θ) about the
+  // eye centre: output pixel p must show source pixel s·R(θ)·(p - c) + c, so the
+  // canvas is set up with the inverse, R(-θ)/s about the output centre.
+  if (transform && (transform.rotation !== 0 || transform.scale !== 1)) {
+    const cx = targetWidth / 2, cy = targetHeight / 2;
+    ctx.translate(cx, cy);
+    ctx.rotate((-transform.rotation * Math.PI) / 180);
+    ctx.scale(1 / transform.scale, 1 / transform.scale);
+    ctx.translate(-cx, -cy);
+  }
   ctx.drawImage(img, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, targetWidth, targetHeight);
 
   return await blobToDataUrl(await canvasToBlob(canvas));
@@ -274,15 +288,19 @@ async function processImage(
   // right half of the file - so the crop and the swap apply here too.
   const leftUrl = await extractEye(img, rects.left, targetWidth, targetHeight);
   const rightUrl = eyes === 'both'
-    ? await extractEye(img, rects.right, targetWidth, targetHeight)
+    ? await extractEye(img, rects.right, targetWidth, targetHeight, { rotation: rects.rotation, scale: rects.scale })
     : null;
+
+  const applied: StereoAlignment = { dx: rects.dx, dy: rects.dy, swapped: alignment.swapped };
+  if (rects.rotation !== 0) applied.rotation = rects.rotation;
+  if (rects.scale !== 1) applied.scale = rects.scale;
 
   return {
     leftUrl,
     rightUrl,
     width: targetWidth,
     height: targetHeight,
-    alignment: { dx: rects.dx, dy: rects.dy, swapped: alignment.swapped },
+    alignment: applied,
     sourceScale: targetWidth / rects.cropW,
   };
 }

@@ -85,6 +85,9 @@ export interface PhotoRecord {
   align_dx: number | null;
   align_dy: number | null;
   lr_swapped: boolean | null;
+  /** Right-eye rotation (degrees, CCW) and scale about its centre; null = none. */
+  align_rotation: number | null;
+  align_scale: number | null;
   align_version: number | null;
   align_confidence: number | null;
 }
@@ -199,6 +202,8 @@ export interface Database {
           align_dx?: number | null;
           align_dy?: number | null;
           lr_swapped?: boolean | null;
+          align_rotation?: number | null;
+          align_scale?: number | null;
           align_version?: number | null;
           align_confidence?: number | null;
         };
