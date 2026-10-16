@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AlertCircle, ArrowLeft, Cloud, Eye, FolderOpen, Images, Lock, User } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
+import { Switch } from '@/components/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
@@ -267,6 +269,13 @@ export default function PublicProfile() {
     [dropboxFiles, dropboxThumbs],
   );
 
+  // Management route for the object on screen (album, event, or the page).
+  const manageHref = selectedAlbum && selectedEvent
+    ? `/manage/events/${selectedEvent.id}/albums/${selectedAlbum.id}`
+    : selectedEvent
+      ? `/manage/events/${selectedEvent.id}`
+      : '/manage';
+
   const photosByAlbum = useMemo(() => {
     return (data?.photos ?? []).reduce<Record<string, GalleryPhoto[]>>((groups, photo) => {
       if (!photo.albumId) return groups;
@@ -394,7 +403,39 @@ export default function PublicProfile() {
               </>
             )}
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Owner's view switch: compact, in the button row. "Photographer"
+                is the default and shows everything; "Visitor" ignores the
+                session so the PIN prompts and Private items behave as they
+                do for someone with the link. */}
+            {(ownerView || previewAsVisitor) && isAuthenticated && (
+              <label
+                className="flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm"
+                title={previewAsVisitor
+                  ? 'This is what someone with your link sees: PIN prompts, no Private items.'
+                  : 'You are signed in as the owner and see everything, including Private items and no PIN prompts.'}
+              >
+                <span className="text-muted-foreground">View as</span>
+                <span className={cn(!previewAsVisitor && 'font-medium')}>Photographer</span>
+                <Switch
+                  checked={previewAsVisitor}
+                  onCheckedChange={(checked) => togglePreviewAsVisitor(checked === true)}
+                  aria-label="View as visitor"
+                />
+                <span className={cn(previewAsVisitor && 'font-medium')}>Visitor</span>
+              </label>
+            )}
+            {/* Manage opens management at the level being viewed, so uploading
+                to the album on screen is one click, not a drill-down from the
+                top. */}
+            {ownerView && !previewAsVisitor && (
+              <Button asChild variant="secondary" className="gap-2">
+                <Link to={manageHref}>
+                  <Settings className="h-4 w-4" />
+                  Manage
+                </Link>
+              </Button>
+            )}
             {isAuthenticated ? (
               <Button asChild variant="secondary" className="gap-2">
                 <Link to="/gallery">
@@ -418,34 +459,6 @@ export default function PublicProfile() {
             </Button>
           </div>
         </div>
-        {/* The owner sees their own PIN-protected and Private items. Said loudly,
-            with a way to see the visitor's view, because "I opened my link and
-            was not asked for the PIN" is the natural reading otherwise. */}
-        {ownerView && !previewAsVisitor && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
-            <span className="flex items-start gap-2">
-              <Eye className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>
-                <strong>You're signed in as the owner, so you see everything.</strong> Visitors are asked
-                for PINs and never see Private items.
-              </span>
-            </span>
-            <Button size="sm" variant="secondary" onClick={() => togglePreviewAsVisitor(true)}>
-              View as a visitor
-            </Button>
-          </div>
-        )}
-        {previewAsVisitor && isAuthenticated && (
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-sky-500/50 bg-sky-500/10 px-4 py-3 text-sm text-sky-700 dark:text-sky-300">
-            <span className="flex items-center gap-2">
-              <Eye className="h-4 w-4 shrink-0" />
-              Viewing as a visitor - this is what someone with your link sees.
-            </span>
-            <Button size="sm" variant="secondary" onClick={() => togglePreviewAsVisitor(false)}>
-              Back to owner view
-            </Button>
-          </div>
-        )}
       </header>
 
       <main className="mx-auto max-w-6xl">

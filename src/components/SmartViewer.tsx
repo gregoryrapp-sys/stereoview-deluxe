@@ -224,7 +224,11 @@ export default function SmartViewer({
 
   useEffect(() => {
     resetTransform();
-    setShowControls(true);
+    // Opening the viewer or arriving by keyboard shows the controls; a swipe
+    // does not. Someone paging through an album with the controls hidden
+    // had them pop back up on every photo, which is exactly when they are in
+    // the way.
+    if (Date.now() - lastSwipeAtRef.current > 500) setShowControls(true);
     // A new photo means a new alignment; leave Align mode rather than carry a
     // draft across photos.
     setAlignMode(false);
