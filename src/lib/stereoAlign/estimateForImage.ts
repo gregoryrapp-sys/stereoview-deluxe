@@ -18,6 +18,9 @@ export const STORE_MIN_CONFIDENCE = 0.5;
  */
 export function applyEstimate(est: AlignmentEstimate, displayedSwapped: boolean): StereoAlignment {
   const measured: StereoAlignment = { dx: est.alignment.dx, dy: est.alignment.dy, swapped: displayedSwapped };
+  // Rotation and scale ride along; toggleSwapped inverts them with the shift.
+  if (est.alignment.rotation !== undefined) measured.rotation = est.alignment.rotation;
+  if (est.alignment.scale !== undefined) measured.scale = est.alignment.scale;
   return est.swapSuggested ? toggleSwapped(measured) : measured;
 }
 /** At or above this an owner's viewer may persist silently. */

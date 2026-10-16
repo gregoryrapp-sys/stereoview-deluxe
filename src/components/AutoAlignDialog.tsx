@@ -225,7 +225,7 @@ export default function AutoAlignDialog({
               {done} of {pending.length} measured · {outcome.stored} saved
               {outcome.lowConfidence > 0 && ` · ${outcome.lowConfidence} unsure (left unchanged)`}
               {outcome.flipped > 0 && ` · ${outcome.flipped} flipped L/R`}
-              {outcome.rotation > 0 && ` · ${outcome.rotation} with rotation`}
+              {outcome.rotation > 0 && ` · ${outcome.rotation} with rotation corrected`}
               {outcome.failed.length > 0 && <span className="text-destructive"> · {outcome.failed.length} failed</span>}
             </p>
             {outcome.failed.length > 0 && (

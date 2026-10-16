@@ -94,3 +94,13 @@ describe('maxEyeDimensionFor', () => {
     expect(maxEyeDimensionFor(1920, 5)).toBe(MAX_EYE_DIMENSION_CAP);
   });
 });
+
+describe('photoCacheKey: rotation and scale', () => {
+  const subject = { id: 'r1', src: 'https://example.test/r.jpg', alt: 'r.jpg', storagePath: 'p/r.jpg' } as GalleryPhoto;
+  it('separates a rotated split from the plain one, and ignores identity values', () => {
+    const plain = photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: false });
+    expect(photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: false, rotation: 0.5 })).not.toBe(plain);
+    expect(photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: false, scale: 0.99 })).not.toBe(plain);
+    expect(photoCacheKey(subject, 'both', { dx: 0, dy: 0, swapped: false, rotation: 0, scale: 1 })).toBe(plain);
+  });
+});

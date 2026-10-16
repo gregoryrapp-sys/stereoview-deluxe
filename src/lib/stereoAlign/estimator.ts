@@ -38,7 +38,8 @@ import type { StereoAlignment } from './types';
  *  6. robust statistics, rotation guard, swap cue, confidence
  */
 
-export const ALIGN_VERSION = 1;
+/** 2: rotation and scale are fitted (v1 refused anything but a pure shift). */
+export const ALIGN_VERSION = 2;
 
 export interface GrayImage {
   width: number;
@@ -78,6 +79,15 @@ export interface AlignmentEstimate {
   /** Blocks that passed the texture and correlation gates. */
   inliers: number;
   version: number;
+  /** How the confidence was built; for the owner's Measured line and for tuning. */
+  diagnostics?: {
+    inlierFraction: number;
+    /** MAD of the vertical residual after the fit, source px. */
+    verticalSpread: number;
+    meanScore: number;
+    residualDrift: boolean;
+    fitInliers: number;
+  };
 }
 
 // --- tunables ---------------------------------------------------------------
@@ -93,6 +103,15 @@ const TEXTURE_MIN_STDDEV = 1.0; // in band-passed intensity units (0..255 scale)
 const COARSE_MIN_ZNCC = 0.3;
 const INLIER_MIN_ZNCC = 0.5;
 const ROTATION_SUSPECT_PX = 3; // dy drift across the frame width, in source px
+/** Similarity fit: RANSAC on the fine matches. Residual threshold in fine-level px. */
+const FIT_RANSAC_ITERATIONS = 300;
+const FIT_INLIER_PX = 1.5;
+/** Beyond these the fit is not a camera misalignment; fall back to a pure shift. */
+const MAX_ROTATION_DEG = 3;
+const MAX_SCALE_DEVIATION = 0.05;
+/** Smaller than this is noise; store a pure shift so nothing is resampled for nothing. */
+const MIN_ROTATION_DEG = 0.02;
+const MIN_SCALE_DEVIATION = 0.002;
 // Stereo-order check, calibrated to SingleCheckFlip-AutoAlign.py: background
 // band 20-55% of height, foreground >= 55%, >= 1.5 px parallax at its
 // 2200 px detection size, >= 80% of foreground agreeing on direction.
@@ -291,6 +310,110 @@ interface BlockMatch {
   score: number;
 }
 
+interface Similarity {
+  /** radians, counter-clockwise positive */
+  theta: number;
+  scale: number;
+  tx: number;
+  ty: number;
+}
+
+type Point = { x: number; y: number };
+
+/**
+ * Weighted least-squares 2D similarity q ≈ s·R(θ)·p + t (Umeyama / Procrustes).
+ * Points are relative to the eye centre so the rotation is about it.
+ */
+function fitSimilarity(p: Point[], q: Point[], w: number[]): Similarity | null {
+  const n = p.length;
+  if (n < 2) return null;
+  let sw = 0, mpx = 0, mpy = 0, mqx = 0, mqy = 0;
+  for (let i = 0; i < n; i++) {
+    sw += w[i];
+    mpx += w[i] * p[i].x;
+    mpy += w[i] * p[i].y;
+    mqx += w[i] * q[i].x;
+    mqy += w[i] * q[i].y;
+  }
+  if (sw <= 0) return null;
+  mpx /= sw; mpy /= sw; mqx /= sw; mqy /= sw;
+  let a = 0, b = 0, varP = 0;
+  for (let i = 0; i < n; i++) {
+    const px = p[i].x - mpx, py = p[i].y - mpy, qx = q[i].x - mqx, qy = q[i].y - mqy;
+    a += w[i] * (px * qx + py * qy);
+    b += w[i] * (px * qy - py * qx);
+    varP += w[i] * (px * px + py * py);
+  }
+  if (varP <= 1e-9) return null;
+  const theta = Math.atan2(b, a);
+  const scale = Math.sqrt(a * a + b * b) / varP;
+  const cos = Math.cos(theta), sin = Math.sin(theta);
+  return { theta, scale, tx: mqx - scale * (cos * mpx - sin * mpy), ty: mqy - scale * (sin * mpx + cos * mpy) };
+}
+
+function similarityResidual(fit: Similarity, p: Point, q: Point): Point {
+  const cos = Math.cos(fit.theta), sin = Math.sin(fit.theta);
+  return {
+    x: q.x - (fit.scale * (cos * p.x - sin * p.y) + fit.tx),
+    y: q.y - (fit.scale * (sin * p.x + cos * p.y) + fit.ty),
+  };
+}
+
+/**
+ * Rotation and scale from the VERTICAL disparity field only.
+ *
+ * Horizontal disparity legitimately varies with depth, so a full similarity
+ * fit on (dx, dy) reads foreground parallax as rotation and scale. Vertical
+ * disparity does not depend on depth for side-by-side cameras, so it is a
+ * clean read of the rig: for a small rotation θ about the eye centre and a
+ * scale s, dy ≈ ty + θ·x + (s-1)·y. Fitted robustly (deterministic RANSAC,
+ * 3-point samples, weighted least squares on the inliers).
+ */
+function fitVerticalField(
+  pts: Point[],
+  dys: number[],
+  w: number[],
+  thresholdPx: number,
+): { theta: number; scale: number; ty: number; inliers: number[] } | null {
+  const n = pts.length;
+  if (n < 6) return null;
+  const solve = (idx: number[], weights: number[]): [number, number, number] | null => {
+    // Weighted normal equations for dy = a + b·x + c·y.
+    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0, r0 = 0, r1 = 0, r2 = 0;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k], wk = weights[k], x = pts[i].x, y = pts[i].y, d = dys[i];
+      s00 += wk; s01 += wk * x; s02 += wk * y; s11 += wk * x * x; s12 += wk * x * y; s22 += wk * y * y;
+      r0 += wk * d; r1 += wk * x * d; r2 += wk * y * d;
+    }
+    const det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02) + s02 * (s01 * s12 - s11 * s02);
+    if (Math.abs(det) < 1e-9) return null;
+    const a = (r0 * (s11 * s22 - s12 * s12) - s01 * (r1 * s22 - s12 * r2) + s02 * (r1 * s12 - s11 * r2)) / det;
+    const b = (s00 * (r1 * s22 - s12 * r2) - r0 * (s01 * s22 - s12 * s02) + s02 * (s01 * r2 - r1 * s02)) / det;
+    const c = (s00 * (s11 * r2 - r1 * s12) - s01 * (s01 * r2 - r1 * s02) + r0 * (s01 * s12 - s11 * s02)) / det;
+    return [a, b, c];
+  };
+  let seed = 12345;
+  const rand = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  let best: { coef: [number, number, number]; inliers: number[] } | null = null;
+  for (let iter = 0; iter < FIT_RANSAC_ITERATIONS; iter++) {
+    const sample = new Set<number>();
+    while (sample.size < 3) sample.add(Math.floor(rand() * n));
+    const coef = solve([...sample], [1, 1, 1]);
+    if (!coef) continue;
+    const inliers: number[] = [];
+    for (let i = 0; i < n; i++) {
+      if (Math.abs(dys[i] - (coef[0] + coef[1] * pts[i].x + coef[2] * pts[i].y)) <= thresholdPx) inliers.push(i);
+    }
+    if (!best || inliers.length > best.inliers.length) best = { coef, inliers };
+  }
+  if (!best || best.inliers.length < 6) return null;
+  const coef = solve(best.inliers, best.inliers.map((i) => w[i])) ?? best.coef;
+  return { theta: Math.atan(coef[1]), scale: 1 + coef[2], ty: coef[0], inliers: best.inliers };
+}
+
 function toGray(width: number, height: number, data: Float32Array): GrayImage {
   return { width, height, data };
 }
@@ -389,16 +512,52 @@ export function estimateAlignment(
   // 5. Statistics in SOURCE pixels.
   const toSource = pyramid.sourceHalfWidth / fineL.width;
   const weights = refined.map((m) => m.score);
-  const dys = refined.map((m) => m.dy * toSource);
-  const dxs = refined.map((m) => m.dx * toSource);
-  const dy = weightedMedian(dys, weights);
-  const mad = medianAbsoluteDeviation(dys, dy);
 
-  // Rotation guard: dy that drifts across the frame is rotation, which a
-  // translation cannot fix. Report it and still apply the median.
-  const xsSource = refined.map((m) => m.x * toSource);
-  const dySlope = slope(xsSource, dys, weights);
-  const rotationSuspected = Math.abs(dySlope) * pyramid.sourceHalfWidth > ROTATION_SUSPECT_PX;
+  // 5a. Similarity fit (rotation, scale, shift) on the fine matches, the way
+  //     the photographer's script fits one with SIFT + RANSAC. Points are
+  //     relative to the eye centre so the rotation is about it. Cameras that
+  //     are not perfectly level show up as dy drifting across the frame; v1
+  //     could only detect that and refuse. Now it is modelled, and the
+  //     residuals after the fit feed the shift, the swap cue and the confidence.
+  const cx = fineL.width / 2, cy = fineL.height / 2;
+  const pts = refined.map((m) => ({ x: m.x - cx, y: m.y - cy }));
+  const qts = refined.map((m) => ({ x: m.x + m.dx - cx, y: m.y + m.dy - cy }));
+  const vertical = fitVerticalField(pts, refined.map((m) => m.dy), weights, FIT_INLIER_PX);
+  let rotationDeg = 0;
+  let scale = 1;
+  let fitUsed = false;
+  if (vertical) {
+    const deg = (vertical.theta * 180) / Math.PI;
+    if (Math.abs(deg) <= MAX_ROTATION_DEG && Math.abs(vertical.scale - 1) <= MAX_SCALE_DEVIATION) {
+      fitUsed = true;
+      rotationDeg = Math.abs(deg) >= MIN_ROTATION_DEG ? deg : 0;
+      scale = Math.abs(vertical.scale - 1) >= MIN_SCALE_DEVIATION ? vertical.scale : 1;
+    }
+  }
+  // Per-match shift with the rotation and scale taken out: what each block's
+  // disparity would be if the cameras were level. Everything below reads these.
+  const fit: Similarity = { theta: (rotationDeg * Math.PI) / 180, scale, tx: 0, ty: 0 };
+  const dxs = refined.map((_, i) => similarityResidual(fit, pts[i], qts[i]).x * toSource);
+  const dys = refined.map((_, i) => similarityResidual(fit, pts[i], qts[i]).y * toSource);
+
+  // The vertical shift, its spread and any leftover drift are read on the
+  // plane the fit registered (its inliers), the way the script's RANSAC
+  // converges on the dominant plane. Matches off that plane are foreground
+  // with its own vertical parallax (a rig that is not perfectly side by side
+  // produces some); a similarity cannot remove it and the script does not
+  // either, so it must not count against the measurement.
+  const planeIdx = vertical && fitUsed ? vertical.inliers : refined.map((_, i) => i);
+  const planeDys = planeIdx.map((i) => dys[i]);
+  const planeWeights = planeIdx.map((i) => weights[i]);
+  const dy = weightedMedian(planeDys, planeWeights);
+  const mad = medianAbsoluteDeviation(planeDys, dy);
+
+  // Drift the fit could not absorb (or a rejected, implausible fit) keeps v1's
+  // guard; `rotationSuspected` now reports that a rotation was modelled.
+  const dySlope = slope(planeIdx.map((i) => refined[i].x * toSource), planeDys, planeWeights);
+  const residualDrift = Math.abs(dySlope) * pyramid.sourceHalfWidth > ROTATION_SUSPECT_PX;
+  const rotationSuspected = fitUsed ? rotationDeg !== 0 || scale !== 1 : residualDrift;
+  const planeShare = planeIdx.length / refined.length;
 
   // Disparity distribution for the window policy and the swap cue.
   const sortedDx = [...dxs].sort((a, b) => a - b);
@@ -436,17 +595,27 @@ export function estimateAlignment(
   // Confidence: how many blocks agreed, how tightly, how well they correlated.
   const inlierFraction = refined.length / Math.max(1, matches.length);
   const meanScore = weights.reduce((s, w) => s + w, 0) / weights.length;
-  let confidence = 0.5 * inlierFraction + 0.3 * Math.max(0, 1 - mad / 2) + 0.2 * meanScore;
-  if (rotationSuspected) confidence *= 0.5;
+  // Spread is judged relative to the source size: 2 px on a 3600 px eye is
+  // the same precision as 1.2 px on a 2200 px one.
+  const madNormalised = mad / Math.max(1, pyramid.sourceHalfWidth / 2200);
+  let confidence = 0.5 * inlierFraction + 0.3 * Math.max(0, 1 - madNormalised / 2) + 0.2 * meanScore;
+  // A plane that only part of the frame sits on is a real but partial
+  // correction: still worth storing, trusted a little less.
+  confidence *= 0.6 + 0.4 * planeShare;
+  if (residualDrift) confidence *= 0.5;
   if (weakGlobal) confidence *= 0.7;
   confidence = Math.max(0, Math.min(1, confidence));
 
+  const alignment: StereoAlignment = {
+    dx: windowPolicy === 'consensus' ? Math.round(windowDx) : 0,
+    dy: Math.round(dy),
+    swapped,
+  };
+  if (rotationDeg !== 0) alignment.rotation = Math.round(rotationDeg * 1000) / 1000;
+  if (scale !== 1) alignment.scale = Math.round(scale * 10000) / 10000;
+
   return {
-    alignment: {
-      dx: windowPolicy === 'consensus' ? Math.round(windowDx) : 0,
-      dy: Math.round(dy),
-      swapped,
-    },
+    alignment,
     confidence,
     swapSuggested,
     swapConfidence,
@@ -455,5 +624,12 @@ export function estimateAlignment(
     windowDx: Math.round(windowDx),
     inliers: refined.length,
     version: ALIGN_VERSION,
+    diagnostics: {
+      inlierFraction,
+      verticalSpread: mad,
+      meanScore,
+      residualDrift,
+      fitInliers: vertical?.inliers.length ?? 0,
+    },
   };
 }

@@ -55,6 +55,33 @@ function shifted(left: GrayImage, dx: number, dy: number, gain = 1, bias = 0): F
   return out;
 }
 
+/**
+ * Right eye as a similarity of the left about the eye centre, the estimator's
+ * own convention: a left point p maps to q = s·R(θ)·p + t, so R(q) = L(p),
+ * i.e. R(u,v) = L(inverse(u,v)). Bilinear sampling.
+ */
+function transformed(left: GrayImage, rotationDeg: number, scale: number, dx: number, dy: number): Float32Array {
+  const out = new Float32Array(left.width * left.height);
+  const cx = left.width / 2, cy = left.height / 2;
+  const theta = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(-theta), sin = Math.sin(-theta);
+  for (let v = 0; v < left.height; v++) {
+    for (let u = 0; u < left.width; u++) {
+      // p = (1/s)·R(-θ)·(q - t), relative to the centre
+      const qx = u - cx - dx, qy = v - cy - dy;
+      const x = (cos * qx - sin * qy) / scale + cx;
+      const y = (sin * qx + cos * qy) / scale + cy;
+      const x0 = Math.floor(x), y0 = Math.floor(y);
+      if (x0 < 0 || y0 < 0 || x0 + 1 >= left.width || y0 + 1 >= left.height) { out[v * left.width + u] = 128; continue; }
+      const fx = x - x0, fy = y - y0;
+      const at = (xx: number, yy: number) => left.data[yy * left.width + xx];
+      out[v * left.width + u] =
+        (1 - fx) * (1 - fy) * at(x0, y0) + fx * (1 - fy) * at(x0 + 1, y0) + (1 - fx) * fy * at(x0, y0 + 1) + fx * fy * at(x0 + 1, y0 + 1);
+    }
+  }
+  return out;
+}
+
 /** Area-averaging downsample - what the canvas sampler does with smoothing on. */
 function downsampleTo(img: GrayImage, targetWidth: number): GrayImage {
   const factor = img.width / targetWidth;
@@ -183,5 +210,37 @@ describe('estimateAlignment', () => {
   it('keeps the swapped flag it was given', () => {
     const left = makeTexture(SRC_W, SRC_H, 41);
     expect(estimateAlignment(pyramidFrom(left, shifted(left, 0, 2)), true).alignment.swapped).toBe(true);
+  });
+});
+
+describe('estimateAlignment: rotation and scale (v2)', () => {
+  it('recovers a half-degree rotation and the shift behind it', () => {
+    const left = makeTexture(2200, 1400, 11);
+    const right = transformed(left, 0.5, 1, 12, -6);
+    const est = estimateAlignment(pyramidFrom(left, right), false);
+    expect(est.alignment.rotation ?? 0).toBeCloseTo(0.5, 1);
+    expect(est.alignment.scale ?? 1).toBeCloseTo(1, 2);
+    expect(Math.abs(est.alignment.dy - -6)).toBeLessThanOrEqual(2);
+    expect(Math.abs(est.alignment.dx - 12)).toBeLessThanOrEqual(2);
+    expect(est.confidence).toBeGreaterThanOrEqual(0.5);
+    expect(est.rotationSuspected).toBe(true);
+    expect(est.version).toBe(2);
+  });
+
+  it('recovers a small scale difference', () => {
+    const left = makeTexture(2200, 1400, 5);
+    const right = transformed(left, 0, 1.01, 0, 0);
+    const est = estimateAlignment(pyramidFrom(left, right), false);
+    expect(est.alignment.scale ?? 1).toBeCloseTo(1.01, 2);
+    expect(Math.abs(est.alignment.rotation ?? 0)).toBeLessThan(0.1);
+  });
+
+  it('stores a pure shift when the pair is level', () => {
+    const left = makeTexture(2200, 1400, 3);
+    const right = shifted(left, 9, 4);
+    const est = estimateAlignment(pyramidFrom(left, right), false);
+    expect(est.alignment.rotation).toBeUndefined();
+    expect(est.alignment.scale).toBeUndefined();
+    expect(est.rotationSuspected).toBe(false);
   });
 });

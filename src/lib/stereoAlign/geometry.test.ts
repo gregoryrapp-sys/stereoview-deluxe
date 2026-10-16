@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeEyeRects, MIN_OVERLAP } from './geometry';
+import { computeEyeRects, transformMargin, MIN_OVERLAP } from './geometry';
 import { alignmentFromRow, IDENTITY_ALIGNMENT, toggleSwapped } from './types';
 
 const W = 2000; // one eye
@@ -105,5 +105,37 @@ describe('alignmentFromRow', () => {
     const { alignment, hasStored } = alignmentFromRow({ lr_swapped: false, align_dy: 4 }, true);
     expect(alignment).toEqual({ dx: 0, dy: 4, swapped: false });
     expect(hasStored).toBe(true);
+  });
+});
+
+describe('rotation and scale', () => {
+  it('a pure shift trims nothing and reports identity', () => {
+    const r = computeEyeRects(2000, 1000, { dx: 10, dy: -4, swapped: false });
+    expect(r.margin).toBe(0);
+    expect(r.rotation).toBe(0);
+    expect(r.scale).toBe(1);
+  });
+
+  it('trims both eyes by the same margin for a half-degree rotation', () => {
+    const r = computeEyeRects(3600, 5500, { dx: 0, dy: 0, swapped: false, rotation: 0.5 });
+    // sin(0.5°) * 2750 ≈ 24 px, plus one
+    expect(r.margin).toBe(transformMargin(3600, 5500, 0.5, 1));
+    expect(r.margin).toBeGreaterThanOrEqual(24);
+    expect(r.cropW).toBe(3600 - 2 * r.margin);
+    expect(r.cropH).toBe(5500 - 2 * r.margin);
+    expect(r.left.sx).toBe(r.margin);
+    expect(r.right.sx).toBe(3600 + r.margin);
+    expect(r.left.sy).toBe(r.margin);
+  });
+
+  it('a shrinking right eye needs a margin, a growing one does not', () => {
+    expect(transformMargin(2000, 1000, 0, 0.98)).toBe(Math.ceil(0.02 * 1000) + 1);
+    expect(transformMargin(2000, 1000, 0, 1.02)).toBe(0);
+  });
+
+  it('never trims below the minimum overlap', () => {
+    const r = computeEyeRects(40, 40, { dx: 0, dy: 0, swapped: false, rotation: 3 });
+    expect(r.cropW).toBeGreaterThanOrEqual(16);
+    expect(r.cropH).toBeGreaterThanOrEqual(16);
   });
 });

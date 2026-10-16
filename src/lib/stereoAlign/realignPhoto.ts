@@ -43,5 +43,7 @@ export async function realignPhoto(photo: GalleryPhoto): Promise<RealignOutcome>
 /** One-line human summary for a toast. */
 export function describeAlignment(a: StereoAlignment, confidence: number): string {
   const sign = (n: number) => (n > 0 ? `+${n}` : `${n}`);
-  return `Vertical ${sign(a.dy)} px · horizontal ${sign(a.dx)} px · ${Math.round(confidence * 100)}% confidence`;
+  const rotation = a.rotation ? ` · rotation ${a.rotation > 0 ? '+' : ''}${a.rotation.toFixed(2)}°` : '';
+  const scale = a.scale && a.scale !== 1 ? ` · scale ${(a.scale * 100).toFixed(1)}%` : '';
+  return `Vertical ${sign(a.dy)} px · horizontal ${sign(a.dx)} px${rotation}${scale} · ${Math.round(confidence * 100)}% confidence`;
 }
