@@ -433,6 +433,8 @@ export async function updatePhotoAlignment({
       align_dx: Math.round(alignment.dx),
       align_dy: Math.round(alignment.dy),
       lr_swapped: alignment.swapped,
+      align_rotation: alignment.rotation ?? null,
+      align_scale: alignment.scale ?? null,
       align_version: version,
       align_confidence: confidence,
     })
@@ -631,6 +633,8 @@ export async function finishPhotoPreparation({
     patch.align_dx = Math.round(alignment.dx);
     patch.align_dy = Math.round(alignment.dy);
     patch.lr_swapped = alignment.swapped;
+    patch.align_rotation = alignment.rotation ?? null;
+    patch.align_scale = alignment.scale ?? null;
     patch.align_version = version;
     patch.align_confidence = confidence;
   }
@@ -949,6 +953,8 @@ export async function uploadSbsPhoto({
           align_dx: Math.round(alignment.alignment.dx),
           align_dy: Math.round(alignment.alignment.dy),
           lr_swapped: alignment.alignment.swapped,
+          align_rotation: alignment.alignment.rotation ?? null,
+          align_scale: alignment.alignment.scale ?? null,
           align_version: alignment.version,
           align_confidence: alignment.confidence,
         }

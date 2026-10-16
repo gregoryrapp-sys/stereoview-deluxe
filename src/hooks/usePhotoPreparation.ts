@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { makeSbsThumbnail } from '@/lib/makeThumbnail';
+import { ALIGN_VERSION } from '@/lib/stereoAlign/estimator';
 import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
 import type { StereoAlignment } from '@/lib/stereoAlign/types';
 import {
@@ -46,7 +47,12 @@ export function needsPreparation(photo: GalleryPhoto, album: AlbumRecord | undef
   if (!photo.storagePath || !album) return false;
   // Live Dropbox photos have no stored original to work from.
   if (album.source_type === 'dropbox' && album.import_state !== 'imported') return false;
-  return !photo.thumbPath || photo.alignVersion === null || photo.alignVersion === undefined;
+  if (!photo.thumbPath) return true;
+  // Never measured, or measured by an older estimator: re-measure. Manual
+  // alignments (version 0) are the owner's and are kept.
+  const version = photo.alignVersion;
+  if (version === null || version === undefined) return true;
+  return version >= 1 && version < ALIGN_VERSION;
 }
 
 export function usePhotoPreparation(

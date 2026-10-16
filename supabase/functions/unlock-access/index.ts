@@ -504,6 +504,8 @@ async function gallery(
       // Raw alignment columns; the client resolves them against the album's
       // lr_swapped_default with the same helper the PostgREST path uses.
       alignDx: photo.align_dx ?? null,
+      alignRotation: photo.align_rotation ?? null,
+      alignScale: photo.align_scale ?? null,
       alignDy: photo.align_dy ?? null,
       lrSwapped: photo.lr_swapped ?? null,
       alignVersion: photo.align_version ?? null,
