@@ -191,8 +191,7 @@ export default function DropboxSyncDialog({ open, onOpenChange, albumId, albumTi
     const canApply =
       !hardRefusal &&
       !storage.refusedForQuota &&
-      (p.additions.length + p.updates.length + p.renames.length + p.restores.length + p.deletions.length > 0) &&
-      (!p.requiresTypedConfirmation || confirmation.trim() === albumTitle.trim());
+      p.additions.length + p.updates.length + p.renames.length + p.restores.length + p.deletions.length > 0;
 
     const counts: Array<[string, number, string?]> = [
       ['new', p.additions.length],
@@ -262,23 +261,6 @@ export default function DropboxSyncDialog({ open, onOpenChange, albumId, albumTi
                 ))}
               </ul>
             </ScrollArea>
-            {p.requiresTypedConfirmation && (
-              <div className="space-y-1.5 pt-1">
-                <Label htmlFor="sync-confirm" className="text-xs">
-                  That is a lot. Type the album name <span className="font-mono">{albumTitle}</span> to confirm.
-                </Label>
-                <Input
-                  id="sync-confirm"
-                  value={confirmation}
-                  onChange={(e) => {
-                    setConfirmation(e.target.value);
-                    setConfirmationError('');
-                  }}
-                  autoComplete="off"
-                />
-                {confirmationError && <p className="text-xs text-destructive">{confirmationError}</p>}
-              </div>
-            )}
           </div>
         )}
 
@@ -289,7 +271,7 @@ export default function DropboxSyncDialog({ open, onOpenChange, albumId, albumTi
           <Button
             className="gap-2"
             disabled={!canApply}
-            onClick={() => runApply(plan.runId, p.requiresTypedConfirmation ? confirmation : undefined)}
+            onClick={() => runApply(plan.runId)}
           >
             <RefreshCw className="h-4 w-4" />
             {p.additions.length > 0 && p.unchanged === 0 && p.updates.length === 0 ? 'Import' : 'Apply'}
