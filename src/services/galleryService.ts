@@ -53,6 +53,8 @@ export type PublicEvent = Omit<EventRecord, 'password'> & { locked?: boolean };
 export type PublicAlbum = Omit<AlbumRecord, 'password'> & { locked?: boolean };
 
 export interface SharedGalleryData {
+  /** Photos per album id on the public listing pages, where `photos` carries only the covers. */
+  photoCounts?: Record<string, number>;
   profile: PublicProfile;
   events: PublicEvent[];
   albums: PublicAlbum[];
