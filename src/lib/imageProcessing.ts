@@ -23,6 +23,7 @@
 import { fetchDropboxFileBlob, type DropboxFile, type GalleryPhoto } from '@/services/galleryService';
 import { computeEyeRects } from '@/lib/stereoAlign/geometry';
 import { IDENTITY_ALIGNMENT, type StereoAlignment } from '@/lib/stereoAlign/types';
+import { clearPersistedEyes, persistEyes, readPersistedEyes, scheduleReconcile } from '@/lib/eyeStore';
 
 export interface ProcessedStereoImage {
   leftUrl: string;
@@ -38,6 +39,19 @@ export interface ProcessedStereoImage {
 
 /** Portrait/2D mode renders only the left eye, so encoding the right is pure waste. */
 export type EyeSelection = 'left' | 'both';
+
+/**
+ * Size tier of the split eyes. `fit` covers the screen at 1x with headroom;
+ * `zoom` is requested once the viewer is pinched past that headroom and goes
+ * up to the source resolution (within a cap), so zoomed-in detail is real
+ * detail rather than an upscale of the fit tier.
+ */
+export type EyeTier = 'fit' | 'zoom';
+/** A phone's canvas is limited to about 16 MP (4096x4096); desktops take more. */
+const ZOOM_EYE_DIMENSION_PHONE = 4096;
+const ZOOM_EYE_DIMENSION_DESKTOP = 6144;
+/** The viewer asks for the zoom tier past this pinch scale (fit has 1.25x headroom). */
+export const ZOOM_TIER_MIN_SCALE = 1.3;
 
 /**
  * Longest edge of one eye after downscaling, sized to the screen it will be
@@ -57,7 +71,7 @@ export const MAX_EYE_DIMENSION_CAP = 4096;
 /** Pinch-zoom starts to soften past this factor; full 5x is accepted as soft. */
 const ZOOM_HEADROOM = 1.25;
 /** Downscaled eyes are the only copy the viewer has; spend a little more on them. */
-const JPEG_QUALITY = 0.9;
+const JPEG_QUALITY = 0.92;
 
 /** Pure form for tests: screen long edge in CSS px and the device pixel ratio. */
 export function maxEyeDimensionFor(screenLongEdgeCss: number, devicePixelRatio: number): number {
@@ -66,10 +80,22 @@ export function maxEyeDimensionFor(screenLongEdgeCss: number, devicePixelRatio: 
   return Math.min(MAX_EYE_DIMENSION_CAP, Math.max(MIN_EYE_DIMENSION, wanted));
 }
 
-function maxEyeDimension(): number {
+function screenLongEdgeCss(): number {
+  if (typeof window === 'undefined') return 0;
+  return Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0, window.innerWidth, window.innerHeight);
+}
+
+export function maxEyeDimension(tier: EyeTier = 'fit'): number {
   if (typeof window === 'undefined') return MIN_EYE_DIMENSION;
-  const edge = Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0, window.innerWidth, window.innerHeight);
-  return maxEyeDimensionFor(edge, window.devicePixelRatio);
+  const fit = maxEyeDimensionFor(screenLongEdgeCss(), window.devicePixelRatio);
+  if (tier === 'fit') return fit;
+  const zoomCap = screenLongEdgeCss() < 1000 ? ZOOM_EYE_DIMENSION_PHONE : ZOOM_EYE_DIMENSION_DESKTOP;
+  return Math.max(fit, zoomCap);
+}
+
+/** Quality tier identity for cache keys, device-aware so a phone's eyes never serve a desktop. */
+export function eyeTierKey(tier: EyeTier): string {
+  return `${tier}${maxEyeDimension(tier)}`;
 }
 
 /** ~24 photos at 0.5-2 MB of base64 each once downscaled (phone to 4K). */
@@ -108,6 +134,9 @@ class LruCache<V> {
 }
 
 const processedImageCache = new LruCache<ProcessedStereoImage>(MAX_CACHED_ENTRIES);
+/** Zoom-tier eyes are several MB each; keep only a few in memory. */
+const zoomImageCache = new LruCache<ProcessedStereoImage>(4);
+const cacheFor = (tier: EyeTier) => (tier === 'zoom' ? zoomImageCache : processedImageCache);
 
 /** Deduplicates concurrent requests for the same photo (preload racing the viewer). */
 const inFlight = new Map<string, Promise<ProcessedStereoImage>>();
@@ -122,6 +151,7 @@ export function photoCacheKey(
   photo: DropboxFile | GalleryPhoto,
   eyes: EyeSelection = 'both',
   alignment: StereoAlignment = resolveAlignment(photo),
+  tier: EyeTier = 'fit',
 ): string {
   const candidate = photo as Partial<GalleryPhoto> & Partial<DropboxFile>;
   const identity = candidate.storagePath ?? candidate.id ?? candidate.path_lower ?? candidate.src;
@@ -130,7 +160,8 @@ export function photoCacheKey(
   const rotation = alignment.rotation ?? 0;
   const scale = alignment.scale ?? 1;
   const transform = rotation !== 0 || scale !== 1 ? `:${rotation.toFixed(3)}:${scale.toFixed(4)}` : '';
-  return `${identity}:${eyes}:${alignment.swapped ? 1 : 0}:${alignment.dx}:${alignment.dy}${transform}`;
+  const tierPart = tier === 'zoom' ? ':zoom' : '';
+  return `${identity}:${eyes}:${alignment.swapped ? 1 : 0}:${alignment.dx}:${alignment.dy}${transform}${tierPart}`;
 }
 
 /**
@@ -210,7 +241,7 @@ async function extractEye(
   targetWidth: number,
   targetHeight: number,
   transform?: { rotation: number; scale: number },
-): Promise<string> {
+): Promise<Blob> {
   const canvas = document.createElement('canvas');
   canvas.width = targetWidth;
   canvas.height = targetHeight;
@@ -234,7 +265,30 @@ async function extractEye(
   }
   ctx.drawImage(img, rect.sx, rect.sy, rect.sw, rect.sh, 0, 0, targetWidth, targetHeight);
 
-  return await blobToDataUrl(await canvasToBlob(canvas));
+  const blob = await canvasToBlob(canvas);
+  canvas.width = 0;
+  canvas.height = 0;
+  return blob;
+}
+
+/** Split eyes as blobs plus the numbers the viewer needs; data URLs are made from this. */
+interface SplitBlobs {
+  left: Blob;
+  right: Blob | null;
+  width: number;
+  height: number;
+  alignment: StereoAlignment;
+  sourceScale: number;
+}
+
+async function toProcessed(split: SplitBlobs): Promise<ProcessedStereoImage> {
+  // Data URLs in memory, as before: no revocation to get wrong while an
+  // <img> still points at one. Object URLs with ownership are a later change.
+  const [leftUrl, rightUrl] = await Promise.all([
+    blobToDataUrl(split.left),
+    split.right ? blobToDataUrl(split.right) : Promise.resolve(null),
+  ]);
+  return { leftUrl, rightUrl, width: split.width, height: split.height, alignment: split.alignment, sourceScale: split.sourceScale };
 }
 
 /** A few decoded originals, so Auto-align in the viewer does not re-download the photo just split. */
@@ -269,7 +323,8 @@ async function processImage(
   folderUrl: string | undefined,
   eyes: EyeSelection,
   alignment: StereoAlignment,
-): Promise<ProcessedStereoImage> {
+  tier: EyeTier,
+): Promise<SplitBlobs> {
   const img = await loadStereoSourceImage(photo, folderUrl);
 
   const halfWidth = Math.floor(img.width / 2);
@@ -280,14 +335,14 @@ async function processImage(
 
   const rects = computeEyeRects(halfWidth, height, alignment);
 
-  const scale = Math.min(1, maxEyeDimension() / Math.max(rects.cropW, rects.cropH));
+  const scale = Math.min(1, maxEyeDimension(tier) / Math.max(rects.cropW, rects.cropH));
   const targetWidth = Math.max(1, Math.round(rects.cropW * scale));
   const targetHeight = Math.max(1, Math.round(rects.cropH * scale));
 
   // 2D mode shows the displayed-left eye, which after `swapped` may be the
   // right half of the file - so the crop and the swap apply here too.
-  const leftUrl = await extractEye(img, rects.left, targetWidth, targetHeight);
-  const rightUrl = eyes === 'both'
+  const left = await extractEye(img, rects.left, targetWidth, targetHeight);
+  const right = eyes === 'both'
     ? await extractEye(img, rects.right, targetWidth, targetHeight, { rotation: rects.rotation, scale: rects.scale })
     : null;
 
@@ -296,14 +351,21 @@ async function processImage(
   if (rects.scale !== 1) applied.scale = rects.scale;
 
   return {
-    leftUrl,
-    rightUrl,
+    left,
+    right,
     width: targetWidth,
     height: targetHeight,
     alignment: applied,
     sourceScale: targetWidth / rects.cropW,
   };
 }
+
+/** Key under which both eyes of a photo are persisted, independent of which eyes were requested. */
+function persistKey(photo: DropboxFile | GalleryPhoto, alignment: StereoAlignment): string {
+  return photoCacheKey(photo, 'both', alignment);
+}
+
+let reconcileScheduled = false;
 
 /**
  * Splits a stereo image into its two eyes, cached and deduplicated.
@@ -315,12 +377,14 @@ export async function splitStereoImage(
   photo: DropboxFile | GalleryPhoto, // eslint-disable-line
   folderUrl?: string,
   eyes: EyeSelection = 'both',
-  options: { alignment?: StereoAlignment } = {},
+  options: { alignment?: StereoAlignment; tier?: EyeTier } = {},
 ): Promise<ProcessedStereoImage> {
   const alignment = options.alignment ?? resolveAlignment(photo);
-  const key = photoCacheKey(photo, eyes, alignment);
+  const tier = options.tier ?? 'fit';
+  const key = photoCacheKey(photo, eyes, alignment, tier);
+  const memory = cacheFor(tier);
 
-  const cached = processedImageCache.get(key);
+  const cached = memory.get(key);
   if (cached) return cached;
 
   // Without this, a preload and the foreground viewer both run the full
@@ -328,9 +392,49 @@ export async function splitStereoImage(
   const pending = inFlight.get(key);
   if (pending) return pending;
 
-  const work = processImage(photo, folderUrl, eyes, alignment)
+  if (!reconcileScheduled) {
+    reconcileScheduled = true;
+    scheduleReconcile();
+  }
+
+  const stored = persistKey(photo, alignment);
+  const tierKey = eyeTierKey(tier);
+
+  const work = (async () => {
+    // Persisted from an earlier visit: no download, no split.
+    const persisted = await readPersistedEyes(stored, tierKey, eyes);
+    if (persisted) {
+      const { meta } = persisted;
+      const appliedAlignment: StereoAlignment = { dx: meta.dx, dy: meta.dy, swapped: meta.swapped };
+      if (meta.rotation) appliedAlignment.rotation = meta.rotation;
+      if (meta.scale) appliedAlignment.scale = meta.scale;
+      return toProcessed({
+        left: persisted.left,
+        right: persisted.right,
+        width: meta.width,
+        height: meta.height,
+        alignment: appliedAlignment,
+        sourceScale: meta.sourceScale,
+      });
+    }
+
+    const split = await processImage(photo, folderUrl, eyes, alignment, tier);
+    const result = await toProcessed(split);
+    // Store after answering; the viewer never waits for the write.
+    void persistEyes(stored, tierKey, split.left, split.right, {
+      width: split.width,
+      height: split.height,
+      sourceScale: split.sourceScale,
+      dx: split.alignment.dx,
+      dy: split.alignment.dy,
+      swapped: split.alignment.swapped,
+      rotation: split.alignment.rotation,
+      scale: split.alignment.scale,
+    });
+    return result;
+  })()
     .then((result) => {
-      processedImageCache.set(key, result);
+      memory.set(key, result);
       return result;
     })
     .finally(() => {
@@ -346,13 +450,17 @@ export function peekProcessedImage(
   photo: DropboxFile | GalleryPhoto,
   eyes: EyeSelection = 'both',
   alignment: StereoAlignment = resolveAlignment(photo),
+  tier: EyeTier = 'fit',
 ): ProcessedStereoImage | undefined {
-  return processedImageCache.get(photoCacheKey(photo, eyes, alignment));
+  return cacheFor(tier).get(photoCacheKey(photo, eyes, alignment, tier));
 }
 
+/** Memory and the on-device store. Called on sign-out: galleries are PIN-protected. */
 export function clearImageCache(): void {
   processedImageCache.clear();
+  zoomImageCache.clear();
   sourceImageCache.clear();
+  void clearPersistedEyes();
 }
 
 /**

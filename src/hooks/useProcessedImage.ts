@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   type EyeSelection,
+  type EyeTier,
   peekProcessedImage,
   photoCacheKey,
   preloadStereoImages,
@@ -37,6 +38,8 @@ interface ProcessedImageOptions {
   eyes?: EyeSelection;
   /** Overrides the photo's stored alignment (session swap, owner nudges). */
   alignment?: StereoAlignment;
+  /** `zoom` asks for eyes up to the source resolution; the fit tier stays on screen until they arrive. */
+  tier?: EyeTier;
 }
 
 type SourceAlbum =
@@ -74,12 +77,15 @@ export function useProcessedImage(
   album: SourceAlbum,
   options: ProcessedImageOptions = {},
 ): UseProcessedImageResult {
-  const { eyes = 'both', alignment: alignmentOverride } = options;
+  const { eyes = 'both', alignment: alignmentOverride, tier = 'fit' } = options;
 
   const photoObject = normalizePhoto(photo);
   const folderUrl = dropboxFolderUrl(album);
   const alignment = photoObject ? alignmentOverride ?? resolveAlignment(photoObject) : undefined;
-  const cacheKey = photoObject ? photoCacheKey(photoObject, eyes, alignment) : null;
+  const cacheKey = photoObject ? photoCacheKey(photoObject, eyes, alignment, tier) : null;
+  // Same photo, same alignment, other tier: an upgrade, not a new photo.
+  const identity = photoObject ? photoCacheKey(photoObject, eyes, alignment, 'fit') : null;
+  const shownIdentityRef = useRef<string | null>(null);
 
   // Read through a ref so the effect can use the latest object without taking a
   // dependency on its identity.
@@ -89,7 +95,7 @@ export function useProcessedImage(
   // Seeding from the cache means a hit renders on the very first paint rather
   // than flashing a spinner and then swapping in.
   const [result, setResult] = useState<ProcessedStereoImage | null>(
-    () => (photoObject ? peekProcessedImage(photoObject, eyes, alignment) ?? null : null),
+    () => (photoObject ? peekProcessedImage(photoObject, eyes, alignment, tier) ?? null : null),
   );
   const [isLoading, setIsLoading] = useState(() => (photoObject ? !result : false));
   const [error, setError] = useState<string | null>(null);
@@ -111,37 +117,46 @@ export function useProcessedImage(
     // on the string cacheKey (which already encodes it) and not on object identity.
     const effectiveAlignment = alignmentOverride ?? resolveAlignment(current);
 
-    const hit = peekProcessedImage(current, eyes, effectiveAlignment);
+    const hit = peekProcessedImage(current, eyes, effectiveAlignment, tier);
     if (hit) {
       setResult(hit);
+      shownIdentityRef.current = identity;
       setIsLoading(false);
       setError(null);
       return;
     }
 
     let cancelled = false;
-    setResult(null);
-    setIsLoading(true);
+    // A tier upgrade keeps the eyes already on screen; only a new photo (or
+    // alignment) clears them and shows the loading state.
+    const upgrading = tier === 'zoom' && shownIdentityRef.current === identity;
+    if (!upgrading) {
+      setResult(null);
+      setIsLoading(true);
+    }
     setError(null);
 
-    splitStereoImage(current, folderUrl, eyes, { alignment: effectiveAlignment })
+    splitStereoImage(current, folderUrl, eyes, { alignment: effectiveAlignment, tier })
       .then((processed) => {
         if (cancelled) return;
         setResult(processed);
+        shownIdentityRef.current = identity;
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Failed to process image');
+        // A failed upgrade is not an error the user needs; the fit tier stays.
+        if (!upgrading) setError(err instanceof Error ? err.message : 'Failed to process image');
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled && !upgrading) setIsLoading(false);
       });
 
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cacheKey, folderUrl, eyes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cacheKey, folderUrl, eyes, tier]);
 
   return {
     leftUrl: result?.leftUrl ?? null,
