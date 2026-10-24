@@ -59,7 +59,7 @@ export function usePhotoPreparation(
   photos: GalleryPhoto[],
   albums: AlbumRecord[],
   { enabled, onPrepared }: Options,
-): PreparationProgress & { pause: () => void; resume: () => void } {
+): PreparationProgress & { pause: () => void; resume: () => void; retryFailed: () => void } {
   const [progress, setProgress] = useState<PreparationProgress>({ total: 0, done: 0, failed: 0, paused: false, active: false });
   const [userPaused, setUserPaused] = useState(false);
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.visibilityState === 'hidden');
@@ -74,6 +74,9 @@ export function usePhotoPreparation(
   onPreparedRef.current = onPrepared;
 
   const attempted = useRef<Set<string>>(new Set());
+  const failedIds = useRef<Set<string>>(new Set());
+  /** Bumped by retryFailed so the queue effect runs again. */
+  const [pass, setPass] = useState(0);
   const running = useRef(false);
 
   useEffect(() => {
@@ -157,6 +160,7 @@ export function usePhotoPreparation(
           setProgress((current) => ({ ...current, done: current.done + 1 }));
         } catch (error) {
           console.warn('Photo preparation failed for', photo.id, error);
+          failedIds.current.add(photo.id);
           setProgress((current) => ({ ...current, failed: current.failed + 1 }));
         }
       }
@@ -174,10 +178,19 @@ export function usePhotoPreparation(
       cancelled = true;
       running.current = false;
     };
-  }, [enabled, paused, pendingKey]);
+  }, [enabled, paused, pendingKey, pass]);
 
   const pause = useCallback(() => setUserPaused(true), []);
   const resume = useCallback(() => setUserPaused(false), []);
 
-  return { ...progress, paused, pause, resume };
+  // Failed photos are not retried in the same session (an unreachable
+  // original would loop); the owner can ask for another attempt explicitly.
+  const retryFailed = useCallback(() => {
+    for (const id of failedIds.current) attempted.current.delete(id);
+    failedIds.current.clear();
+    setProgress((current) => ({ ...current, failed: 0 }));
+    setPass((n) => n + 1);
+  }, []);
+
+  return { ...progress, paused, pause, resume, retryFailed };
 }

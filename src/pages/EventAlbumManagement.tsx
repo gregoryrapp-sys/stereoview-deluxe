@@ -8,7 +8,6 @@ import {
   FolderOpen,
   ImagePlus,
   Crosshair,
-  ImageDown,
   Images,
   Loader2,
   Plus,
@@ -48,7 +47,6 @@ import StereoThumbnail from '@/components/StereoThumbnail';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
-import ThumbnailBackfillDialog from '@/components/ThumbnailBackfillDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
 import AutoAlignDialog from '@/components/AutoAlignDialog';
 import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
@@ -152,7 +150,6 @@ export default function EventAlbumManagement() {
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
   // to one album or to every upload album of an event.
-  const [thumbBackfillScope, setThumbBackfillScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   const [autoAlignScope, setAutoAlignScope] = useState<{ albumIds: string[]; label: string } | null>(null);
   // Per-photo "Re-align" in progress (one at a time; each downloads an original).
   const [realigningPhotoId, setRealigningPhotoId] = useState<string | null>(null);
@@ -1028,7 +1025,7 @@ export default function EventAlbumManagement() {
       <div>
         <h1 className="text-2xl font-light tracking-wide">{title}</h1>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
-        {preparation.total > preparation.done + preparation.failed && (
+        {(preparation.total > preparation.done + preparation.failed || preparation.failed > 0) && (
           <p className="mt-1 inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">
             {preparation.paused ? (
               <Crosshair className="h-3 w-3" />
@@ -1044,6 +1041,11 @@ export default function EventAlbumManagement() {
             >
               {preparation.paused ? 'Resume' : 'Pause'}
             </button>
+            {preparation.failed > 0 && (
+              <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={preparation.retryFailed}>
+                Retry failed
+              </button>
+            )}
           </p>
         )}
       </div>
@@ -1271,21 +1273,6 @@ export default function EventAlbumManagement() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-light">Albums</h2>
               <div className="flex flex-wrap items-center gap-2">
-                {eventAlbums.some((album) => album.source_type === 'upload') && (
-                  <Button
-                    variant="ghost"
-                    className="gap-2"
-                    onClick={() =>
-                      setThumbBackfillScope({
-                        albumIds: eventAlbums.filter((album) => album.source_type === 'upload').map((album) => album.id),
-                        label: `every album in ${selectedEvent.title}`,
-                      })
-                    }
-                  >
-                    <ImageDown className="h-4 w-4" />
-                    Generate missing thumbnails
-                  </Button>
-                )}
                 {eventAlbums.some((album) => album.source_type === 'upload' || album.import_state === 'imported') && (
                   <Button
                     variant="ghost"
@@ -1515,15 +1502,6 @@ export default function EventAlbumManagement() {
                       <Button
                         variant="ghost"
                         className="gap-2"
-                        onClick={() => setThumbBackfillScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
-                        disabled={isSaving}
-                      >
-                        <ImageDown className="h-4 w-4" />
-                        Generate missing thumbnails
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="gap-2"
                         onClick={() => setAutoAlignScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
                         disabled={isSaving}
                       >
@@ -1728,18 +1706,6 @@ export default function EventAlbumManagement() {
           scopeLabel={autoAlignScope.label}
           albumSwapDefaults={Object.fromEntries(galleryData.albums.map((album) => [album.id, !!album.lr_swapped_default]))}
           onAligned={loadData}
-        />
-      )}
-
-      {thumbBackfillScope && (
-        <ThumbnailBackfillDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setThumbBackfillScope(null);
-          }}
-          albumIds={thumbBackfillScope.albumIds}
-          scopeLabel={thumbBackfillScope.label}
-          onGenerated={loadData}
         />
       )}
 
