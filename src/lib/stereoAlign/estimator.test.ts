@@ -219,7 +219,7 @@ describe('estimateAlignment: rotation and scale (v2)', () => {
     const right = transformed(left, 0.5, 1, 12, -6);
     const est = estimateAlignment(pyramidFrom(left, right), false);
     expect(est.alignment.rotation ?? 0).toBeCloseTo(0.5, 1);
-    expect(est.alignment.scale ?? 1).toBeCloseTo(1, 2);
+    expect(est.alignment.scale).toBeUndefined();
     expect(Math.abs(est.alignment.dy - -6)).toBeLessThanOrEqual(2);
     expect(Math.abs(est.alignment.dx - 12)).toBeLessThanOrEqual(2);
     expect(est.confidence).toBeGreaterThanOrEqual(0.5);
@@ -227,11 +227,11 @@ describe('estimateAlignment: rotation and scale (v2)', () => {
     expect(est.version).toBe(2);
   });
 
-  it('recovers a small scale difference', () => {
+  it('never fits a scale, even when the pair has one', () => {
     const left = makeTexture(2200, 1400, 5);
     const right = transformed(left, 0, 1.01, 0, 0);
     const est = estimateAlignment(pyramidFrom(left, right), false);
-    expect(est.alignment.scale ?? 1).toBeCloseTo(1.01, 2);
+    expect(est.alignment.scale).toBeUndefined();
     expect(Math.abs(est.alignment.rotation ?? 0)).toBeLessThan(0.1);
   });
 

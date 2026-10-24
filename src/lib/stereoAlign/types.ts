@@ -24,7 +24,11 @@ export interface StereoAlignment {
    * degree here, which no shift can correct.
    */
   rotation?: number;
-  /** Scale of the right eye about its centre. Absent or 1 = none. */
+  /**
+   * Scale of the right eye about its centre. Absent or 1 = none. Never set by
+   * the estimator any more (the photographer wants no resampling for size) and
+   * ignored when read from a row; kept so stored or in-flight values parse.
+   */
   scale?: number;
 }
 
@@ -109,6 +113,6 @@ export function alignmentFromRow(
     swapped: row.lr_swapped ?? albumSwappedDefault,
   };
   if (row.align_rotation != null && row.align_rotation !== 0) alignment.rotation = row.align_rotation;
-  if (row.align_scale != null && row.align_scale !== 1) alignment.scale = row.align_scale;
+  // align_scale is deliberately not read: no scaling as part of alignment.
   return { alignment, hasStored };
 }

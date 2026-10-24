@@ -106,12 +106,10 @@ const ROTATION_SUSPECT_PX = 3; // dy drift across the frame width, in source px
 /** Similarity fit: RANSAC on the fine matches. Residual threshold in fine-level px. */
 const FIT_RANSAC_ITERATIONS = 300;
 const FIT_INLIER_PX = 1.5;
-/** Beyond these the fit is not a camera misalignment; fall back to a pure shift. */
+/** Beyond this the fit is not a camera misalignment; fall back to a pure shift. */
 const MAX_ROTATION_DEG = 3;
-const MAX_SCALE_DEVIATION = 0.05;
 /** Smaller than this is noise; store a pure shift so nothing is resampled for nothing. */
 const MIN_ROTATION_DEG = 0.02;
-const MIN_SCALE_DEVIATION = 0.002;
 // Stereo-order check, calibrated to SingleCheckFlip-AutoAlign.py: background
 // band 20-55% of height, foreground >= 55%, >= 1.5 px parallax at its
 // 2200 px detection size, >= 80% of foreground agreeing on direction.
@@ -360,14 +358,19 @@ function similarityResidual(fit: Similarity, p: Point, q: Point): Point {
 }
 
 /**
- * Rotation and scale from the VERTICAL disparity field only.
+ * Rotation from the VERTICAL disparity field only.
  *
- * Horizontal disparity legitimately varies with depth, so a full similarity
- * fit on (dx, dy) reads foreground parallax as rotation and scale. Vertical
- * disparity does not depend on depth for side-by-side cameras, so it is a
- * clean read of the rig: for a small rotation θ about the eye centre and a
- * scale s, dy ≈ ty + θ·x + (s-1)·y. Fitted robustly (deterministic RANSAC,
- * 3-point samples, weighted least squares on the inliers).
+ * Horizontal disparity legitimately varies with depth, so a fit on (dx, dy)
+ * reads foreground parallax as rotation. Vertical disparity does not depend
+ * on depth for side-by-side cameras, so it is a clean read of the rig: for a
+ * small rotation θ about the eye centre, dy ≈ ty + θ·x. Fitted robustly
+ * (deterministic RANSAC, 2-point samples, weighted least squares on the
+ * inliers).
+ *
+ * No scale term, by the photographer's decision: matched lenses do not differ
+ * in size, a fitted "scale" mostly absorbs a slightly toed-in camera, and
+ * the right eye is not to be resampled for it. Rotation alone was what the
+ * rig needed.
  */
 function fitVerticalField(
   pts: Point[],
@@ -378,19 +381,18 @@ function fitVerticalField(
   const n = pts.length;
   if (n < 6) return null;
   const solve = (idx: number[], weights: number[]): [number, number, number] | null => {
-    // Weighted normal equations for dy = a + b·x + c·y.
-    let s00 = 0, s01 = 0, s02 = 0, s11 = 0, s12 = 0, s22 = 0, r0 = 0, r1 = 0, r2 = 0;
+    // Weighted normal equations for dy = a + b·x.
+    let s00 = 0, s01 = 0, s11 = 0, r0 = 0, r1 = 0;
     for (let k = 0; k < idx.length; k++) {
-      const i = idx[k], wk = weights[k], x = pts[i].x, y = pts[i].y, d = dys[i];
-      s00 += wk; s01 += wk * x; s02 += wk * y; s11 += wk * x * x; s12 += wk * x * y; s22 += wk * y * y;
-      r0 += wk * d; r1 += wk * x * d; r2 += wk * y * d;
+      const i = idx[k], wk = weights[k], x = pts[i].x, d = dys[i];
+      s00 += wk; s01 += wk * x; s11 += wk * x * x;
+      r0 += wk * d; r1 += wk * x * d;
     }
-    const det = s00 * (s11 * s22 - s12 * s12) - s01 * (s01 * s22 - s12 * s02) + s02 * (s01 * s12 - s11 * s02);
+    const det = s00 * s11 - s01 * s01;
     if (Math.abs(det) < 1e-9) return null;
-    const a = (r0 * (s11 * s22 - s12 * s12) - s01 * (r1 * s22 - s12 * r2) + s02 * (r1 * s12 - s11 * r2)) / det;
-    const b = (s00 * (r1 * s22 - s12 * r2) - r0 * (s01 * s22 - s12 * s02) + s02 * (s01 * r2 - r1 * s02)) / det;
-    const c = (s00 * (s11 * r2 - r1 * s12) - s01 * (s01 * r2 - r1 * s02) + r0 * (s01 * s12 - s11 * s02)) / det;
-    return [a, b, c];
+    const a = (r0 * s11 - s01 * r1) / det;
+    const b = (s00 * r1 - s01 * r0) / det;
+    return [a, b, 0];
   };
   let seed = 12345;
   const rand = () => {
@@ -400,18 +402,18 @@ function fitVerticalField(
   let best: { coef: [number, number, number]; inliers: number[] } | null = null;
   for (let iter = 0; iter < FIT_RANSAC_ITERATIONS; iter++) {
     const sample = new Set<number>();
-    while (sample.size < 3) sample.add(Math.floor(rand() * n));
-    const coef = solve([...sample], [1, 1, 1]);
+    while (sample.size < 2) sample.add(Math.floor(rand() * n));
+    const coef = solve([...sample], [1, 1]);
     if (!coef) continue;
     const inliers: number[] = [];
     for (let i = 0; i < n; i++) {
-      if (Math.abs(dys[i] - (coef[0] + coef[1] * pts[i].x + coef[2] * pts[i].y)) <= thresholdPx) inliers.push(i);
+      if (Math.abs(dys[i] - (coef[0] + coef[1] * pts[i].x)) <= thresholdPx) inliers.push(i);
     }
     if (!best || inliers.length > best.inliers.length) best = { coef, inliers };
   }
   if (!best || best.inliers.length < 6) return null;
   const coef = solve(best.inliers, best.inliers.map((i) => w[i])) ?? best.coef;
-  return { theta: Math.atan(coef[1]), scale: 1 + coef[2], ty: coef[0], inliers: best.inliers };
+  return { theta: Math.atan(coef[1]), scale: 1, ty: coef[0], inliers: best.inliers };
 }
 
 function toGray(width: number, height: number, data: Float32Array): GrayImage {
@@ -524,14 +526,13 @@ export function estimateAlignment(
   const qts = refined.map((m) => ({ x: m.x + m.dx - cx, y: m.y + m.dy - cy }));
   const vertical = fitVerticalField(pts, refined.map((m) => m.dy), weights, FIT_INLIER_PX);
   let rotationDeg = 0;
-  let scale = 1;
+  const scale = 1;
   let fitUsed = false;
   if (vertical) {
     const deg = (vertical.theta * 180) / Math.PI;
-    if (Math.abs(deg) <= MAX_ROTATION_DEG && Math.abs(vertical.scale - 1) <= MAX_SCALE_DEVIATION) {
+    if (Math.abs(deg) <= MAX_ROTATION_DEG) {
       fitUsed = true;
       rotationDeg = Math.abs(deg) >= MIN_ROTATION_DEG ? deg : 0;
-      scale = Math.abs(vertical.scale - 1) >= MIN_SCALE_DEVIATION ? vertical.scale : 1;
     }
   }
   // Per-match shift with the rotation and scale taken out: what each block's
@@ -556,7 +557,7 @@ export function estimateAlignment(
   // guard; `rotationSuspected` now reports that a rotation was modelled.
   const dySlope = slope(planeIdx.map((i) => refined[i].x * toSource), planeDys, planeWeights);
   const residualDrift = Math.abs(dySlope) * pyramid.sourceHalfWidth > ROTATION_SUSPECT_PX;
-  const rotationSuspected = fitUsed ? rotationDeg !== 0 || scale !== 1 : residualDrift;
+  const rotationSuspected = fitUsed ? rotationDeg !== 0 : residualDrift;
   const planeShare = planeIdx.length / refined.length;
 
   // Disparity distribution for the window policy and the swap cue.
@@ -600,8 +601,9 @@ export function estimateAlignment(
   const madNormalised = mad / Math.max(1, pyramid.sourceHalfWidth / 2200);
   let confidence = 0.5 * inlierFraction + 0.3 * Math.max(0, 1 - madNormalised / 2) + 0.2 * meanScore;
   // A plane that only part of the frame sits on is a real but partial
-  // correction: still worth storing, trusted a little less.
-  confidence *= 0.6 + 0.4 * planeShare;
+  // correction: still worth storing, trusted a little less. Concert frames
+  // with a big foreground put only half the blocks on the stage plane.
+  confidence *= 0.7 + 0.3 * planeShare;
   if (residualDrift) confidence *= 0.5;
   if (weakGlobal) confidence *= 0.7;
   confidence = Math.max(0, Math.min(1, confidence));
@@ -612,7 +614,6 @@ export function estimateAlignment(
     swapped,
   };
   if (rotationDeg !== 0) alignment.rotation = Math.round(rotationDeg * 1000) / 1000;
-  if (scale !== 1) alignment.scale = Math.round(scale * 10000) / 10000;
 
   return {
     alignment,
