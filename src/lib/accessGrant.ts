@@ -164,6 +164,7 @@ export async function fetchGallery(params: {
     events: data.events ?? [],
     albums: data.albums ?? [],
     photos,
+    photoCounts: data.photoCounts ?? {},
     ownerView: !!data.ownerView,
     locked: data.locked ?? null,
     missing: data.missing ?? null,

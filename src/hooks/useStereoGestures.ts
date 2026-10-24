@@ -32,7 +32,18 @@ export function useStereoGestures(
   onSwipeRight: () => void,
   containerWidth: number,
   containerHeight: number,
-  isPortrait: boolean = false
+  isPortrait: boolean = false,
+  options: {
+    /**
+     * A single tap that was not a swipe and not the start of a double tap,
+     * reported after the double-tap window so a double tap never also
+     * toggles. Taps are the touch path's way to toggle the viewer controls:
+     * relying on the browser's synthesized click was unreliable on iOS
+     * (missing on the black letterbox area) and the old handler also
+     * refused taps while zoomed in.
+     */
+    onTap?: () => void;
+  } = {},
 ) {
   const [state, setState] = useState<GestureState>({
     scale: DEFAULT_SCALE,
@@ -42,6 +53,9 @@ export function useStereoGestures(
 
   const lastTouchRef = useRef<TouchPoint | null>(null);
   const lastTouchTimeRef = useRef<number>(0);
+  const pendingTapRef = useRef<number | null>(null);
+  const onTapRef = useRef(options.onTap);
+  onTapRef.current = options.onTap;
   const initialPinchDistanceRef = useRef<number>(0);
   const initialScaleRef = useRef<number>(DEFAULT_SCALE);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -193,6 +207,11 @@ export function useStereoGestures(
       // subsequent swipe is silently rejected by the isZoomedOut check above.
       if (wasTap && !didSwipe) {
         if (now - lastTouchTimeRef.current < DOUBLE_TAP_WINDOW) {
+          // Second tap of a double tap: the pending single-tap toggle is void.
+          if (pendingTapRef.current !== null) {
+            window.clearTimeout(pendingTapRef.current);
+            pendingTapRef.current = null;
+          }
           setState(prev => {
             if (Math.abs(prev.scale - DEFAULT_SCALE) > SCALE_EPSILON) {
               // Reset to default
@@ -206,6 +225,12 @@ export function useStereoGestures(
           lastTouchTimeRef.current = 0;
         } else {
           lastTouchTimeRef.current = now;
+          if (onTapRef.current) {
+            pendingTapRef.current = window.setTimeout(() => {
+              pendingTapRef.current = null;
+              onTapRef.current?.();
+            }, DOUBLE_TAP_WINDOW);
+          }
         }
       } else {
         lastTouchTimeRef.current = 0;

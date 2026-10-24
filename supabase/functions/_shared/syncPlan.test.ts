@@ -150,7 +150,7 @@ describe('computeSyncPlan - matching', () => {
 });
 
 describe('computeSyncPlan - deletion threshold', () => {
-  it('7. confirmation is off at the threshold and on just above it', () => {
+  it('7. no typed confirmation, however many deletions', () => {
     const db = liveSynced(100);
     // threshold = max(5, ceil(10% of 100)) = 10
     const tenMissing = computeSyncPlan(complete(db), complete(listingOf(db).slice(10)));
@@ -159,14 +159,18 @@ describe('computeSyncPlan - deletion threshold', () => {
 
     const elevenMissing = computeSyncPlan(complete(db), complete(listingOf(db).slice(11)));
     expect(elevenMissing.deletions).toHaveLength(11);
-    expect(elevenMissing.requiresTypedConfirmation).toBe(true);
+    // Retired at the photographer's request: deletions are soft and the
+    // preview lists every name. Many deletions still plan as deletions, with
+    // no typed confirmation demanded.
+    expect(elevenMissing.requiresTypedConfirmation).toBe(false);
+    expect(elevenMissing.deletions.length).toBe(11);
   });
 
-  it('the minimum applies to small albums', () => {
+  it('small albums: no typed confirmation either', () => {
     const db = liveSynced(8);
     // threshold = max(5, ceil(0.8)) = 5
     expect(computeSyncPlan(complete(db), complete(listingOf(db).slice(5))).requiresTypedConfirmation).toBe(false);
-    expect(computeSyncPlan(complete(db), complete(listingOf(db).slice(6))).requiresTypedConfirmation).toBe(true);
+    expect(computeSyncPlan(complete(db), complete(listingOf(db).slice(6))).requiresTypedConfirmation).toBe(false);
   });
 });
 

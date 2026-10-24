@@ -463,9 +463,19 @@ async function importFile(
   file: DropboxFileMeta,
   thumbnailEligible: boolean,
   applied: Applied,
+  options: { revision?: string } = {},
 ): Promise<{ storagePath: string; thumbPath: string | null }> {
   const extension = extensionOf(file.name);
-  const storagePath = photoObjectPath(album.ownerId, album.eventId, album.albumId, photoId, extension);
+  // A re-downloaded file (an update, or a restore whose content changed) gets
+  // a NEW object path carrying its Dropbox revision. Writing over the old
+  // path left every cache serving the old bytes: the browser's HTTP cache
+  // (one-year Cache-Control on a stable signed URL), the client's signed-URL
+  // cache and the viewer's split-eye cache are all keyed on the path. The
+  // old objects are removed once the row points at the new ones.
+  const basePath = photoObjectPath(album.ownerId, album.eventId, album.albumId, photoId, extension);
+  const storagePath = options.revision
+    ? basePath.replace(/\.([^./]+)$/, `.${options.revision.replace(/[^A-Za-z0-9]/g, "").slice(0, 24)}.$1`)
+    : basePath;
   assertOwnerPrefix(storagePath, album.ownerId);
 
   // Download
@@ -576,6 +586,24 @@ async function applyItem(
     if (error) throw new StageError("db", error.message);
   };
 
+  /** The objects a row points at now, so they can be removed after a re-download replaces them. */
+  const currentObjects = async (photoId: string): Promise<{ storagePath: string | null; thumbPath: string | null }> => {
+    const { data } = await db.from("photos").select("storage_path, thumb_path").eq("id", photoId).maybeSingle();
+    return { storagePath: data?.storage_path ?? null, thumbPath: data?.thumb_path ?? null };
+  };
+  const removeSuperseded = async (
+    previous: { storagePath: string | null; thumbPath: string | null },
+    current: { storagePath: string; thumbPath: string | null },
+  ) => {
+    const stale = [previous.storagePath, previous.thumbPath].filter(
+      (path): path is string => !!path && path !== current.storagePath && path !== current.thumbPath,
+    );
+    if (stale.length === 0) return;
+    // Best effort: a leftover object costs storage, not correctness.
+    const { error } = await db.storage.from(PHOTOS_BUCKET).remove(stale);
+    if (error) console.warn("dropbox-sync: could not remove superseded objects:", error.message);
+  };
+
   const update = async (photoId: string, patch: Row) => {
     const { data, error } = await db.from("photos").update(patch).eq("id", photoId).select("id");
     if (error) throw new StageError("db", error.message);
@@ -590,15 +618,19 @@ async function applyItem(
       return;
     }
     case "update": {
-      const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied);
+      const previous = await currentObjects(entry.item.photoId);
+      const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied, { revision: entry.item.file.rev });
       await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+      await removeSuperseded(previous, paths);
       applied.updated += 1;
       return;
     }
     case "restore": {
       if (entry.item.needsDownload) {
-        const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied);
+        const previous = await currentObjects(entry.item.photoId);
+        const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied, { revision: entry.item.file.rev });
         await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+        await removeSuperseded(previous, paths);
       } else {
         await update(entry.item.photoId, {
           deleted_at: null,

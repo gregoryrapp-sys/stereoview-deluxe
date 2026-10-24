@@ -233,11 +233,11 @@ export function computeSyncPlan(
     }
     plan.deletions.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.photoId.localeCompare(b.photoId));
 
-    const threshold = Math.max(
-      opts.deleteThresholdMin,
-      Math.ceil((liveSynced.length * opts.deleteThresholdPct) / 100),
-    );
-    plan.requiresTypedConfirmation = plan.deletions.length > threshold;
+    // The typed-name confirmation for many deletions is retired at the
+    // photographer's request: deletions are soft (Restore is one click) and
+    // the preview lists every name, which is the real safeguard. The field
+    // stays false so older clients keep working.
+    plan.requiresTypedConfirmation = false;
   }
 
   return plan;

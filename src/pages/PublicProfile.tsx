@@ -573,6 +573,8 @@ export default function PublicProfile() {
               }
 
               const photos = photosByAlbum[album.id] ?? [];
+              // Listing pages receive one cover per album, not every photo; the count comes from the server.
+              const photoCount = data?.photoCounts?.[album.id] ?? photos.length;
               let cover: GalleryPhoto | null = null;
               const a = album as any;
 
@@ -598,7 +600,7 @@ export default function PublicProfile() {
                         Dropbox Live
                       </p>
                     ) : (
-                      <p className="mt-1 text-xs text-muted-foreground">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}</p>
+                      <p className="mt-1 text-xs text-muted-foreground">{photoCount} {photoCount === 1 ? 'photo' : 'photos'}</p>
                     )}
                   </div>
                 </Link>

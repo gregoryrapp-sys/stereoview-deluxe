@@ -161,13 +161,28 @@ export default function SmartViewer({
     };
   }, []);
 
+  // Touch taps toggle the controls through the gesture handlers (see
+  // toggleControlsFromTouch); clicks are for the mouse. A tap also makes the
+  // browser synthesize a click, which this guard swallows so one tap is one
+  // toggle. Zoomed in, a tap still toggles: the gesture hook tells a tap from
+  // a pan by distance, so the old "no toggling while zoomed" rule is gone.
+  const lastTouchTapAtRef = useRef(0);
+  const toggleControlsFromTouch = useCallback(() => {
+    if (alignMode) return;
+    lastTouchTapAtRef.current = Date.now();
+    setShowControls((current) => !current);
+  }, [alignMode]);
+
   // --- 2D Viewer Logic ---
   const touchStartX_2d = useRef(0);
   const touchStartY_2d = useRef(0);
 
+  const touchStartAt_2d = useRef(0);
+
   const handleTouchStart_2d = (event: React.TouchEvent) => {
     touchStartX_2d.current = event.touches[0].clientX;
     touchStartY_2d.current = event.touches[0].clientY;
+    touchStartAt_2d.current = Date.now();
   };
 
   const handleTouchEnd_2d = (event: React.TouchEvent) => {
@@ -176,6 +191,14 @@ export default function SmartViewer({
     const deltaX = touchEndX - touchStartX_2d.current;
     const deltaY = touchEndY - touchStartY_2d.current;
     const threshold = 50;
+
+    // A short, still touch is a tap: toggle the controls from the touch
+    // path itself, anywhere in the viewer, instead of hoping the browser
+    // synthesizes a click (iOS does not always, on the letterbox area).
+    if (Math.hypot(deltaX, deltaY) < 10 && Date.now() - touchStartAt_2d.current < 300) {
+      toggleControlsFromTouch();
+      return;
+    }
 
     if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > threshold) {
       if (deltaX < 0 && hasNext) onNext();
@@ -220,7 +243,9 @@ export default function SmartViewer({
     handleTouchEnd,
     handleTouchCancel,
     resetTransform,
-  } = useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false);
+  } = useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false, {
+    onTap: toggleControlsFromTouch,
+  });
 
   useEffect(() => {
     resetTransform();
@@ -246,7 +271,7 @@ export default function SmartViewer({
 
   const handleContainerClick = () => {
     if (alignMode) return;
-    if (mode === 'stereo' && scale > 1) return;
+    if (Date.now() - lastTouchTapAtRef.current < 700) return;
     // A swipe also produces a click. Without this guard every swipe toggles the
     // controls off, so the arrows end up pointer-events-none right when the
     // user reaches for them.

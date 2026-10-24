@@ -417,6 +417,10 @@ async function gallery(
       )
     : undefined;
 
+  // Per-album photo counts for the listing pages, which no longer receive
+  // every photo (one default cover per album is all they get). Paged by hand:
+  // PostgREST caps a page at 1000 rows and a quiet truncation would undercount.
+  const photoCounts: Record<string, number> = {};
   let photoRows: Row[] = [];
   if (addressedAlbum) {
     const { data } = await photoQuery().eq("album_id", addressedAlbum.id);
@@ -431,15 +435,26 @@ async function gallery(
     for (const album of allAlbums ?? []) {
       if (unlockedAlbumIds.has(String(album.id)) && album.cover_photo_id) wanted.add(String(album.cover_photo_id));
     }
-    const { data: order } = await db
-      .from("photos")
-      .select("id, album_id")
-      .in("album_id", albumIds)
-      .is("deleted_at", null)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
+    const order: Row[] = [];
+    for (let from = 0; ; from += 1000) {
+      const { data: page } = await db
+        .from("photos")
+        .select("id, album_id")
+        .in("album_id", albumIds)
+        .is("deleted_at", null)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, from + 999);
+      order.push(...(page ?? []));
+      if (!page || page.length < 1000) break;
+    }
+    for (const row of order) {
+      const albumId = String(row.album_id);
+      photoCounts[albumId] = (photoCounts[albumId] ?? 0) + 1;
+    }
     const seen = new Set<string>();
-    for (const row of order ?? []) {
+    for (const row of order) {
       const albumId = String(row.album_id);
       if (seen.has(albumId)) continue;
       seen.add(albumId);
@@ -544,6 +559,7 @@ async function gallery(
     events,
     albums,
     photos,
+    photoCounts,
     locked,
     missing,
   }, 200);
