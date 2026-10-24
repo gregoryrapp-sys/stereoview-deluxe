@@ -1,3 +1,4 @@
+import { clearImageCache } from '@/lib/imageProcessing';
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase } from '@/lib/supabase';
@@ -104,6 +105,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
+    // Split eyes persist on the device; a shared computer must not keep a
+    // PIN-protected gallery's photos after the owner signs out.
+    clearImageCache();
     await supabase.auth.signOut();
     setSession(null);
     setProfile(null);

@@ -20,7 +20,7 @@ import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
 import { eyeSizeFromThumb, eyeViewport, fitContain } from '@/lib/viewerGeometry';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
-import { loadStereoSourceImage, resolveAlignment } from '@/lib/imageProcessing';
+import { type EyeTier, loadStereoSourceImage, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import {
   alignmentsEqual,
@@ -133,10 +133,6 @@ export default function SmartViewer({
   // or encoding. That is the dominant path on phones, where the viewer opens in
   // portrait, and it halves the per-photo work there.
   const eyes = mode === '2d' ? 'left' : 'both';
-  const { leftUrl, rightUrl, isLoading, error, dimensions, sourceScale } = useProcessedImage(photo, album, {
-    eyes,
-    alignment: committedAlignment,
-  });
 
   const adjacentPhotos = useMemo(() => {
     const result: Photo[] = [];
@@ -245,6 +241,15 @@ export default function SmartViewer({
     resetTransform,
   } = useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false, {
     onTap: toggleControlsFromTouch,
+  });
+
+  // Pinched past the fit tier's headroom: ask for eyes at (up to) source
+  // resolution. The fit tier stays on screen until the sharper one arrives.
+  const tier: EyeTier = mode === 'stereo' && scale >= ZOOM_TIER_MIN_SCALE ? 'zoom' : 'fit';
+  const { leftUrl, rightUrl, isLoading, error, dimensions, sourceScale } = useProcessedImage(photo, album, {
+    eyes,
+    alignment: committedAlignment,
+    tier,
   });
 
   useEffect(() => {
