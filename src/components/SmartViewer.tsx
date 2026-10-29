@@ -604,6 +604,8 @@ export default function SmartViewer({
   }, [leftUrl]);
 
   // --- Common UI Elements ---
+  // Tapping the photo hides Close, Share and the Align controls. Previous and
+  // Next are always shown: navigation must never be something to find again.
   const controlVisibility = showControls || alignMode ? 'opacity-100' : 'pointer-events-none opacity-0';
   const roundButton = 'rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200';
 
@@ -695,7 +697,7 @@ export default function SmartViewer({
   const prevButton = hasPrevious && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onPrevious(); }}
-      className={cn('absolute bottom-4 left-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton, controlVisibility)}
+      className={cn('absolute bottom-4 left-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
       aria-label="Previous photo"
     >
       <ChevronLeft className="h-6 w-6" />
@@ -705,7 +707,7 @@ export default function SmartViewer({
   const nextButton = hasNext && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onNext(); }}
-      className={cn('absolute bottom-4 right-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton, controlVisibility)}
+      className={cn('absolute bottom-4 right-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
       aria-label="Next photo"
     >
       <ChevronRight className="h-6 w-6" />
