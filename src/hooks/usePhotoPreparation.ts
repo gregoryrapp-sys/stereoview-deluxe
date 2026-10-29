@@ -43,16 +43,32 @@ interface Options {
   onPrepared: (photoId: string, patch: Partial<GalleryPhoto>) => void;
 }
 
+/**
+ * Never measured, or measured by an older estimator. Manual alignments
+ * (version 0) are the owner's and are kept. The queue and the worker both use
+ * this one rule: when they disagreed, re-measure candidates were queued, their
+ * originals downloaded, and nothing measured - on every page load.
+ */
+export function needsAlignmentMeasure(photo: GalleryPhoto): boolean {
+  const version = photo.alignVersion;
+  if (version === null || version === undefined) return true;
+  return version >= 1 && version < ALIGN_VERSION;
+}
+
 export function needsPreparation(photo: GalleryPhoto, album: AlbumRecord | undefined): boolean {
   if (!photo.storagePath || !album) return false;
   // Live Dropbox photos have no stored original to work from.
   if (album.source_type === 'dropbox' && album.import_state !== 'imported') return false;
-  if (!photo.thumbPath) return true;
-  // Never measured, or measured by an older estimator: re-measure. Manual
-  // alignments (version 0) are the owner's and are kept.
-  const version = photo.alignVersion;
-  if (version === null || version === undefined) return true;
-  return version >= 1 && version < ALIGN_VERSION;
+  return !photo.thumbPath || needsAlignmentMeasure(photo);
+}
+
+/** Lets the browser paint and handle input between photos. */
+function yieldToBrowser(): Promise<void> {
+  return new Promise((resolve) => {
+    const idle = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => void }).requestIdleCallback;
+    if (idle) idle(() => resolve(), { timeout: 500 });
+    else setTimeout(resolve, 50);
+  });
 }
 
 export function usePhotoPreparation(
@@ -94,90 +110,112 @@ export function usePhotoPreparation(
     .map((p) => p.id)
     .join(',');
 
+  // The run stops only on pause, disable or unmount. It used to be cancelled
+  // and restarted every time a finished photo changed `pendingKey`, which
+  // left the previous run's in-flight downloads going alongside the new one.
+  const stopRef = useRef<{ stopped: boolean } | null>(null);
+  useEffect(() => {
+    if (enabled && !paused) return;
+    if (stopRef.current) stopRef.current.stopped = true;
+  }, [enabled, paused]);
+  useEffect(
+    () => () => {
+      if (stopRef.current) stopRef.current.stopped = true;
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!enabled || paused || running.current || !pendingKey) return;
 
-    const albumById = new Map(albumsRef.current.map((a) => [a.id, a]));
-    const queue = photosRef.current.filter(
-      (p) => needsPreparation(p, albumById.get(p.albumId ?? '')) && !attempted.current.has(p.id),
-    );
-    if (queue.length === 0) return;
+    // Pulled from the CURRENT list each time, so photos uploaded mid-run are
+    // picked up without restarting anything.
+    const next = (): GalleryPhoto | undefined => {
+      const albumById = new Map(albumsRef.current.map((a) => [a.id, a]));
+      return photosRef.current.find(
+        (p) => needsPreparation(p, albumById.get(p.albumId ?? '')) && !attempted.current.has(p.id),
+      );
+    };
+    if (!next()) return;
 
+    const stop = { stopped: false };
+    stopRef.current = stop;
     running.current = true;
-    let cancelled = false;
-    setProgress((current) => ({ ...current, total: current.done + current.failed + queue.length, active: true, paused: false }));
+    const remaining = () => {
+      const albumById = new Map(albumsRef.current.map((a) => [a.id, a]));
+      return photosRef.current.filter(
+        (p) => needsPreparation(p, albumById.get(p.albumId ?? '')) && !attempted.current.has(p.id),
+      ).length;
+    };
+    setProgress((current) => ({ ...current, total: current.done + current.failed + remaining(), active: true, paused: false }));
 
-    let cursor = 0;
     const worker = async () => {
-      while (cursor < queue.length && !cancelled) {
-        const photo = queue[cursor++];
+      for (let photo = next(); photo && !stop.stopped; photo = next()) {
         attempted.current.add(photo.id);
         try {
-          const album = albumById.get(photo.albumId ?? '');
+          const album = albumsRef.current.find((a) => a.id === photo!.albumId);
           const url = await signedOriginalUrl(photo.storagePath!);
           const response = await fetch(url);
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const blob = await response.blob();
 
-          // Thumbnail (if missing) and measurement (if never done), from one download.
+          // Thumbnail (if missing) and measurement (if due), from one download.
           const thumbPath = photo.thumbPath
             ? photo.thumbPath
             : await makeSbsThumbnail(blob)
-                .then((thumb) => uploadThumbnail(photo.storagePath!, thumb))
+                .then((thumb) => uploadThumbnail(photo!.storagePath!, thumb))
                 .catch((error) => {
-                  // Keep going without a thumbnail, but say why: a silent null
-                  // hid a refused upload behind "prepared" counts.
-                  console.warn('Thumbnail could not be made for', photo.id, error);
+                  // Keep going without a thumbnail, but say why.
+                  console.warn('Thumbnail could not be made for', photo!.id, error);
                   return null;
                 });
 
-          const needsAlignment = photo.alignVersion === null || photo.alignVersion === undefined;
+          const remeasure = photo.alignVersion !== null && photo.alignVersion !== undefined;
           const displayedSwapped = photo.alignment?.swapped ?? !!album?.lr_swapped_default;
           let alignment: StereoAlignment | null = null;
           let version: number | null = null;
           let confidence: number | null = null;
-          if (needsAlignment) {
+          if (needsAlignmentMeasure(photo)) {
             const est = await estimateFileAlignment(blob, { swapped: displayedSwapped }).catch(() => null);
             if (est) {
               version = est.version;
               confidence = est.confidence;
-              // Unsure: record that it was measured (so it is not measured again
-              // on every visit) with identity offsets and the order as uploaded.
+              // Unsure: record that it was measured (so it is not measured
+              // again on every visit). A first measurement stores identity; a
+              // re-measure keeps the alignment the photo already had rather
+              // than replace a confident old answer with "no correction".
               alignment =
                 est.confidence >= STORE_MIN_CONFIDENCE
                   ? applyEstimate(est, displayedSwapped)
-                  : { dx: 0, dy: 0, swapped: displayedSwapped };
+                  : remeasure && photo.alignment
+                    ? photo.alignment
+                    : { dx: 0, dy: 0, swapped: displayedSwapped };
             }
           }
 
           await finishPhotoPreparation({ photoId: photo.id, thumbPath, alignment, version, confidence });
-          if (cancelled) return;
 
-          onPreparedRef.current(photo.id, {
-            ...(thumbPath ? { thumbPath } : {}),
+          const patch: Partial<GalleryPhoto> = {
+            ...(thumbPath && thumbPath !== photo.thumbPath ? { thumbPath } : {}),
             ...(alignment ? { alignment, alignVersion: version, alignConfidence: confidence } : {}),
-          });
+          };
+          if (Object.keys(patch).length > 0) onPreparedRef.current(photo.id, patch);
           setProgress((current) => ({ ...current, done: current.done + 1 }));
         } catch (error) {
           console.warn('Photo preparation failed for', photo.id, error);
           failedIds.current.add(photo.id);
           setProgress((current) => ({ ...current, failed: current.failed + 1 }));
         }
+        await yieldToBrowser();
       }
     };
 
-    Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker)).finally(() => {
+    Promise.all(Array.from({ length: CONCURRENCY }, worker)).finally(() => {
       running.current = false;
-      if (!cancelled) setProgress((current) => ({ ...current, active: false }));
+      if (stopRef.current === stop) stopRef.current = null;
+      setProgress((current) => ({ ...current, active: false }));
     });
-
-    return () => {
-      // Pausing or unmounting: stop taking new items. The one in flight
-      // finishes and commits (or fails) on its own; it is already marked
-      // attempted, so it is not picked up again this session.
-      cancelled = true;
-      running.current = false;
-    };
+    // No cleanup here on purpose: see stopRef above.
   }, [enabled, paused, pendingKey, pass]);
 
   const pause = useCallback(() => setUserPaused(true), []);
