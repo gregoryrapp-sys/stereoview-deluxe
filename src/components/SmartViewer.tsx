@@ -608,6 +608,13 @@ export default function SmartViewer({
   // Next are always shown: navigation must never be something to find again.
   const controlVisibility = showControls || alignMode ? 'opacity-100' : 'pointer-events-none opacity-0';
   const roundButton = 'rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200';
+  // Previous / Next: large, vertically centred on the screen edges, frosted
+  // glass (a strong backdrop blur with a light tint and a hairline edge)
+  // rather than a flat grey disc, so they read on bright and dark photos alike.
+  const navButton =
+    'absolute top-1/2 flex h-16 w-16 -translate-y-1/2 items-center justify-center rounded-full ' +
+    'border border-white/25 bg-white/10 text-white shadow-lg shadow-black/30 ' +
+    'backdrop-blur-xl backdrop-saturate-150 transition-colors hover:bg-white/20 active:bg-white/25';
 
   const closeButton = (
     <button
@@ -697,20 +704,20 @@ export default function SmartViewer({
   const prevButton = hasPrevious && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onPrevious(); }}
-      className={cn('absolute bottom-4 left-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
+      className={cn(navButton, 'left-[max(1rem,env(safe-area-inset-left))]')}
       aria-label="Previous photo"
     >
-      <ChevronLeft className="h-6 w-6" />
+      <ChevronLeft className="h-9 w-9" strokeWidth={2.25} />
     </button>
   );
 
   const nextButton = hasNext && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onNext(); }}
-      className={cn('absolute bottom-4 right-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
+      className={cn(navButton, 'right-[max(1rem,env(safe-area-inset-right))]')}
       aria-label="Next photo"
     >
-      <ChevronRight className="h-6 w-6" />
+      <ChevronRight className="h-9 w-9" strokeWidth={2.25} />
     </button>
   );
 
