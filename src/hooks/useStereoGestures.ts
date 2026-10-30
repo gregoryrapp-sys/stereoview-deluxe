@@ -27,6 +27,11 @@ const DOUBLE_TAP_WINDOW = 300;
 const TAP_MAX_MOVEMENT = 10;
 const TAP_MAX_DURATION = 250;
 
+/** Touches that start on a viewer control are the control's, not the photo's. */
+export function isViewerControl(target: EventTarget | null): boolean {
+  return typeof Element !== 'undefined' && target instanceof Element && !!target.closest('[data-viewer-control]');
+}
+
 export function useStereoGestures(
   onSwipeLeft: () => void,
   onSwipeRight: () => void,
@@ -54,6 +59,11 @@ export function useStereoGestures(
   const lastTouchRef = useRef<TouchPoint | null>(null);
   const lastTouchTimeRef = useRef<number>(0);
   const pendingTapRef = useRef<number | null>(null);
+  // Per gesture: a touch that starts on a viewer control (arrows, close,
+  // share, align) belongs to that control, and a gesture that ever had two
+  // fingers is a pinch. Neither is a tap, so neither may toggle the controls.
+  const startedOnControlRef = useRef(false);
+  const multiTouchRef = useRef(false);
   const onTapRef = useRef(options.onTap);
   onTapRef.current = options.onTap;
   const initialPinchDistanceRef = useRef<number>(0);
@@ -99,6 +109,13 @@ export function useStereoGestures(
   }, [isPortrait]);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (e.touches.length === 1) {
+      // First finger down: a new gesture.
+      multiTouchRef.current = false;
+      startedOnControlRef.current = isViewerControl(e.target);
+    } else {
+      multiTouchRef.current = true;
+    }
     if (e.touches.length === 2) {
       // Pinch start
       isPinchingRef.current = true;
@@ -180,7 +197,11 @@ export function useStereoGestures(
         const { x: deltaX, y: deltaY } = transformDelta(rawDeltaX, rawDeltaY);
 
         const distance = Math.hypot(rawDeltaX, rawDeltaY);
-        wasTap = distance < TAP_MAX_MOVEMENT && deltaTime < TAP_MAX_DURATION;
+        wasTap =
+          distance < TAP_MAX_MOVEMENT &&
+          deltaTime < TAP_MAX_DURATION &&
+          !multiTouchRef.current &&
+          !startedOnControlRef.current;
 
         // Swipe only when at (or below) the default size. The epsilon matters:
         // a pinch that settles at 1.02 would otherwise disable swiping for good.
