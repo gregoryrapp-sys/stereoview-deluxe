@@ -13,7 +13,7 @@ import {
   Share2,
 } from 'lucide-react';
 import type { Photo } from '@/data/photos';
-import { useStereoGestures } from '@/hooks/useStereoGestures';
+import { isViewerControl, useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
@@ -163,6 +163,10 @@ export default function SmartViewer({
   // toggle. Zoomed in, a tap still toggles: the gesture hook tells a tap from
   // a pan by distance, so the old "no toggling while zoomed" rule is gone.
   const lastTouchTapAtRef = useRef(0);
+  const lastTouchAtRef = useRef(0);
+  const markTouch = useCallback(() => {
+    lastTouchAtRef.current = Date.now();
+  }, []);
   const toggleControlsFromTouch = useCallback(() => {
     if (alignMode) return;
     lastTouchTapAtRef.current = Date.now();
@@ -174,14 +178,26 @@ export default function SmartViewer({
   const touchStartY_2d = useRef(0);
 
   const touchStartAt_2d = useRef(0);
+  const startedOnControl_2d = useRef(false);
+  const multiTouch_2d = useRef(false);
 
   const handleTouchStart_2d = (event: React.TouchEvent) => {
+    if (event.touches.length > 1) {
+      multiTouch_2d.current = true;
+      return;
+    }
+    multiTouch_2d.current = false;
+    startedOnControl_2d.current = isViewerControl(event.target);
     touchStartX_2d.current = event.touches[0].clientX;
     touchStartY_2d.current = event.touches[0].clientY;
     touchStartAt_2d.current = Date.now();
   };
 
   const handleTouchEnd_2d = (event: React.TouchEvent) => {
+    if (event.touches.length > 0) return; // a finger is still down
+    // The control's own click does the work; a multi-finger touch is not a
+    // tap or a swipe.
+    if (startedOnControl_2d.current || multiTouch_2d.current) return;
     const touchEndX = event.changedTouches[0].clientX;
     const touchEndY = event.changedTouches[0].clientY;
     const deltaX = touchEndX - touchStartX_2d.current;
@@ -276,7 +292,13 @@ export default function SmartViewer({
 
   const handleContainerClick = () => {
     if (alignMode) return;
+    // Any recent touch: this click is the browser's echo of it. The touch path
+    // already handled (or deliberately ignored) the gesture. Keyed on the
+    // touch itself, not on when the tap fired - the tap is deferred 300 ms
+    // for double-tap detection, so the echo arrived first and toggled the
+    // controls, and the tap then toggled them straight back.
     if (Date.now() - lastTouchTapAtRef.current < 700) return;
+    if (Date.now() - lastTouchAtRef.current < 800) return;
     // A swipe also produces a click. Without this guard every swipe toggles the
     // controls off, so the arrows end up pointer-events-none right when the
     // user reaches for them.
@@ -604,14 +626,23 @@ export default function SmartViewer({
   }, [leftUrl]);
 
   // --- Common UI Elements ---
-  // Tapping the photo hides Close, Share and the Align controls. Previous and
-  // Next are always shown: navigation must never be something to find again.
+  // Previous, Next, Close and Share (and the owner's Align button) show and
+  // hide together: one tap on the photo flips them. Taps that start on a
+  // control, pinches, pans, swipes and double taps never flip them.
   const controlVisibility = showControls || alignMode ? 'opacity-100' : 'pointer-events-none opacity-0';
   const roundButton = 'rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200';
+  // Previous / Next: large, vertically centred on the screen edges, frosted
+  // glass (a strong backdrop blur with a light tint and a hairline edge)
+  // rather than a flat grey disc, so they read on bright and dark photos alike.
+  const navButton =
+    'absolute top-1/2 flex h-16 w-16 -translate-y-1/2 items-center justify-center rounded-full ' +
+    'border border-white/25 bg-white/10 text-white shadow-lg shadow-black/30 ' +
+    'backdrop-blur-xl backdrop-saturate-150 transition-[opacity,background-color] duration-200 hover:bg-white/20 active:bg-white/25';
 
   const closeButton = (
     <button
       onClick={(e) => { e.stopPropagation(); onClose(); }}
+      data-viewer-control
       className={cn('absolute right-4 top-4', roundButton, controlVisibility)}
       aria-label="Close"
     >
@@ -622,6 +653,7 @@ export default function SmartViewer({
   const shareButton = (
     <button
       onClick={(e) => { e.stopPropagation(); handleShare(); }}
+      data-viewer-control
       className={cn('absolute left-4 top-4', roundButton, controlVisibility)}
       aria-label="Share"
     >
@@ -697,26 +729,28 @@ export default function SmartViewer({
   const prevButton = hasPrevious && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onPrevious(); }}
-      className={cn('absolute bottom-4 left-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
+      data-viewer-control
+      className={cn(navButton, 'left-[max(1rem,env(safe-area-inset-left))]', controlVisibility)}
       aria-label="Previous photo"
     >
-      <ChevronLeft className="h-6 w-6" />
+      <ChevronLeft className="h-9 w-9" strokeWidth={2.25} />
     </button>
   );
 
   const nextButton = hasNext && !alignMode && (
     <button
       onClick={(e) => { e.stopPropagation(); onNext(); }}
-      className={cn('absolute bottom-4 right-4 [padding-bottom:env(safe-area-inset-bottom)]', roundButton)}
+      data-viewer-control
+      className={cn(navButton, 'right-[max(1rem,env(safe-area-inset-right))]', controlVisibility)}
       aria-label="Next photo"
     >
-      <ChevronRight className="h-6 w-6" />
+      <ChevronRight className="h-9 w-9" strokeWidth={2.25} />
     </button>
   );
 
   // Top-centre: Align for the owner only. Visitors get no alignment controls.
   const alignmentButtons = canEdit && (
-    <div className={cn('absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 transition-opacity duration-200', controlVisibility)}>
+    <div data-viewer-control className={cn('absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 transition-opacity duration-200', controlVisibility)}>
       {!alignMode && (
         <button
           onClick={(e) => { e.stopPropagation(); setAlignMode(true); setDraft(null); }}
@@ -744,6 +778,7 @@ export default function SmartViewer({
 
   const alignToolbar = alignMode && (
     <div
+      data-viewer-control
       className="absolute inset-x-4 bottom-4 flex flex-wrap items-center justify-center gap-3 rounded-2xl bg-black/70 p-3 text-white backdrop-blur-sm [padding-bottom:calc(0.75rem+env(safe-area-inset-bottom))]"
       onClick={(e) => e.stopPropagation()}
     >
@@ -824,6 +859,8 @@ export default function SmartViewer({
     return (
       <div
         className="viewer-container flex h-full w-full items-center justify-center bg-black"
+        onTouchStartCapture={markTouch}
+        onTouchEndCapture={markTouch}
         onTouchStart={handleTouchStart_2d}
         onTouchEnd={handleTouchEnd_2d}
         onClick={handleContainerClick}
@@ -845,6 +882,8 @@ export default function SmartViewer({
   return (
     <div
       className={cn('viewer-container h-full w-full flex items-center justify-center bg-black', alignMode && 'cursor-move touch-none')}
+      onTouchStartCapture={markTouch}
+      onTouchEndCapture={markTouch}
       onTouchStart={alignMode ? undefined : handleTouchStart}
       onTouchMove={alignMode ? undefined : handleTouchMove}
       onTouchEnd={alignMode ? undefined : handleTouchEnd}
