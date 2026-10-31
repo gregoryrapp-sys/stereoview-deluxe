@@ -244,3 +244,20 @@ describe('estimateAlignment: rotation and scale (v2)', () => {
     expect(est.rotationSuspected).toBe(false);
   });
 });
+
+describe('estimateAlignment: rotation noise floor', () => {
+  it('stores no rotation for a calibrated pair tilted by a few hundredths of a degree', () => {
+    const left = makeTexture(2200, 1400, 17);
+    const right = transformed(left, 0.04, 1, 20, 0);
+    const est = estimateAlignment(pyramidFrom(left, right), false);
+    expect(est.alignment.rotation).toBeUndefined();
+    expect(est.rotationSuspected).toBe(false);
+  });
+
+  it('still corrects a rig tilt of a few tenths of a degree', () => {
+    const left = makeTexture(2200, 1400, 19);
+    const right = transformed(left, 0.35, 1, 20, 0);
+    const est = estimateAlignment(pyramidFrom(left, right), false);
+    expect(est.alignment.rotation ?? 0).toBeCloseTo(0.35, 1);
+  });
+});
