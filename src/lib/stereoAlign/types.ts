@@ -50,6 +50,9 @@ export const IDENTITY_ALIGNMENT: StereoAlignment = { dx: 0, dy: 0, swapped: fals
 /** align_version value meaning "set by hand in the viewer". */
 export const MANUAL_ALIGN_VERSION = 0;
 
+/** Rotations smaller than this are sensor noise; shared by the estimator and the row reader. */
+export const ROTATION_NOISE_FLOOR_DEG = 0.1;
+
 export function isIdentityAlignment(a: StereoAlignment): boolean {
   return a.dx === 0 && a.dy === 0 && !a.swapped && isPureShift(a);
 }
@@ -112,7 +115,11 @@ export function alignmentFromRow(
     dy: row.align_dy ?? 0,
     swapped: row.lr_swapped ?? albumSwappedDefault,
   };
-  if (row.align_rotation != null && row.align_rotation !== 0) alignment.rotation = row.align_rotation;
+  // Below the estimator's noise floor (see MIN_ROTATION_DEG): stored by the
+  // earlier 0.02° threshold, and not worth resampling the right eye for.
+  if (row.align_rotation != null && Math.abs(row.align_rotation) >= ROTATION_NOISE_FLOOR_DEG) {
+    alignment.rotation = row.align_rotation;
+  }
   // align_scale is deliberately not read: no scaling as part of alignment.
   return { alignment, hasStored };
 }

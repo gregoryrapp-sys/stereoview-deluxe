@@ -139,3 +139,11 @@ describe('rotation and scale', () => {
     expect(r.cropH).toBeGreaterThanOrEqual(16);
   });
 });
+
+describe('alignmentFromRow: rotation noise floor', () => {
+  it('ignores stored rotations below 0.1° and keeps real ones', async () => {
+    const { alignmentFromRow } = await import('./types');
+    expect(alignmentFromRow({ align_dx: 0, align_dy: 0, lr_swapped: false, align_rotation: -0.021 }, false).alignment.rotation).toBeUndefined();
+    expect(alignmentFromRow({ align_dx: 0, align_dy: 0, lr_swapped: false, align_rotation: -0.556 }, false).alignment.rotation).toBe(-0.556);
+  });
+});

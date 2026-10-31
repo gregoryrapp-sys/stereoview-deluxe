@@ -1,4 +1,4 @@
-import type { StereoAlignment } from './types';
+import { ROTATION_NOISE_FLOOR_DEG, type StereoAlignment } from './types';
 
 /**
  * Stereo alignment estimator. Pure TypeScript over Float32Arrays: no DOM, no
@@ -108,8 +108,13 @@ const FIT_RANSAC_ITERATIONS = 300;
 const FIT_INLIER_PX = 1.5;
 /** Beyond this the fit is not a camera misalignment; fall back to a pure shift. */
 const MAX_ROTATION_DEG = 3;
-/** Smaller than this is noise; store a pure shift so nothing is resampled for nothing. */
-const MIN_ROTATION_DEG = 0.02;
+/**
+ * Smaller than this is noise; store a pure shift so nothing is resampled for
+ * nothing. Calibrated on real pairs: factory-calibrated iPhone spatial photos
+ * measure 0-0.054° (seven photos), the photographer's two-camera rig 0.35-0.56°.
+ * 0.1° is about 2-3 px at the edge of a 2700-3600 px eye.
+ */
+const MIN_ROTATION_DEG = ROTATION_NOISE_FLOOR_DEG;
 // Stereo-order check, calibrated to SingleCheckFlip-AutoAlign.py: background
 // band 20-55% of height, foreground >= 55%, >= 1.5 px parallax at its
 // 2200 px detection size, >= 80% of foreground agreeing on direction.

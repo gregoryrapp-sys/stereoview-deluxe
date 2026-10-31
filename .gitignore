@@ -26,3 +26,6 @@ dist-ssr
 # Capacitor native projects
 android
 ios
+
+# Sample photos shared for calibration; large, and not ours to publish
+docs/Spatial/
