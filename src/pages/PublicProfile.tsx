@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -313,10 +313,34 @@ export default function PublicProfile() {
     setSelectedPhotoIndex(index);
   };
 
+  // Shared photo links: /<profile>/<event>/<album>?photo=<id> opens the album
+  // on that photo. Read once per arrival; the parameter is dropped when the
+  // viewer closes so a reload shows the album.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedPhotoId = searchParams.get('photo');
+  const openedLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!linkedPhotoId || openedLinkRef.current === linkedPhotoId) return;
+    const index = sortedActivePhotos.findIndex((p) => p.id === linkedPhotoId);
+    if (index < 0) return; // not loaded yet, or not visible to this visitor
+    openedLinkRef.current = linkedPhotoId;
+    setSelectedPhotoIndex(index);
+  }, [linkedPhotoId, sortedActivePhotos]);
+
+  const linkForPhoto = useCallback(
+    (photo: { id: string }) => `${window.location.origin}${window.location.pathname}?photo=${encodeURIComponent(photo.id)}`,
+    [],
+  );
+
   const handleCloseViewer = useCallback(async () => {
     await exitPhotoFullscreen();
     setSelectedPhotoIndex(null);
-  }, []);
+    if (searchParams.has('photo')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('photo');
+      setSearchParams(next, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
 
   const isViewerOpen = selectedPhotoIndex !== null && !!sortedActivePhotos[selectedPhotoIndex];
 
@@ -712,6 +736,7 @@ export default function PublicProfile() {
             // `ownerView` comes from the server: the session belongs to this
             // profile. Live Dropbox photos have no row to write an alignment to.
             canEdit={ownerView && !previewAsVisitor && !isLiveDropboxAlbum(selectedAlbum)}
+            linkForPhoto={isAlbumPage ? linkForPhoto : undefined}
             onAlignmentSaved={(photoId, alignment) =>
               setData((current) =>
                 current

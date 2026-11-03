@@ -19,6 +19,7 @@ import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
 import { eyeSizeFromThumb, eyeViewport, fitContain } from '@/lib/viewerGeometry';
 import { cn } from '@/lib/utils';
+import ViewerSharePanel from '@/components/ViewerSharePanel';
 import { toast } from '@/hooks/use-toast';
 import { type EyeTier, loadStereoSourceImage, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -54,6 +55,12 @@ interface SmartViewerProps {
   canEdit?: boolean;
   /** Called after an alignment is saved so the page can patch its photo list in place. */
   onAlignmentSaved?: (photoId: string, alignment: StereoAlignment) => void;
+  /**
+   * Address that opens this photo for someone else. With it, Share offers
+   * "photo" or "link" (URL + QR); without it (private pages), Share sends the
+   * photo directly.
+   */
+  linkForPhoto?: (photo: Photo) => string;
 }
 
 type ViewMode = 'stereo' | '2d';
@@ -88,9 +95,13 @@ export default function SmartViewer({
   hasNext,
   canEdit = false,
   onAlignmentSaved,
+  linkForPhoto,
 }: SmartViewerProps) {
   const [mode, setMode] = useState<ViewMode>('stereo');
   const [showControls, setShowControls] = useState(true);
+  const [shareOpen, setShareOpen] = useState(false);
+  const linkUrl = linkForPhoto ? linkForPhoto(photo) : null;
+  useEffect(() => setShareOpen(false), [photo.id]);
   /** Bumped by any interaction, so the auto-hide countdown starts over. */
   const [interaction, setInteraction] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -177,10 +188,10 @@ export default function SmartViewer({
   // (or, with a mouse, any movement). Align mode keeps them up while the
   // owner works.
   useEffect(() => {
-    if (!showControls || alignMode) return;
+    if (!showControls || alignMode || shareOpen) return;
     const timer = window.setTimeout(() => setShowControls(false), CONTROLS_AUTO_HIDE_MS);
     return () => window.clearTimeout(timer);
-  }, [showControls, alignMode, interaction]);
+  }, [showControls, alignMode, shareOpen, interaction]);
 
   const handleMouseActivity = useCallback((event: React.PointerEvent) => {
     if (event.pointerType !== 'mouse') return;
@@ -519,7 +530,8 @@ export default function SmartViewer({
       } else if (event.key === 'ArrowRight') {
         if (hasNext) onNext();
       } else if (event.key === 'Escape') {
-        onClose();
+        if (shareOpen) setShareOpen(false);
+        else onClose();
       } else {
         return;
       }
@@ -529,7 +541,7 @@ export default function SmartViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [alignMode, nudge, flipEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose]);
+  }, [alignMode, nudge, flipEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose, shareOpen]);
 
   // One stage for both the placeholder and the sharp eyes. Until the split
   // result exists, the eye's shape comes from the grid thumbnail (half its
@@ -695,9 +707,17 @@ export default function SmartViewer({
     </button>
   );
 
+  const sharePanel = shareOpen && linkUrl && (
+    <ViewerSharePanel linkUrl={linkUrl} onSharePhoto={() => void handleShare()} onClose={() => setShareOpen(false)} />
+  );
+
   const shareButton = (
     <button
-      onClick={(e) => { e.stopPropagation(); handleShare(); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (linkUrl) setShareOpen((open) => !open);
+        else void handleShare();
+      }}
       data-viewer-control
       className={cn('absolute left-4 top-4', roundButton, controlVisibility)}
       aria-label="Share"
@@ -925,6 +945,7 @@ export default function SmartViewer({
         {errorIndicator}
         {closeButton}
         {shareButton}
+        {sharePanel}
         {navButtons}
       </div>
     );
@@ -962,6 +983,7 @@ export default function SmartViewer({
       {errorIndicator}
       {closeButton}
       {shareButton}
+      {sharePanel}
       {alignmentButtons}
       {estimatorChips}
       {navButtons}
