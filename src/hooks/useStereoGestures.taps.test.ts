@@ -98,3 +98,51 @@ describe('useStereoGestures taps', () => {
     expect(onTap).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('useStereoGestures: navigating while zoomed', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const zoomIn = (g: () => ReturnType<typeof useStereoGestures>, tap: (p?: Pt) => void) => {
+    tap(); act(() => vi.advanceTimersByTime(100)); tap();
+    act(() => vi.advanceTimersByTime(400));
+    expect(g().scale).toBeGreaterThan(1);
+  };
+  const drag = (g: () => ReturnType<typeof useStereoGestures>, from: Pt, to: Pt, ms: number) => {
+    act(() => g().handleTouchStart(ev([from])));
+    for (let i = 1; i <= 5; i++) {
+      act(() => vi.advanceTimersByTime(ms / 5));
+      act(() => g().handleTouchMove(ev([{ x: from.x + ((to.x - from.x) * i) / 5, y: from.y + ((to.y - from.y) * i) / 5 }])));
+    }
+    act(() => g().handleTouchEnd(ev([], [to])));
+  };
+
+  it('a drag while zoomed pans and does not change photo', () => {
+    const { g, tap, onLeft, onRight } = setup();
+    zoomIn(g, tap);
+    drag(g, { x: 700, y: 400 }, { x: 450, y: 400 }, 400);
+    expect(g().translateX).toBeLessThan(0);
+    expect(onLeft).not.toHaveBeenCalled();
+    expect(onRight).not.toHaveBeenCalled();
+  });
+
+  it('a quick flick that starts at the edge of the zoomed photo goes to the next photo', () => {
+    const { g, tap, onLeft } = setup();
+    zoomIn(g, tap);
+    // Pan all the way to the right edge first (content pinned at -maxPanX).
+    drag(g, { x: 1300, y: 400 }, { x: 100, y: 400 }, 600);
+    act(() => vi.advanceTimersByTime(400));
+    expect(onLeft).not.toHaveBeenCalled();
+    // Then a fast flick in the same direction navigates.
+    drag(g, { x: 900, y: 400 }, { x: 600, y: 400 }, 150);
+    expect(onLeft).toHaveBeenCalledTimes(1);
+  });
+
+  it('a quick flick that does not start at the edge only pans', () => {
+    const { g, tap, onLeft, onRight } = setup();
+    zoomIn(g, tap);
+    drag(g, { x: 900, y: 400 }, { x: 600, y: 400 }, 150);
+    expect(onLeft).not.toHaveBeenCalled();
+    expect(onRight).not.toHaveBeenCalled();
+  });
+});
