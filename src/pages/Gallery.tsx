@@ -94,6 +94,16 @@ export default function Gallery() {
     [galleryData.albums, selectedAlbumId],
   );
 
+  // Share links point at the public album page (a visitor's address), so the
+  // viewer can offer "photo or link" here too. Only for the photographer's own
+  // events: an admin browsing someone else's content has no slug to build from.
+  const linkForPhoto = useMemo(() => {
+    if (!profile?.slug || !selectedEvent?.slug || !selectedAlbum?.slug) return undefined;
+    if (selectedEvent.owner_id !== profile.id) return undefined;
+    const base = `${window.location.origin}/${profile.slug}/${selectedEvent.slug}/${selectedAlbum.slug}`;
+    return (photo: { id: string }) => `${base}?photo=${encodeURIComponent(photo.id)}`;
+  }, [profile?.slug, profile?.id, selectedEvent?.slug, selectedEvent?.owner_id, selectedAlbum?.slug]);
+
   const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
 
   useEffect(() => {
@@ -533,6 +543,7 @@ export default function Gallery() {
             // anything with a row here is theirs to align. Live Dropbox photos have
             // no row to write to.
             canEdit={isAuthenticated && !isLiveDropboxAlbum(selectedAlbum)}
+            linkForPhoto={linkForPhoto}
             onAlignmentSaved={(photoId, alignment) =>
               setGalleryData((current) => ({
                 ...current,
