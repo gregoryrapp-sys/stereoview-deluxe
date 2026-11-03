@@ -21,6 +21,8 @@ const SWIPE_VELOCITY_THRESHOLD = 0.3;
 // A slow but deliberate drag this far counts as a swipe even without the velocity.
 const SWIPE_DISTANCE_OVERRIDE = 100;
 const DOUBLE_TAP_WINDOW = 300;
+/** px/ms: a deliberate flick, faster than a pan. */
+const EDGE_FLICK_VELOCITY = 0.6;
 // A touch only counts as a tap if the finger barely moved and lifted quickly.
 // Without this a swipe registers as a tap and the second swipe of a sequence
 // gets read as a double tap, zooming in and killing all further swipes.
@@ -69,6 +71,8 @@ export function useStereoGestures(
   const initialPinchDistanceRef = useRef<number>(0);
   const initialScaleRef = useRef<number>(DEFAULT_SCALE);
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  /** Pan offset when the gesture began, to tell a pan from a flick off the edge. */
+  const panAtStartRef = useRef<{ x: number; scale: number }>({ x: 0, scale: DEFAULT_SCALE });
   const isPinchingRef = useRef(false);
 
   const clampTranslate = useCallback((x: number, y: number, scale: number) => {
@@ -129,8 +133,9 @@ export function useStereoGestures(
         y: touch.clientY,
         time: Date.now(),
       };
+      panAtStartRef.current = { x: state.translateX, scale: state.scale };
     }
-  }, [state.scale]);
+  }, [state.scale, state.translateX]);
 
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     // No preventDefault here: React registers touchmove passively on the root,
@@ -213,7 +218,21 @@ export function useStereoGestures(
         const fastOrFarEnough =
           velocity > SWIPE_VELOCITY_THRESHOLD || Math.abs(deltaX) > SWIPE_DISTANCE_OVERRIDE;
 
-        if (isZoomedOut && isHorizontal && farEnough && fastOrFarEnough) {
+        // Zoomed in, a drag pans. It navigates only as a quick flick that
+        // starts with the photo already panned to its edge in that direction
+        // (the Photos-app convention), so panning around never changes photo.
+        const startScale = panAtStartRef.current.scale;
+        const maxPanX = ((containerWidth / 2) * (startScale - 1)) / 2;
+        const pinnedForLeft = panAtStartRef.current.x <= -maxPanX + 1;
+        const pinnedForRight = panAtStartRef.current.x >= maxPanX - 1;
+        const edgeFlick =
+          !isZoomedOut &&
+          isHorizontal &&
+          Math.abs(deltaX) > SWIPE_DISTANCE_OVERRIDE &&
+          velocity > EDGE_FLICK_VELOCITY &&
+          (deltaX < 0 ? pinnedForLeft : pinnedForRight);
+
+        if ((isZoomedOut && isHorizontal && farEnough && fastOrFarEnough) || edgeFlick) {
           didSwipe = true;
           if (deltaX > 0) {
             onSwipeRight();
@@ -265,13 +284,14 @@ export function useStereoGestures(
       const touch = e.touches[0];
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     }
-  }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta]);
+  }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta, containerWidth]);
 
   // The browser can steal a gesture mid-swipe (Android's edge-back gesture,
   // pull-to-refresh, an incoming call). touchend never fires in that case, so
   // without this the refs stay stale and the next gesture misbehaves.
   const handleTouchCancel = useCallback(() => {
     isPinchingRef.current = false;
+    multiTouchRef.current = false;
     lastTouchRef.current = null;
     touchStartRef.current = null;
     lastTouchTimeRef.current = 0;

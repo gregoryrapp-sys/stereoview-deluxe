@@ -66,6 +66,8 @@ const SHARE_EXTENSIONS: Record<string, string> = {
 };
 
 /** Nudge step in source pixels; Shift multiplies it. */
+/** Controls hide this long after the last interaction. */
+const CONTROLS_AUTO_HIDE_MS = 3000;
 /** The sharp eyes fade in over the placeholder this fast. */
 const FADE_MS = 200;
 /** Loads shorter than this show no spinner at all. */
@@ -89,6 +91,8 @@ export default function SmartViewer({
 }: SmartViewerProps) {
   const [mode, setMode] = useState<ViewMode>('stereo');
   const [showControls, setShowControls] = useState(true);
+  /** Bumped by any interaction, so the auto-hide countdown starts over. */
+  const [interaction, setInteraction] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
   // --- Alignment state -------------------------------------------------------
@@ -166,6 +170,22 @@ export default function SmartViewer({
   const lastTouchAtRef = useRef(0);
   const markTouch = useCallback(() => {
     lastTouchAtRef.current = Date.now();
+    setInteraction((n) => n + 1);
+  }, []);
+
+  // Controls fade out 3 s after the last interaction and come back with a tap
+  // (or, with a mouse, any movement). Align mode keeps them up while the
+  // owner works.
+  useEffect(() => {
+    if (!showControls || alignMode) return;
+    const timer = window.setTimeout(() => setShowControls(false), CONTROLS_AUTO_HIDE_MS);
+    return () => window.clearTimeout(timer);
+  }, [showControls, alignMode, interaction]);
+
+  const handleMouseActivity = useCallback((event: React.PointerEvent) => {
+    if (event.pointerType !== 'mouse') return;
+    setShowControls(true);
+    setInteraction((n) => n + 1);
   }, []);
   const toggleControlsFromTouch = useCallback(() => {
     if (alignMode) return;
@@ -220,6 +240,27 @@ export default function SmartViewer({
     if (deltaY > 100 && Math.abs(deltaY) > Math.abs(deltaX)) {
       onClose();
     }
+  };
+
+  // iOS Safari treats a horizontal drag it is allowed to scroll as its own
+  // (page scroll, back gesture) and cancels the touch, so the swipe never
+  // ends in our handler. React registers touchmove as passive, where
+  // preventDefault is ignored; a native non-passive listener keeps every
+  // touch sequence ours. The viewer is fullscreen, so nothing is lost.
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const keep = (event: TouchEvent) => {
+      if (event.cancelable) event.preventDefault();
+    };
+    el.addEventListener('touchmove', keep, { passive: false });
+    return () => el.removeEventListener('touchmove', keep);
+  }, [mode]);
+
+  const handleTouchCancel_2d = () => {
+    multiTouch_2d.current = false;
+    startedOnControl_2d.current = false;
   };
 
   // --- Stereo Viewer Logic ---
@@ -634,10 +675,14 @@ export default function SmartViewer({
   // Previous / Next: large, vertically centred on the screen edges, frosted
   // glass (a strong backdrop blur with a light tint and a hairline edge)
   // rather than a flat grey disc, so they read on bright and dark photos alike.
+  // Previous / Next: small frosted-glass buttons side by side at the bottom
+  // right, out of the picture's way (the photographer's own viewer does the
+  // same). The touch target stays 44 px even though the disc is smaller.
   const navButton =
-    'absolute top-1/2 flex h-16 w-16 -translate-y-1/2 items-center justify-center rounded-full ' +
-    'border border-white/25 bg-white/10 text-white shadow-lg shadow-black/30 ' +
-    'backdrop-blur-xl backdrop-saturate-150 transition-[opacity,background-color] duration-200 hover:bg-white/20 active:bg-white/25';
+    'flex h-11 w-11 items-center justify-center rounded-full ' +
+    'border border-white/25 bg-white/10 text-white shadow-md shadow-black/30 ' +
+    'backdrop-blur-xl backdrop-saturate-150 transition-colors hover:bg-white/20 active:bg-white/25 ' +
+    'disabled:opacity-30';
 
   const closeButton = (
     <button
@@ -726,26 +771,31 @@ export default function SmartViewer({
     </div>
   );
 
-  const prevButton = hasPrevious && !alignMode && (
-    <button
-      onClick={(e) => { e.stopPropagation(); onPrevious(); }}
+  const navButtons = !alignMode && (hasPrevious || hasNext) && (
+    <div
       data-viewer-control
-      className={cn(navButton, 'left-[max(1rem,env(safe-area-inset-left))]', controlVisibility)}
-      aria-label="Previous photo"
+      className={cn(
+        'absolute bottom-[max(1rem,env(safe-area-inset-bottom))] right-[max(1rem,env(safe-area-inset-right))] flex gap-2 transition-opacity duration-200',
+        controlVisibility,
+      )}
     >
-      <ChevronLeft className="h-9 w-9" strokeWidth={2.25} />
-    </button>
-  );
-
-  const nextButton = hasNext && !alignMode && (
-    <button
-      onClick={(e) => { e.stopPropagation(); onNext(); }}
-      data-viewer-control
-      className={cn(navButton, 'right-[max(1rem,env(safe-area-inset-right))]', controlVisibility)}
-      aria-label="Next photo"
-    >
-      <ChevronRight className="h-9 w-9" strokeWidth={2.25} />
-    </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onPrevious(); }}
+        disabled={!hasPrevious}
+        className={navButton}
+        aria-label="Previous photo"
+      >
+        <ChevronLeft className="h-6 w-6" strokeWidth={2.25} />
+      </button>
+      <button
+        onClick={(e) => { e.stopPropagation(); onNext(); }}
+        disabled={!hasNext}
+        className={navButton}
+        aria-label="Next photo"
+      >
+        <ChevronRight className="h-6 w-6" strokeWidth={2.25} />
+      </button>
+    </div>
   );
 
   // Top-centre: Align for the owner only. Visitors get no alignment controls.
@@ -858,7 +908,10 @@ export default function SmartViewer({
   if (mode === '2d') {
     return (
       <div
+        ref={containerRef}
         className="viewer-container flex h-full w-full items-center justify-center bg-black"
+        onPointerMove={handleMouseActivity}
+        onTouchCancel={handleTouchCancel_2d}
         onTouchStartCapture={markTouch}
         onTouchEndCapture={markTouch}
         onTouchStart={handleTouchStart_2d}
@@ -872,8 +925,7 @@ export default function SmartViewer({
         {errorIndicator}
         {closeButton}
         {shareButton}
-        {prevButton}
-        {nextButton}
+        {navButtons}
       </div>
     );
   }
@@ -881,6 +933,8 @@ export default function SmartViewer({
   // Stereo Mode
   return (
     <div
+      ref={containerRef}
+      onPointerMoveCapture={handleMouseActivity}
       className={cn('viewer-container h-full w-full flex items-center justify-center bg-black', alignMode && 'cursor-move touch-none')}
       onTouchStartCapture={markTouch}
       onTouchEndCapture={markTouch}
@@ -910,8 +964,7 @@ export default function SmartViewer({
       {shareButton}
       {alignmentButtons}
       {estimatorChips}
-      {prevButton}
-      {nextButton}
+      {navButtons}
       {alignToolbar}
       {!alignMode && Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
