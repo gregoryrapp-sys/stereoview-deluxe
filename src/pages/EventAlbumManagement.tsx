@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Check,
   Cloud,
@@ -51,8 +51,18 @@ import DropboxSyncDialog from '@/components/DropboxSyncDialog';
 import AutoAlignDialog from '@/components/AutoAlignDialog';
 import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
 import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
+import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges, type ProfileSaved } from '@/lib/unsavedChanges';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
@@ -108,9 +118,12 @@ export default function EventAlbumManagement() {
   const { eventId, albumId } = useParams();
   const { isAuthenticated, isAdmin, isLoading: isAuthLoading, profile, user, refreshProfile } = useAuth();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [galleryData, setGalleryData] = useState<GalleryData>({ events: [], albums: [], photos: [] });
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  /** Where the owner was heading when the unsaved-changes prompt opened. */
+  const [pendingLeave, setPendingLeave] = useState<string | null>(null);
   const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
   const [isAlbumDialogOpen, setIsAlbumDialogOpen] = useState(false);
   const [coverPicker, setCoverPicker] = useState<'profile' | EventRecord | AlbumRecord | null>(null);
@@ -722,8 +735,8 @@ export default function EventAlbumManagement() {
     return <Navigate to="/" replace />;
   }
 
-  const saveProfile = async () => {
-    if (!profile) return;
+  const saveProfile = async (): Promise<boolean> => {
+    if (!profile) return false;
     setIsSaving(true);
     try {
       await updateProfilePresentation({
@@ -741,12 +754,14 @@ export default function EventAlbumManagement() {
       // if RLS discarded the write, so reaching here means the row really changed.
       await refreshProfile();
       toast({ title: 'Photographer page saved' });
+      return true;
     } catch (error) {
       toast({
         title: 'Could not save photographer page',
         description: error instanceof Error ? error.message : 'Save failed',
         variant: 'destructive',
       });
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -781,8 +796,8 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const saveEvent = async () => {
-    if (!selectedEvent) return;
+  const saveEvent = async (): Promise<boolean> => {
+    if (!selectedEvent) return false;
     setIsSaving(true);
     try {
       await updateEvent({
@@ -821,12 +836,14 @@ export default function EventAlbumManagement() {
         );
         return { ...prevData, events: newEvents };
       });
+      return true;
     } catch (error) {
       toast({
         title: 'Could not save event',
         description: error instanceof Error ? error.message : 'Save failed',
         variant: 'destructive',
       });
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -911,8 +928,8 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const saveAlbum = async () => {
-    if (!selectedAlbum) return;
+  const saveAlbum = async (): Promise<boolean> => {
+    if (!selectedAlbum) return false;
     setIsSaving(true);
     try {
       await updateAlbum({
@@ -954,12 +971,14 @@ export default function EventAlbumManagement() {
         );
         return { ...prevData, albums: newAlbums };
       });
+      return true;
     } catch (error) {
       toast({
         title: 'Could not save album',
         description: error instanceof Error ? error.message : 'Save failed',
         variant: 'destructive',
       });
+      return false;
     } finally {
       setIsSaving(false);
     }
@@ -1020,6 +1039,57 @@ export default function EventAlbumManagement() {
       ? buildPublicPath(savedProfileSlug, selectedEvent.slug)
       : buildPublicPath(savedProfileSlug);
 
+  // Unsaved edits on the level being managed: the form compared with the
+  // saved record. Uploads, deletes and moves save immediately and are not
+  // edits here; only the Save button's fields are.
+  const hasUnsavedChanges =
+    albumId && selectedAlbum
+      ? albumHasUnsavedChanges(
+          {
+            title: albumTitle, description: albumDescription, slug: albumSlug,
+            coverPhotoId: albumCoverPhotoId, dropboxCoverImageName: albumDropboxCoverImageName, dropboxUrl: albumDropboxUrl,
+            isPublic: albumIsPublic, isListed: albumIsListed, lrSwappedDefault: albumLrSwappedDefault, passwordDirty: albumPasswordDirty,
+          },
+          selectedAlbum,
+        )
+      : eventId && selectedEvent
+        ? eventHasUnsavedChanges(
+            {
+              title: eventTitle, description: eventDescription, slug: eventSlug,
+              coverPhotoId: eventCoverPhotoId, dropboxCoverAlbumId: eventDropboxCoverAlbumId, dropboxCoverImageName: eventDropboxCoverImageName,
+              isPublic: eventIsPublic, isListed: eventIsListed, passwordDirty: eventPasswordDirty,
+            },
+            selectedEvent,
+          )
+        : !eventId && !albumId && profile
+          ? profileHasUnsavedChanges(
+              {
+                displayName: profileDisplayName, slug: profileSlug,
+                coverPhotoId: profileCoverPhotoId, dropboxCoverAlbumId: profileDropboxCoverAlbumId, dropboxCoverImageName: profileDropboxCoverImageName,
+                isPublic: profileIsPublic, isListed: profileIsListed, passwordDirty: profilePasswordDirty,
+              },
+              profile as ProfileSaved,
+            )
+          : false;
+
+  // Up / Close / My Gallery / Public Site: with unsaved edits, ask first.
+  const guardLeave = (to: string) => (event: React.MouseEvent) => {
+    if (!hasUnsavedChanges) return;
+    event.preventDefault();
+    setPendingLeave(to);
+  };
+  const saveCurrentLevel = (): Promise<boolean> =>
+    albumId ? saveAlbum() : eventId ? saveEvent() : saveProfile();
+  const canSaveCurrentLevel = albumId
+    ? !!albumTitle && !!albumSlug
+    : eventId
+      ? !!eventTitle && !!eventSlug && eventPrivacyValid
+      : !!profileSlug && profilePrivacyValid;
+  const leaveTo = (to: string) => {
+    setPendingLeave(null);
+    navigate(to);
+  };
+
   const renderHeader = (title: string, subtitle: string, backTo?: string) => (
     <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
       <div>
@@ -1052,20 +1122,20 @@ export default function EventAlbumManagement() {
       <div className="flex flex-wrap gap-2">
         {backTo && (
           <Button asChild variant="secondary" className="gap-2">
-            <Link to={backTo}>
+            <Link to={backTo} onClick={guardLeave(backTo)}>
               <ArrowLeft className="h-4 w-4" />
               Up
             </Link>
           </Button>
         )}
         <Button asChild variant="secondary" className="gap-2">
-          <Link to="/gallery">
+          <Link to="/gallery" onClick={guardLeave('/gallery')}>
             <Images className="h-4 w-4" />
             Private Gallery
           </Link>
         </Button>
         <Button asChild variant="secondary" className="gap-2">
-          <Link to="/">
+          <Link to="/" onClick={guardLeave('/')}>
             <User className="h-4 w-4" />
             Public Site
           </Link>
@@ -1075,7 +1145,7 @@ export default function EventAlbumManagement() {
           Refresh
         </Button>
         <Button asChild className="gap-2" title="Leave management and open this page as visitors see it">
-          <Link to={closeTo}>
+          <Link to={closeTo} onClick={guardLeave(closeTo)}>
             <X className="h-4 w-4" />
             Close
           </Link>
@@ -1708,6 +1778,33 @@ export default function EventAlbumManagement() {
           onAligned={loadData}
         />
       )}
+
+      <AlertDialog open={pendingLeave !== null} onOpenChange={(open) => !open && setPendingLeave(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save your changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {albumId ? 'This album' : eventId ? 'This event' : 'Your photographer page'} has changes that are not saved yet.
+              {!canSaveCurrentLevel && ' They cannot be saved as they are: fill in the missing details first, or leave without saving.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2 sm:gap-0">
+            <AlertDialogCancel disabled={isSaving}>Stay</AlertDialogCancel>
+            <Button variant="outline" disabled={isSaving} onClick={() => pendingLeave && leaveTo(pendingLeave)}>
+              Leave without saving
+            </Button>
+            <Button
+              disabled={isSaving || !canSaveCurrentLevel}
+              onClick={async () => {
+                const to = pendingLeave;
+                if (to && (await saveCurrentLevel())) leaveTo(to);
+              }}
+            >
+              {isSaving ? 'Saving...' : 'Save and leave'}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={isMovePhotosDialogOpen} onOpenChange={setIsMovePhotosDialogOpen}>
         <DialogContent>
