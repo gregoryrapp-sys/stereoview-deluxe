@@ -1,17 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import {
-  ArrowDown,
-  ArrowLeft,
-  ArrowLeftRight,
-  ArrowRight,
-  ArrowUp,
-  ChevronLeft,
-  ChevronRight,
-  Crosshair,
-  Loader2,
-  X,
-  Share2,
-} from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, X, Share2 } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { isViewerControl, useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
@@ -23,19 +11,8 @@ import ViewerSharePanel from '@/components/ViewerSharePanel';
 import { toast } from '@/hooks/use-toast';
 import { type EyeTier, loadStereoSourceImage, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
-import {
-  alignmentsEqual,
-  MANUAL_ALIGN_VERSION,
-  type StereoAlignment,
-  toggleSwapped,
-} from '@/lib/stereoAlign/types';
-import type { AlignmentEstimate } from '@/lib/stereoAlign/estimator';
-import {
-  applyEstimate,
-  AUTO_PERSIST_MIN_CONFIDENCE,
-  estimateImageAlignment,
-  STORE_MIN_CONFIDENCE,
-} from '@/lib/stereoAlign/estimateForImage';
+import type { StereoAlignment } from '@/lib/stereoAlign/types';
+import { applyEstimate, AUTO_PERSIST_MIN_CONFIDENCE, estimateImageAlignment } from '@/lib/stereoAlign/estimateForImage';
 import { type GalleryPhoto, updatePhotoAlignment } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
 
@@ -51,10 +28,10 @@ interface SmartViewerProps {
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
-  /** Owner or admin: enables Align mode, whose result is saved to the photo row. */
+  /** Owner or admin: an unmeasured photo is auto-aligned on first view and saved to its row. */
   canEdit?: boolean;
   /** Called after an alignment is saved so the page can patch its photo list in place. */
-  onAlignmentSaved?: (photoId: string, alignment: StereoAlignment) => void;
+  onAlignmentSaved?: (photoId: string, alignment: StereoAlignment, version: number) => void;
   /**
    * Address that opens this photo for someone else. With it, Share offers
    * "photo" or "link" (URL + QR); without it (private pages), Share sends the
@@ -80,9 +57,6 @@ const FADE_MS = 200;
 /** Loads shorter than this show no spinner at all. */
 const SPINNER_DELAY_MS = 300;
 
-const NUDGE_STEP = 1;
-const NUDGE_STEP_LARGE = 5;
-
 export default function SmartViewer({
   photo,
   photos,
@@ -106,42 +80,17 @@ export default function SmartViewer({
   const [interaction, setInteraction] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-  // --- Alignment state -------------------------------------------------------
-  //
-  // Three layers, in order of precedence:
-  //   draft      uncommitted dx/dy nudges in Align mode, previewed with CSS
-  //   override   the owner's uncommitted flip in Align mode (re-splits)
-  //   stored     what the photo row carries, resolved against the album default
-  //
-  // Visitors have no alignment controls at all: left/right order and offsets
-  // are decided when a photo is measured, not per viewer - the viewing
-  // experience stays simple. Only the committed layer (override ?? stored) is
-  // fed to the split, so a nudge never re-encodes; the draft delta is rendered
-  // as a translate on the right stage and becomes real pixels only on Save.
+  // --- Alignment ---------------------------------------------------------------
+  // There are no alignment controls in the viewer: left/right order and
+  // offsets are decided when a photo is measured (at upload, in background
+  // preparation, or here on first view for the owner), not by hand.
   const storedAlignment = resolveAlignment(photo);
-  const [ownerOverride, setOwnerOverride] = useState<StereoAlignment | null>(null);
-  const committedAlignment = ownerOverride ?? storedAlignment;
-  const [alignMode, setAlignMode] = useState(false);
-  const [draft, setDraft] = useState<{ dx: number; dy: number } | null>(null);
-  const [isSavingAlignment, setIsSavingAlignment] = useState(false);
 
-  // Estimator state: the last measurement for this photo, a transient note
-  // ("Auto-aligned ..."), and whether the swap suggestion was waved away.
-  const [estimate, setEstimate] = useState<AlignmentEstimate | null>(null);
-  const [isEstimating, setIsEstimating] = useState(false);
+  // A transient note saying what the lazy estimator did ("Auto-aligned ...").
   const [autoNote, setAutoNote] = useState<string | null>(null);
   const lazyAttemptedRef = useRef<Set<string>>(new Set());
   const folderUrl = isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
   const galleryPhoto = photo as GalleryPhoto;
-
-  const effectiveAlignment = useMemo<StereoAlignment>(
-    () => ({
-      ...committedAlignment,
-      dx: draft?.dx ?? committedAlignment.dx,
-      dy: draft?.dy ?? committedAlignment.dy,
-    }),
-    [committedAlignment, draft],
-  );
 
   // --- Common Hooks ---
   // 2D mode renders the left eye only, so the right one is never worth decoding
@@ -185,13 +134,12 @@ export default function SmartViewer({
   }, []);
 
   // Controls fade out 3 s after the last interaction and come back with a tap
-  // (or, with a mouse, any movement). Align mode keeps them up while the
-  // owner works.
+  // (or, with a mouse, any movement).
   useEffect(() => {
-    if (!showControls || alignMode || shareOpen) return;
+    if (!showControls || shareOpen) return;
     const timer = window.setTimeout(() => setShowControls(false), CONTROLS_AUTO_HIDE_MS);
     return () => window.clearTimeout(timer);
-  }, [showControls, alignMode, shareOpen, interaction]);
+  }, [showControls, shareOpen, interaction]);
 
   const handleMouseActivity = useCallback((event: React.PointerEvent) => {
     if (event.pointerType !== 'mouse') return;
@@ -199,10 +147,9 @@ export default function SmartViewer({
     setInteraction((n) => n + 1);
   }, []);
   const toggleControlsFromTouch = useCallback(() => {
-    if (alignMode) return;
     lastTouchTapAtRef.current = Date.now();
     setShowControls((current) => !current);
-  }, [alignMode]);
+  }, []);
 
   // --- 2D Viewer Logic ---
   const touchStartX_2d = useRef(0);
@@ -314,9 +261,9 @@ export default function SmartViewer({
   // Pinched past the fit tier's headroom: ask for eyes at (up to) source
   // resolution. The fit tier stays on screen until the sharper one arrives.
   const tier: EyeTier = mode === 'stereo' && scale >= ZOOM_TIER_MIN_SCALE ? 'zoom' : 'fit';
-  const { leftUrl, rightUrl, isLoading, error, dimensions, sourceScale } = useProcessedImage(photo, album, {
+  const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo, album, {
     eyes,
-    alignment: committedAlignment,
+    alignment: storedAlignment,
     tier,
   });
 
@@ -327,12 +274,6 @@ export default function SmartViewer({
     // had them pop back up on every photo, which is exactly when they are in
     // the way.
     if (Date.now() - lastSwipeAtRef.current > 500) setShowControls(true);
-    // A new photo means a new alignment; leave Align mode rather than carry a
-    // draft across photos.
-    setAlignMode(false);
-    setDraft(null);
-    setOwnerOverride(null);
-    setEstimate(null);
     setAutoNote(null);
   }, [photo.id, resetTransform]);
 
@@ -343,7 +284,6 @@ export default function SmartViewer({
   }, [autoNote]);
 
   const handleContainerClick = () => {
-    if (alignMode) return;
     // Any recent touch: this click is the browser's echo of it. The touch path
     // already handled (or deliberately ignored) the gesture. Keyed on the
     // touch itself, not on when the tap fired - the tap is deferred 300 ms
@@ -358,121 +298,12 @@ export default function SmartViewer({
     setShowControls((current) => !current);
   };
 
-  // --- Alignment actions -----------------------------------------------------
-  /** Owner, Align mode only: exchange the halves. Persisted on Save. */
-  const flipEyes = useCallback(() => {
-    // Per the convention, exchanging the halves negates the offsets. This is a
-    // committed change (it re-splits) rather than a CSS preview, because the
-    // draft's frame of reference would flip underneath it.
-    setDraft(null);
-    setOwnerOverride(toggleSwapped(effectiveAlignment));
-  }, [effectiveAlignment]);
-
-  const nudge = useCallback(
-    (dx: number, dy: number) => {
-      setDraft((current) => ({
-        dx: (current?.dx ?? committedAlignment.dx) + dx,
-        dy: (current?.dy ?? committedAlignment.dy) + dy,
-      }));
-    },
-    [committedAlignment.dx, committedAlignment.dy],
-  );
-
-  const resetDraft = useCallback(() => setDraft({ dx: 0, dy: 0 }), []);
-
-  const exitAlignMode = useCallback(() => {
-    setAlignMode(false);
-    setDraft(null);
-  }, []);
-
-  const saveAlignment = useCallback(async () => {
-    if (!canEdit || isSavingAlignment) return;
-    const next = effectiveAlignment;
-    if (alignmentsEqual(next, storedAlignment)) {
-      exitAlignMode();
-      return;
-    }
-    setIsSavingAlignment(true);
-    try {
-      await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: MANUAL_ALIGN_VERSION });
-      // The stored layer now matches; drop the session override so a later
-      // parent patch is the single source of truth.
-      setOwnerOverride(null);
-      onAlignmentSaved?.(photo.id, next);
-      toast({ title: 'Alignment saved' });
-      exitAlignMode();
-    } catch (err) {
-      toast({
-        title: 'Could not save alignment',
-        description: err instanceof Error ? err.message : 'Save failed',
-        variant: 'destructive',
-      });
-    } finally {
-      setIsSavingAlignment(false);
-    }
-  }, [canEdit, isSavingAlignment, effectiveAlignment, storedAlignment, photo.id, onAlignmentSaved, exitAlignMode]);
-
-  // --- Estimator -------------------------------------------------------------
-  const runEstimate = useCallback(
-    async (swapped: boolean): Promise<AlignmentEstimate | null> => {
-      setIsEstimating(true);
-      try {
-        const img = await loadStereoSourceImage(galleryPhoto, folderUrl);
-        const est = await estimateImageAlignment(img, { swapped });
-        setEstimate(est);
-        return est;
-      } catch (err) {
-        toast({
-          title: 'Could not measure alignment',
-          description: err instanceof Error ? err.message : 'Estimator failed',
-          variant: 'destructive',
-        });
-        return null;
-      } finally {
-        setIsEstimating(false);
-      }
-    },
-    [galleryPhoto, folderUrl],
-  );
-
-  /** The Auto button: measure, then stage the result as a draft for the owner to judge. */
-  const autoAlign = useCallback(async () => {
-    const est = await runEstimate(committedAlignment.swapped);
-    if (!est) return;
-    if (est.confidence < STORE_MIN_CONFIDENCE) {
-      toast({
-        title: 'Not confident enough to align this one',
-        description: 'Not enough matching detail between the eyes. Adjust by hand instead.',
-      });
-      return;
-    }
-    // The verdict may flip the halves; a flip is committed (re-split) and the
-    // offsets are already expressed in the new order.
-    const next = applyEstimate(est, committedAlignment.swapped);
-    if (next.swapped !== committedAlignment.swapped) {
-      setDraft(null);
-      setOwnerOverride(next);
-      toast({ title: 'Left and right were exchanged', description: 'The photo was stored right-eye first. Save to keep it.' });
-    } else {
-      setDraft({ dx: next.dx, dy: next.dy });
-    }
-    if (est.rotationSuspected) {
-      toast({
-        title: 'Rotation detected',
-        description: 'The eyes differ by a small rotation, which a vertical shift cannot fully fix.',
-      });
-    }
-  }, [runEstimate, committedAlignment.swapped]);
-
   // Lazy path for the owner: a photo with nothing stored is measured once when
   // viewed and, when the estimator is confident, saved silently - so the album
-  // aligns itself as the photographer looks through it. Swap is never applied
-  // here; only suggested. Skipped while a session swap is active, because the
-  // displayed order would not be the stored one.
+  // aligns itself as the photographer looks through it.
   useEffect(() => {
-    if (!canEdit || folderUrl || alignMode) return;
+    if (!canEdit || folderUrl) return;
     if (galleryPhoto.alignVersion !== null || !leftUrl) return;
-    if (ownerOverride) return;
     if (lazyAttemptedRef.current.has(photo.id)) return;
     lazyAttemptedRef.current.add(photo.id);
 
@@ -482,12 +313,11 @@ export default function SmartViewer({
         const img = await loadStereoSourceImage(galleryPhoto, folderUrl);
         const est = await estimateImageAlignment(img, { swapped: storedAlignment.swapped });
         if (cancelled) return;
-        setEstimate(est);
         if (est.confidence < AUTO_PERSIST_MIN_CONFIDENCE) return;
         const next = applyEstimate(est, storedAlignment.swapped);
         await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: est.version, confidence: est.confidence });
         if (cancelled) return;
-        onAlignmentSaved?.(photo.id, next);
+        onAlignmentSaved?.(photo.id, next, est.version);
         const flipped = next.swapped !== storedAlignment.swapped;
         setAutoNote(
           flipped
@@ -497,34 +327,18 @@ export default function SmartViewer({
               : `Auto-aligned (vertical ${next.dy > 0 ? '+' : ''}${next.dy} px)`,
         );
       } catch {
-        // Best effort; the owner can always press Auto.
+        // Best effort; Re-align in Management measures it again.
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [canEdit, folderUrl, alignMode, galleryPhoto, leftUrl, ownerOverride, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
+  }, [canEdit, folderUrl, galleryPhoto, leftUrl, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
 
   // Keyboard navigation. Desktop fullscreen is landscape, so it renders the
-  // stereo view, where there is no other pointer affordance for paging. In
-  // Align mode the arrows nudge instead, and Escape leaves the mode before it
-  // would ever close the viewer.
+  // stereo view, where there is no other pointer affordance for paging.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (alignMode) {
-        const step = event.shiftKey ? NUDGE_STEP_LARGE : NUDGE_STEP;
-        if (event.key === 'ArrowLeft') nudge(-step, 0);
-        else if (event.key === 'ArrowRight') nudge(step, 0);
-        else if (event.key === 'ArrowUp') nudge(0, -step);
-        else if (event.key === 'ArrowDown') nudge(0, step);
-        else if (event.key === 's' || event.key === 'S') flipEyes();
-        else if (event.key === 'Enter') void saveAlignment();
-        else if (event.key === 'Escape') exitAlignMode();
-        else return;
-        event.preventDefault();
-        return;
-      }
-
       if (event.key === 'ArrowLeft') {
         if (hasPrevious) onPrevious();
       } else if (event.key === 'ArrowRight') {
@@ -541,7 +355,7 @@ export default function SmartViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [alignMode, nudge, flipEyes, saveAlignment, exitAlignMode, hasPrevious, hasNext, onPrevious, onNext, onClose, shareOpen]);
+  }, [hasPrevious, hasNext, onPrevious, onNext, onClose, shareOpen]);
 
   // One stage for both the placeholder and the sharp eyes. Until the split
   // result exists, the eye's shape comes from the grid thumbnail (half its
@@ -553,7 +367,6 @@ export default function SmartViewer({
   const eyeSource = dimensions ?? (thumbSize ? eyeSizeFromThumb(thumbSize.width, thumbSize.height) : null);
   const viewport = eyeViewport(mode, containerSize.width, containerSize.height);
   const stage = eyeSource ? fitContain(eyeSource.width, eyeSource.height, viewport.width, viewport.height) : null;
-  const containedImageScale = stage?.scale ?? 1;
 
   // Reveal: the sharp eyes mount at opacity 0 over the placeholder and fade in
   // once BOTH have decoded (a pair appearing one eye at a time is unpleasant
@@ -603,40 +416,6 @@ export default function SmartViewer({
     ? `translate3d(${translateX}px, ${translateY}px, 0) scale(${scale})`
     : `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 
-  // CSS px per SOURCE px of one eye, at the current zoom: how far the right
-  // stage must move on screen for a one-pixel nudge in the source.
-  const cssPerSourcePx = containedImageScale * (sourceScale ?? 1) * scale;
-  // Sampling the right eye +dx further right moves its content LEFT on screen.
-  const previewDx = draft ? -(draft.dx - committedAlignment.dx) * cssPerSourcePx : 0;
-  const previewDy = draft ? -(draft.dy - committedAlignment.dy) * cssPerSourcePx : 0;
-  const rightTransform = draft ? `${imageTransform} translate(${previewDx}px, ${previewDy}px)` : imageTransform;
-
-  // --- Align-mode drag -------------------------------------------------------
-  // One finger (or the mouse) drags the right eye over the left. Gestures are
-  // off in this mode, so zoom first, then align.
-  const dragRef = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null);
-
-  const handleAlignPointerDown = (event: React.PointerEvent) => {
-    if (!alignMode) return;
-    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-    dragRef.current = { x: event.clientX, y: event.clientY, dx: effectiveAlignment.dx, dy: effectiveAlignment.dy };
-  };
-
-  const handleAlignPointerMove = (event: React.PointerEvent) => {
-    const start = dragRef.current;
-    if (!alignMode || !start || cssPerSourcePx <= 0) return;
-    // Dragging the right eye to the right on screen means its content should
-    // come from further LEFT in the source, i.e. dx decreases.
-    setDraft({
-      dx: Math.round(start.dx - (event.clientX - start.x) / cssPerSourcePx),
-      dy: Math.round(start.dy - (event.clientY - start.y) / cssPerSourcePx),
-    });
-  };
-
-  const handleAlignPointerUp = () => {
-    dragRef.current = null;
-  };
-
   const handleShare = useCallback(async () => {
     if (!leftUrl) return;
     try {
@@ -679,10 +458,9 @@ export default function SmartViewer({
   }, [leftUrl]);
 
   // --- Common UI Elements ---
-  // Previous, Next, Close and Share (and the owner's Align button) show and
-  // hide together: one tap on the photo flips them. Taps that start on a
+  // Previous, Next, Close and Share show and hide together: one tap on the photo flips them. Taps that start on a
   // control, pinches, pans, swipes and double taps never flip them.
-  const controlVisibility = showControls || alignMode ? 'opacity-100' : 'pointer-events-none opacity-0';
+  const controlVisibility = showControls ? 'opacity-100' : 'pointer-events-none opacity-0';
   const roundButton = 'rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200';
   // Previous / Next: large, vertically centred on the screen edges, frosted
   // glass (a strong backdrop blur with a light tint and a hairline edge)
@@ -732,7 +510,7 @@ export default function SmartViewer({
   // is exact because the stage has the half-thumbnail's aspect.
   const renderEye = (eye: 'left' | 'right', url: string | null, transform: string, willChange: string) => {
     if (!stage) return null;
-    const rightHalf = eye === 'right' ? !committedAlignment.swapped : committedAlignment.swapped;
+    const rightHalf = eye === 'right' ? !storedAlignment.swapped : storedAlignment.swapped;
     return (
       <div
         className="viewer-stage relative overflow-hidden"
@@ -791,7 +569,7 @@ export default function SmartViewer({
     </div>
   );
 
-  const navButtons = !alignMode && (hasPrevious || hasNext) && (
+  const navButtons = (hasPrevious || hasNext) && (
     <div
       data-viewer-control
       className={cn(
@@ -818,102 +596,7 @@ export default function SmartViewer({
     </div>
   );
 
-  // Top-centre: Align for the owner only. Visitors get no alignment controls.
-  const alignmentButtons = canEdit && (
-    <div data-viewer-control className={cn('absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-2 transition-opacity duration-200', controlVisibility)}>
-      {!alignMode && (
-        <button
-          onClick={(e) => { e.stopPropagation(); setAlignMode(true); setDraft(null); }}
-          className="flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-2 text-xs font-medium text-white backdrop-blur-sm"
-          title="Adjust vertical / horizontal alignment"
-        >
-          <Crosshair className="h-4 w-4" />
-          Align
-        </button>
-      )}
-    </div>
-  );
-
-  const nudgeButton = (label: string, icon: React.ReactNode, dx: number, dy: number) => (
-    <button
-      type="button"
-      onClick={(e) => { e.stopPropagation(); nudge(e.shiftKey ? dx * NUDGE_STEP_LARGE : dx, e.shiftKey ? dy * NUDGE_STEP_LARGE : dy); }}
-      className="rounded-md bg-white/15 p-2 text-white hover:bg-white/25"
-      aria-label={label}
-      title={`${label} (Shift: x${NUDGE_STEP_LARGE})`}
-    >
-      {icon}
-    </button>
-  );
-
-  const alignToolbar = alignMode && (
-    <div
-      data-viewer-control
-      className="absolute inset-x-4 bottom-4 flex flex-wrap items-center justify-center gap-3 rounded-2xl bg-black/70 p-3 text-white backdrop-blur-sm [padding-bottom:calc(0.75rem+env(safe-area-inset-bottom))]"
-      onClick={(e) => e.stopPropagation()}
-    >
-      <div className="flex items-center gap-1">
-        <span className="mr-1 text-xs text-white/70">Vertical</span>
-        {nudgeButton('Move right eye up', <ArrowUp className="h-4 w-4" />, 0, -NUDGE_STEP)}
-        {nudgeButton('Move right eye down', <ArrowDown className="h-4 w-4" />, 0, NUDGE_STEP)}
-        <span className="w-12 text-center font-mono text-xs">{effectiveAlignment.dy}px</span>
-      </div>
-      <div className="flex items-center gap-1">
-        <span className="mr-1 text-xs text-white/70">Convergence</span>
-        {nudgeButton('Shift right eye left', <ArrowLeft className="h-4 w-4" />, -NUDGE_STEP, 0)}
-        {nudgeButton('Shift right eye right', <ArrowRight className="h-4 w-4" />, NUDGE_STEP, 0)}
-        <span className="w-12 text-center font-mono text-xs">{effectiveAlignment.dx}px</span>
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void autoAlign()}
-          disabled={isEstimating}
-          className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25 disabled:opacity-60"
-          title="Measure the vertical offset automatically"
-        >
-          {isEstimating ? 'Measuring...' : 'Auto'}
-        </button>
-        <button
-          type="button"
-          onClick={flipEyes}
-          className={cn('flex items-center gap-1 rounded-md px-3 py-2 text-xs hover:bg-white/25', effectiveAlignment.swapped ? 'bg-sky-500/60' : 'bg-white/15')}
-          title="Exchange left and right eyes (S)"
-        >
-          <ArrowLeftRight className="h-3.5 w-3.5" />
-          Flip L/R
-        </button>
-        <button type="button" onClick={resetDraft} className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25">
-          Reset
-        </button>
-        <button type="button" onClick={exitAlignMode} className="rounded-md bg-white/15 px-3 py-2 text-xs hover:bg-white/25">
-          Cancel
-        </button>
-        <button
-          type="button"
-          onClick={() => void saveAlignment()}
-          disabled={isSavingAlignment}
-          className="rounded-md bg-sky-500/80 px-3 py-2 text-xs font-medium hover:bg-sky-500 disabled:opacity-60"
-        >
-          {isSavingAlignment ? 'Saving...' : 'Save'}
-        </button>
-      </div>
-      <p className="basis-full text-center text-[11px] text-white/60">
-        Drag to move the right eye over the left. Zoom in before aligning; arrow keys nudge, Shift for x5, Enter saves.
-        {estimate && (
-          <span className="block">
-            Measured: {Math.round(estimate.confidence * 100)}% confidence
-            {estimate.alignment.rotation !== undefined && ` · rotation ${estimate.alignment.rotation.toFixed(2)}° corrected`}
-            {estimate.alignment.scale !== undefined && ` · scale ${(estimate.alignment.scale * 100).toFixed(1)}%`}
-            {estimate.rotationSuspected && estimate.alignment.rotation === undefined && estimate.alignment.scale === undefined && ' · uneven vertical offset the model cannot fully fix'}
-            {estimate.swapSuggested && ' · the eyes looked exchanged'}
-          </span>
-        )}
-      </p>
-    </div>
-  );
-
-  // Transient notes: what the lazy estimator did, and the swap suggestion.
+  // Transient note: what the lazy estimator did.
   const estimatorChips = (
     <div className="pointer-events-none absolute left-1/2 top-16 flex -translate-x-1/2 flex-col items-center gap-2">
       {autoNote && (
@@ -956,17 +639,13 @@ export default function SmartViewer({
     <div
       ref={containerRef}
       onPointerMoveCapture={handleMouseActivity}
-      className={cn('viewer-container h-full w-full flex items-center justify-center bg-black', alignMode && 'cursor-move touch-none')}
+      className="viewer-container h-full w-full flex items-center justify-center bg-black"
       onTouchStartCapture={markTouch}
       onTouchEndCapture={markTouch}
-      onTouchStart={alignMode ? undefined : handleTouchStart}
-      onTouchMove={alignMode ? undefined : handleTouchMove}
-      onTouchEnd={alignMode ? undefined : handleTouchEnd}
-      onTouchCancel={alignMode ? undefined : handleTouchCancel}
-      onPointerDown={alignMode ? handleAlignPointerDown : undefined}
-      onPointerMove={alignMode ? handleAlignPointerMove : undefined}
-      onPointerUp={alignMode ? handleAlignPointerUp : undefined}
-      onPointerCancel={alignMode ? handleAlignPointerUp : undefined}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchCancel}
       onClick={handleContainerClick}
     >
       <div className="flex h-full w-full">
@@ -974,9 +653,7 @@ export default function SmartViewer({
           {renderEye('left', leftUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
         </div>
         <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-          {/* The draft delta lives only here: the right eye moves on screen so
-              the owner can judge the nudge without re-encoding anything. */}
-          {renderEye('right', rightUrl, rightTransform, isTransforming || !!draft ? 'transform' : 'auto')}
+          {renderEye('right', rightUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
         </div>
       </div>
       {loadingIndicator}
@@ -984,11 +661,9 @@ export default function SmartViewer({
       {closeButton}
       {shareButton}
       {sharePanel}
-      {alignmentButtons}
       {estimatorChips}
       {navButtons}
-      {alignToolbar}
-      {!alignMode && Math.abs(scale - 1) > 0.01 && (
+      {Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
           {Math.round(scale * 100)}%
         </div>

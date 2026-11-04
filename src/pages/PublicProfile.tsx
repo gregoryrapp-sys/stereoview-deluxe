@@ -737,12 +737,12 @@ export default function PublicProfile() {
             // profile. Live Dropbox photos have no row to write an alignment to.
             canEdit={ownerView && !previewAsVisitor && !isLiveDropboxAlbum(selectedAlbum)}
             linkForPhoto={isAlbumPage ? linkForPhoto : undefined}
-            onAlignmentSaved={(photoId, alignment) =>
+            onAlignmentSaved={(photoId, alignment, version) =>
               setData((current) =>
                 current
                   ? {
                       ...current,
-                      photos: current.photos.map((p) => (p.id === photoId ? { ...p, alignment, alignVersion: 0 } : p)),
+                      photos: current.photos.map((p) => (p.id === photoId ? { ...p, alignment, alignVersion: version } : p)),
                     }
                   : current,
               )
