@@ -11,10 +11,11 @@ const id = (value: string | null | undefined) => value ?? null;
 export interface AlbumForm {
   title: string; description: string; slug: string;
   coverPhotoId: string | null; dropboxCoverImageName: string | null; dropboxUrl: string;
+  sourceType: string;
   isPublic: boolean; isListed: boolean; lrSwappedDefault: boolean; passwordDirty: boolean;
 }
 export interface AlbumSaved {
-  title: string; description?: string | null; slug: string;
+  title: string; description?: string | null; slug: string; source_type?: string | null;
   cover_photo_id?: string | null; dropbox_cover_image_name?: string | null; dropbox_folder_url?: string | null;
   is_public?: boolean | null; is_listed?: boolean | null; lr_swapped_default?: boolean | null;
 }
@@ -22,7 +23,7 @@ export function albumHasUnsavedChanges(f: AlbumForm, a: AlbumSaved): boolean {
   return (
     f.title !== a.title || f.description !== text(a.description) || f.slug !== a.slug ||
     f.coverPhotoId !== id(a.cover_photo_id) || f.dropboxCoverImageName !== id(a.dropbox_cover_image_name) ||
-    f.dropboxUrl !== text(a.dropbox_folder_url) || f.isPublic !== (a.is_public ?? true) ||
+    f.dropboxUrl !== text(a.dropbox_folder_url) || f.sourceType !== (a.source_type ?? 'upload') || f.isPublic !== (a.is_public ?? true) ||
     f.isListed !== (a.is_listed ?? true) || f.lrSwappedDefault !== (a.lr_swapped_default ?? false) || f.passwordDirty
   );
 }
