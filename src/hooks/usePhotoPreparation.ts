@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { makeSbsThumbnail } from '@/lib/makeThumbnail';
-import { ALIGN_VERSION } from '@/lib/stereoAlign/estimator';
-import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
-import type { StereoAlignment } from '@/lib/stereoAlign/types';
 import {
   finishPhotoPreparation,
   type GalleryPhoto,
@@ -14,16 +11,13 @@ import type { AlbumRecord } from '@/types/database';
 /**
  * Prepares photos in the background while the owner is on the management page.
  *
- * "Prepared" means: has a grid thumbnail, and has been measured for alignment
- * and left/right order. Both used to be buttons the owner had to remember;
- * 136 photos sat unprepared for days because nobody pressed them. Now it just
- * happens - a couple at a time, quietly, resuming where it left off.
+ * "Prepared" means: has a grid thumbnail. This used to be a button the owner
+ * had to remember; 136 photos sat unprepared for days because nobody pressed
+ * it. Now it just happens - a couple at a time, quietly, resuming where it
+ * left off.
  *
- * Each photo costs one download of its original (~1.1 MB). The thumbnail and
- * the measurement are made from the same bytes, then written in one row
- * update, so a photo is never half-prepared for longer than one request.
- * Pauses while the tab is hidden; failures are counted and not retried in the
- * same session.
+ * Each photo costs one download of its original (~1.1 MB). Pauses while the
+ * tab is hidden; failures are counted and not retried in the same session.
  */
 
 const CONCURRENCY = 2;
@@ -43,23 +37,12 @@ interface Options {
   onPrepared: (photoId: string, patch: Partial<GalleryPhoto>) => void;
 }
 
-/**
- * Never measured, or measured by an older estimator. Manual alignments
- * (version 0) are the owner's and are kept. The queue and the worker both use
- * this one rule: when they disagreed, re-measure candidates were queued, their
- * originals downloaded, and nothing measured - on every page load.
- */
-export function needsAlignmentMeasure(photo: GalleryPhoto): boolean {
-  const version = photo.alignVersion;
-  if (version === null || version === undefined) return true;
-  return version >= 1 && version < ALIGN_VERSION;
-}
-
+/** The queue and the worker both use this one rule, so they never disagree. */
 export function needsPreparation(photo: GalleryPhoto, album: AlbumRecord | undefined): boolean {
   if (!photo.storagePath || !album) return false;
   // Live Dropbox photos have no stored original to work from.
   if (album.source_type === 'dropbox' && album.import_state !== 'imported') return false;
-  return !photo.thumbPath || needsAlignmentMeasure(photo);
+  return !photo.thumbPath;
 }
 
 /** Lets the browser paint and handle input between photos. */
@@ -159,47 +142,9 @@ export function usePhotoPreparation(
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           const blob = await response.blob();
 
-          // Thumbnail (if missing) and measurement (if due), from one download.
-          const thumbPath = photo.thumbPath
-            ? photo.thumbPath
-            : await makeSbsThumbnail(blob)
-                .then((thumb) => uploadThumbnail(photo!.storagePath!, thumb))
-                .catch((error) => {
-                  // Keep going without a thumbnail, but say why.
-                  console.warn('Thumbnail could not be made for', photo!.id, error);
-                  return null;
-                });
-
-          const remeasure = photo.alignVersion !== null && photo.alignVersion !== undefined;
-          const displayedSwapped = photo.alignment?.swapped ?? !!album?.lr_swapped_default;
-          let alignment: StereoAlignment | null = null;
-          let version: number | null = null;
-          let confidence: number | null = null;
-          if (needsAlignmentMeasure(photo)) {
-            const est = await estimateFileAlignment(blob, { swapped: displayedSwapped }).catch(() => null);
-            if (est) {
-              version = est.version;
-              confidence = est.confidence;
-              // Unsure: record that it was measured (so it is not measured
-              // again on every visit). A first measurement stores identity; a
-              // re-measure keeps the alignment the photo already had rather
-              // than replace a confident old answer with "no correction".
-              alignment =
-                est.confidence >= STORE_MIN_CONFIDENCE
-                  ? applyEstimate(est, displayedSwapped)
-                  : remeasure && photo.alignment
-                    ? photo.alignment
-                    : { dx: 0, dy: 0, swapped: displayedSwapped };
-            }
-          }
-
-          await finishPhotoPreparation({ photoId: photo.id, thumbPath, alignment, version, confidence });
-
-          const patch: Partial<GalleryPhoto> = {
-            ...(thumbPath && thumbPath !== photo.thumbPath ? { thumbPath } : {}),
-            ...(alignment ? { alignment, alignVersion: version, alignConfidence: confidence } : {}),
-          };
-          if (Object.keys(patch).length > 0) onPreparedRef.current(photo.id, patch);
+          const thumbPath = await makeSbsThumbnail(blob).then((thumb) => uploadThumbnail(photo!.storagePath!, thumb));
+          await finishPhotoPreparation({ photoId: photo.id, thumbPath });
+          onPreparedRef.current(photo.id, { thumbPath });
           setProgress((current) => ({ ...current, done: current.done + 1 }));
         } catch (error) {
           console.warn('Photo preparation failed for', photo.id, error);

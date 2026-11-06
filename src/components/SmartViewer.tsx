@@ -9,11 +9,8 @@ import { eyeSizeFromThumb, eyeViewport, fitContain } from '@/lib/viewerGeometry'
 import { cn } from '@/lib/utils';
 import ViewerSharePanel from '@/components/ViewerSharePanel';
 import { toast } from '@/hooks/use-toast';
-import { type EyeTier, loadStereoSourceImage, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
-import { isLiveDropboxAlbum } from '@/lib/albumSource';
-import type { StereoAlignment } from '@/lib/stereoAlign/types';
-import { applyEstimate, AUTO_PERSIST_MIN_CONFIDENCE, estimateImageAlignment } from '@/lib/stereoAlign/estimateForImage';
-import { type GalleryPhoto, updatePhotoAlignment } from '@/services/galleryService';
+import { type EyeTier, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
+import type { GalleryPhoto } from '@/services/galleryService';
 import type { AlbumRecord } from '@/types/database';
 
 interface SmartViewerProps {
@@ -28,10 +25,6 @@ interface SmartViewerProps {
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
-  /** Owner or admin: an unmeasured photo is auto-aligned on first view and saved to its row. */
-  canEdit?: boolean;
-  /** Called after an alignment is saved so the page can patch its photo list in place. */
-  onAlignmentSaved?: (photoId: string, alignment: StereoAlignment, version: number) => void;
   /**
    * Address that opens this photo for someone else. With it, Share offers
    * "photo" or "link" (URL + QR); without it (private pages), Share sends the
@@ -67,8 +60,6 @@ export default function SmartViewer({
   onNext,
   hasPrevious,
   hasNext,
-  canEdit = false,
-  onAlignmentSaved,
   linkForPhoto,
 }: SmartViewerProps) {
   const [mode, setMode] = useState<ViewMode>('stereo');
@@ -80,16 +71,9 @@ export default function SmartViewer({
   const [interaction, setInteraction] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-  // --- Alignment ---------------------------------------------------------------
-  // There are no alignment controls in the viewer: left/right order and
-  // offsets are decided when a photo is measured (at upload, in background
-  // preparation, or here on first view for the owner), not by hand.
+  // Halves are shown as stored, exchanged only for albums whose camera writes
+  // right-eye first. There is no per-photo alignment.
   const storedAlignment = resolveAlignment(photo);
-
-  // A transient note saying what the lazy estimator did ("Auto-aligned ...").
-  const [autoNote, setAutoNote] = useState<string | null>(null);
-  const lazyAttemptedRef = useRef<Set<string>>(new Set());
-  const folderUrl = isLiveDropboxAlbum(album) ? album?.dropbox_folder_url ?? undefined : undefined;
   const galleryPhoto = photo as GalleryPhoto;
 
   // --- Common Hooks ---
@@ -274,14 +258,7 @@ export default function SmartViewer({
     // had them pop back up on every photo, which is exactly when they are in
     // the way.
     if (Date.now() - lastSwipeAtRef.current > 500) setShowControls(true);
-    setAutoNote(null);
   }, [photo.id, resetTransform]);
-
-  useEffect(() => {
-    if (!autoNote) return;
-    const timer = window.setTimeout(() => setAutoNote(null), 4000);
-    return () => window.clearTimeout(timer);
-  }, [autoNote]);
 
   const handleContainerClick = () => {
     // Any recent touch: this click is the browser's echo of it. The touch path
@@ -297,43 +274,6 @@ export default function SmartViewer({
     if (Date.now() - lastSwipeAtRef.current < 300) return;
     setShowControls((current) => !current);
   };
-
-  // Lazy path for the owner: a photo with nothing stored is measured once when
-  // viewed and, when the estimator is confident, saved silently - so the album
-  // aligns itself as the photographer looks through it.
-  useEffect(() => {
-    if (!canEdit || folderUrl) return;
-    if (galleryPhoto.alignVersion !== null || !leftUrl) return;
-    if (lazyAttemptedRef.current.has(photo.id)) return;
-    lazyAttemptedRef.current.add(photo.id);
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const img = await loadStereoSourceImage(galleryPhoto, folderUrl);
-        const est = await estimateImageAlignment(img, { swapped: storedAlignment.swapped });
-        if (cancelled) return;
-        if (est.confidence < AUTO_PERSIST_MIN_CONFIDENCE) return;
-        const next = applyEstimate(est, storedAlignment.swapped);
-        await updatePhotoAlignment({ photoId: photo.id, alignment: next, version: est.version, confidence: est.confidence });
-        if (cancelled) return;
-        onAlignmentSaved?.(photo.id, next, est.version);
-        const flipped = next.swapped !== storedAlignment.swapped;
-        setAutoNote(
-          flipped
-            ? 'Auto-aligned and flipped L/R'
-            : next.dy === 0 && next.dx === 0
-              ? 'Checked: already aligned'
-              : `Auto-aligned (vertical ${next.dy > 0 ? '+' : ''}${next.dy} px)`,
-        );
-      } catch {
-        // Best effort; Re-align in Management measures it again.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [canEdit, folderUrl, galleryPhoto, leftUrl, photo.id, storedAlignment.dx, storedAlignment.swapped, onAlignmentSaved]);
 
   // Keyboard navigation. Desktop fullscreen is landscape, so it renders the
   // stereo view, where there is no other pointer affordance for paging.
@@ -596,17 +536,6 @@ export default function SmartViewer({
     </div>
   );
 
-  // Transient note: what the lazy estimator did.
-  const estimatorChips = (
-    <div className="pointer-events-none absolute left-1/2 top-16 flex -translate-x-1/2 flex-col items-center gap-2">
-      {autoNote && (
-        <span className="rounded-full bg-emerald-500/70 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
-          {autoNote}
-        </span>
-      )}
-    </div>
-  );
-
   // --- Render Logic ---
   if (mode === '2d') {
     return (
@@ -661,7 +590,6 @@ export default function SmartViewer({
       {closeButton}
       {shareButton}
       {sharePanel}
-      {estimatorChips}
       {navButtons}
       {Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">

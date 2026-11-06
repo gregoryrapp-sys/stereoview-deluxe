@@ -3,7 +3,7 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
 import { FUNCTIONS_REGION, PHOTOS_BUCKET, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
 import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
-import { alignmentFromRow, type StereoAlignment } from '@/lib/stereoAlign/types';
+import { albumAlignment, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
   AlbumRecord,
   EventRecord,
@@ -19,11 +19,8 @@ export interface GalleryPhoto extends Photo {
   /** Signed URL of the downscaled whole-SBS thumbnail, when one exists. Grids prefer it. */
   thumbSrc?: string;
   thumbPath?: string;
-  /** Resolved against the album's lr_swapped_default; identity when nothing is stored. */
+  /** The album's left/right order ("camera writes right-eye first"); no per-photo alignment. */
   alignment?: StereoAlignment;
-  /** Null when no alignment was ever stored (candidate for estimation); 0 = manual. */
-  alignVersion?: number | null;
-  alignConfidence?: number | null;
   rightSrc?: string; // For Dropbox pairs
   created_at?: string;
   extension?: string; // File extension (lowercase, without dot) when available
@@ -394,8 +391,6 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
     const src = signedUrls.get(photo.storage_path);
     if (!src) return [];
 
-    const { alignment, hasStored } = alignmentFromRow(photo, albumSwapDefaults.get(photo.album_id) ?? false);
-
     return [{
       id: photo.id,
       src,
@@ -405,47 +400,11 @@ async function mapPhotoRowsToGalleryPhotos(photoRows: PhotoRecord[], albums: Alb
       storagePath: photo.storage_path,
       thumbPath: photo.thumb_path ?? undefined,
       thumbSrc: photo.thumb_path ? signedUrls.get(photo.thumb_path) : undefined,
-      alignment,
-      alignVersion: hasStored ? photo.align_version ?? 0 : null,
-      alignConfidence: photo.align_confidence ?? null,
+      alignment: albumAlignment(albumSwapDefaults.get(photo.album_id) ?? false),
       created_at: photo.file_modified_at ?? photo.created_at,
       extension: getFileExtension(photo.storage_path),
     }];
   });
-}
-
-/**
- * Persists a photo's alignment. `version` 0 means set by hand in the viewer;
- * an estimator writes its own version so results can be redone when it improves.
- */
-export async function updatePhotoAlignment({
-  photoId,
-  alignment,
-  version,
-  confidence = null,
-}: {
-  photoId: string;
-  alignment: StereoAlignment;
-  version: number;
-  confidence?: number | null;
-}): Promise<void> {
-  const { data, error } = await supabase
-    .from('photos')
-    .update({
-      align_dx: Math.round(alignment.dx),
-      align_dy: Math.round(alignment.dy),
-      lr_swapped: alignment.swapped,
-      align_rotation: alignment.rotation ?? null,
-      align_scale: alignment.scale ?? null,
-      align_version: version,
-      align_confidence: confidence,
-    })
-    .eq('id', photoId)
-    .select('id');
-  if (error) throw error;
-  if (!data || data.length === 0) {
-    throw new Error('Alignment could not be saved. You may not have permission to edit this photo.');
-  }
 }
 
 /**
@@ -565,45 +524,7 @@ export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Prom
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
 
-export interface PhotoForAlignment {
-  id: string;
-  album_id: string;
-  storage_path: string;
-  lr_swapped: boolean | null;
-  align_version: number | null;
-}
-
-/**
- * Photos to run the estimator over. By default only rows with nothing stored;
- * `includeAligned` re-runs estimator results too but never touches manual
- * (version 0) ones unless `includeManual` is set.
- */
-export async function fetchPhotosForAlignment(
-  albumIds: string[],
-  options: { includeAligned?: boolean; includeManual?: boolean } = {},
-): Promise<PhotoForAlignment[]> {
-  if (albumIds.length === 0) return [];
-  const rows: PhotoForAlignment[] = [];
-  for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
-    let query = supabase
-      .from('photos')
-      .select('id, album_id, storage_path, lr_swapped, align_version')
-      .in('album_id', albumIds)
-      .is('deleted_at', null)
-      .order('id')
-      .range(from, from + PHOTO_PAGE_SIZE - 1);
-    if (!options.includeAligned) query = query.is('align_version', null);
-    else if (!options.includeManual) query = query.or('align_version.is.null,align_version.gt.0');
-    const { data, error } = await query;
-    if (error) throw error;
-    const page = (data ?? []) as PhotoForAlignment[];
-    rows.push(...page);
-    if (page.length < PHOTO_PAGE_SIZE) break;
-  }
-  return rows;
-}
-
-/** Signs one original for a client-side pass (thumbnail backfill, alignment). */
+/** Signs one original for a client-side pass (thumbnail backfill). */
 export async function signedOriginalUrl(storagePath: string): Promise<string> {
   const signed = await signStoragePaths([storagePath]);
   const url = signed.get(storagePath);
@@ -611,38 +532,9 @@ export async function signedOriginalUrl(storagePath: string): Promise<string> {
   return url;
 }
 
-/**
- * One row update at the end of background preparation: the thumbnail path (if
- * one was made) and the alignment measurement (if one was taken). Either part
- * may be absent; a photo is never left half-written.
- */
-export async function finishPhotoPreparation({
-  photoId,
-  thumbPath,
-  alignment,
-  version,
-  confidence,
-}: {
-  photoId: string;
-  thumbPath: string | null;
-  alignment: StereoAlignment | null;
-  version: number | null;
-  confidence: number | null;
-}): Promise<void> {
-  const patch: Record<string, unknown> = {};
-  if (thumbPath) patch.thumb_path = thumbPath;
-  if (alignment && version !== null) {
-    patch.align_dx = Math.round(alignment.dx);
-    patch.align_dy = Math.round(alignment.dy);
-    patch.lr_swapped = alignment.swapped;
-    patch.align_rotation = alignment.rotation ?? null;
-    patch.align_scale = alignment.scale ?? null;
-    patch.align_version = version;
-    patch.align_confidence = confidence;
-  }
-  if (Object.keys(patch).length === 0) return;
-
-  const { data, error } = await supabase.from('photos').update(patch).eq('id', photoId).select('id');
+/** Records the thumbnail background preparation made for a photo. */
+export async function finishPhotoPreparation({ photoId, thumbPath }: { photoId: string; thumbPath: string }): Promise<void> {
+  const { data, error } = await supabase.from('photos').update({ thumb_path: thumbPath }).eq('id', photoId).select('id');
   if (error) throw error;
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
@@ -901,28 +793,18 @@ export async function uploadStereoPairPhoto({
   }
 }
 
-/** An estimator result worth storing with a new photo. */
-export interface StoredAlignmentEstimate {
-  alignment: StereoAlignment;
-  version: number;
-  confidence: number;
-}
-
 export async function uploadSbsPhoto({
   albumId,
   eventId,
   ownerId,
   file,
   alt,
-  alignment = null,
 }: {
   albumId: string;
   eventId: string;
   ownerId: string;
   file: File;
   alt: string;
-  /** Computed in the browser before upload; null stores nothing (unknown). */
-  alignment?: StoredAlignmentEstimate | null;
 }): Promise<void> {
   const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-photo');
   const photoId = crypto.randomUUID();
@@ -950,17 +832,6 @@ export async function uploadSbsPhoto({
     thumb_path: thumbPath,
     alt: baseName,
     file_modified_at: getFileModifiedIso(file),
-    ...(alignment
-      ? {
-          align_dx: Math.round(alignment.alignment.dx),
-          align_dy: Math.round(alignment.alignment.dy),
-          lr_swapped: alignment.alignment.swapped,
-          align_rotation: alignment.alignment.rotation ?? null,
-          align_scale: alignment.alignment.scale ?? null,
-          align_version: alignment.version,
-          align_confidence: alignment.confidence,
-        }
-      : {}),
   });
 
   if (insertResult.error) {

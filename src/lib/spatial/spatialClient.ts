@@ -4,7 +4,6 @@ import { loadLibheif } from './loadLibheif';
 /**
  * Spatial decoder client: one lazily created module worker, request ids, a
  * timeout, and an inline fallback when Worker is missing or fails to start.
- * Same shape as the alignment estimator's client.
  */
 
 /** Two 12 MP eyes on a slow phone can take a while; the timeout is a safety net, not a budget. */

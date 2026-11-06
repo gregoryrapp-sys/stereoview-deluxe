@@ -291,13 +291,10 @@ async function toProcessed(split: SplitBlobs): Promise<ProcessedStereoImage> {
   return { leftUrl, rightUrl, width: split.width, height: split.height, alignment: split.alignment, sourceScale: split.sourceScale };
 }
 
-/** A few decoded originals, so Auto-align in the viewer does not re-download the photo just split. */
+/** A few decoded originals, so a re-split (e.g. the zoom tier) does not re-download the photo. */
 const sourceImageCache = new LruCache<HTMLImageElement>(3);
 
-/**
- * The decoded side-by-side source for a photo. Shared by the split and by the
- * alignment estimator, which samples the source rather than the split eyes.
- */
+/** The decoded side-by-side source for a photo. */
 export async function loadStereoSourceImage(
   photo: DropboxFile | GalleryPhoto,
   folderUrl?: string,

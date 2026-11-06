@@ -733,20 +733,7 @@ export default function PublicProfile() {
             }
             hasPrevious={selectedPhotoIndex > 0}
             hasNext={selectedPhotoIndex < sortedActivePhotos.length - 1}
-            // `ownerView` comes from the server: the session belongs to this
-            // profile. Live Dropbox photos have no row to write an alignment to.
-            canEdit={ownerView && !previewAsVisitor && !isLiveDropboxAlbum(selectedAlbum)}
             linkForPhoto={isAlbumPage ? linkForPhoto : undefined}
-            onAlignmentSaved={(photoId, alignment, version) =>
-              setData((current) =>
-                current
-                  ? {
-                      ...current,
-                      photos: current.photos.map((p) => (p.id === photoId ? { ...p, alignment, alignVersion: version } : p)),
-                    }
-                  : current,
-              )
-            }
           />
         )}
       </div>

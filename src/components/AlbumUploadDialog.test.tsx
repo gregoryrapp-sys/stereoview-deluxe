@@ -3,11 +3,6 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import AlbumUploadDialog, { isAcceptedFile } from './AlbumUploadDialog';
 
 vi.mock('@/services/galleryService', () => ({ uploadSbsPhoto: vi.fn() }));
-vi.mock('@/lib/stereoAlign/estimateForImage', () => ({
-  applyEstimate: vi.fn(),
-  estimateFileAlignment: vi.fn(),
-  STORE_MIN_CONFIDENCE: 0.5,
-}));
 vi.mock('@/lib/spatial/convertSpatial', () => ({ convertSpatialToSbs: vi.fn() }));
 
 describe('isAcceptedFile', () => {

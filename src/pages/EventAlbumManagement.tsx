@@ -7,7 +7,7 @@ import {
   ArrowLeft,
   FolderOpen,
   ImagePlus,
-  Crosshair,
+  Pause,
   Images,
   Loader2,
   Plus,
@@ -48,8 +48,6 @@ import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
-import AutoAlignDialog from '@/components/AutoAlignDialog';
-import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
 import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
 import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges, type ProfileSaved } from '@/lib/unsavedChanges';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -163,9 +161,6 @@ export default function EventAlbumManagement() {
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
   // to one album or to every upload album of an event.
-  const [autoAlignScope, setAutoAlignScope] = useState<{ albumIds: string[]; label: string } | null>(null);
-  // Per-photo "Re-align" in progress (one at a time; each downloads an original).
-  const [realigningPhotoId, setRealigningPhotoId] = useState<string | null>(null);
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
   // The camera behind this album writes right-eye-first; photos without their
   // own setting are displayed with the halves exchanged.
@@ -246,8 +241,8 @@ export default function EventAlbumManagement() {
     return loadData();
   }, [isAuthenticated, profile, loadData]);
 
-  // Background preparation: thumbnails + alignment for every photo that lacks
-  // them, while the owner is here. Patches rows in place as they finish; one
+  // Background preparation: a thumbnail for every photo that lacks one,
+  // while the owner is here. Patches rows in place as they finish; one
   // refresh at the end picks up the signed thumbnail URLs the patch cannot mint.
   const preparation = usePhotoPreparation(galleryData.photos, galleryData.albums, {
     enabled: isAuthenticated && !!profile && !isLoading,
@@ -890,44 +885,6 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const handleRealignPhoto = async (photo: GalleryPhoto) => {
-    setRealigningPhotoId(photo.id);
-    try {
-      const outcome = await realignPhoto(photo);
-      if (outcome.status === 'unsure') {
-        toast({
-          title: 'Not confident enough to align this photo',
-          description: 'Too little matching detail between the two eyes. Left unchanged; adjust it by hand in the viewer.',
-        });
-        return;
-      }
-      const { estimate, alignment, flipped } = outcome;
-      const notes = [
-        flipped && 'Left and right were exchanged.',
-        estimate.rotationSuspected && 'Rotation detected; a shift alone cannot fully fix it.',
-      ].filter(Boolean);
-      toast({
-        title: 'Photo re-aligned',
-        description: [describeAlignment(alignment, estimate.confidence), ...notes].join(' '),
-      });
-      // Patch in place so the grid and viewer pick it up without a refetch.
-      setGalleryData((current) => ({
-        ...current,
-        photos: current.photos.map((p) =>
-          p.id === photo.id ? { ...p, alignment, alignVersion: estimate.version, alignConfidence: estimate.confidence } : p,
-        ),
-      }));
-    } catch (error) {
-      toast({
-        title: 'Could not re-align photo',
-        description: error instanceof Error ? error.message : 'Re-align failed',
-        variant: 'destructive',
-      });
-    } finally {
-      setRealigningPhotoId(null);
-    }
-  };
-
   const saveAlbum = async (): Promise<boolean> => {
     if (!selectedAlbum) return false;
     setIsSaving(true);
@@ -1098,7 +1055,7 @@ export default function EventAlbumManagement() {
         {(preparation.total > preparation.done + preparation.failed || preparation.failed > 0) && (
           <p className="mt-1 inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">
             {preparation.paused ? (
-              <Crosshair className="h-3 w-3" />
+              <Pause className="h-3 w-3" />
             ) : (
               <Loader2 className="h-3 w-3 animate-spin" />
             )}
@@ -1343,23 +1300,6 @@ export default function EventAlbumManagement() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-light">Albums</h2>
               <div className="flex flex-wrap items-center gap-2">
-                {eventAlbums.some((album) => album.source_type === 'upload' || album.import_state === 'imported') && (
-                  <Button
-                    variant="ghost"
-                    className="gap-2"
-                    onClick={() =>
-                      setAutoAlignScope({
-                        albumIds: eventAlbums
-                          .filter((album) => album.source_type === 'upload' || album.import_state === 'imported')
-                          .map((album) => album.id),
-                        label: `every album in ${selectedEvent.title}`,
-                      })
-                    }
-                  >
-                    <Crosshair className="h-4 w-4" />
-                    Auto-align
-                  </Button>
-                )}
                 <Button onClick={() => setIsAlbumDialogOpen(true)} variant="secondary" className="gap-2">
                   <Plus className="h-4 w-4" />
                   Add Album
@@ -1456,8 +1396,7 @@ export default function EventAlbumManagement() {
                   <div className="space-y-0.5">
                     <Label htmlFor="album-lr-swapped">Camera writes right-eye first - swap L/R for this album</Label>
                     <p className="text-xs text-muted-foreground">
-                      Every photo here is shown with the halves exchanged unless it has its own alignment
-                      saved in the viewer. Viewers can also flip any photo for themselves.
+                      Every photo in this album is shown with its left and right halves exchanged.
                     </p>
                   </div>
                 </div>
@@ -1569,15 +1508,6 @@ export default function EventAlbumManagement() {
                         <ImagePlus className="h-4 w-4" />
                         Select and upload photos
                       </Button>
-                      <Button
-                        variant="ghost"
-                        className="gap-2"
-                        onClick={() => setAutoAlignScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
-                        disabled={isSaving}
-                      >
-                        <Crosshair className="h-4 w-4" />
-                        Auto-align
-                      </Button>
                     </div>
                   </div>
                 )}
@@ -1681,24 +1611,6 @@ export default function EventAlbumManagement() {
                                 variant="secondary"
                                 size="icon"
                                 className="h-9 w-9"
-                                onClick={() => handleRealignPhoto(photo as GalleryPhoto)}
-                                disabled={isSaving || realigningPhotoId !== null}
-                                title={
-                                  (photo as GalleryPhoto).alignVersion == null
-                                    ? 'Re-align: measure and save the L/R alignment (not measured yet)'
-                                    : `Re-align: measure again (currently vertical ${(photo as GalleryPhoto).alignment?.dy ?? 0} px, horizontal ${(photo as GalleryPhoto).alignment?.dx ?? 0} px${(photo as GalleryPhoto).alignVersion === 0 ? ', set by hand' : ''})`
-                                }
-                              >
-                                {realigningPhotoId === photo.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Crosshair className="h-4 w-4" />
-                                )}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                size="icon"
-                                className="h-9 w-9"
                                 onClick={() => setDeletingPhoto(photo)}
                                 disabled={isSaving}
                                 title="Delete Photo"
@@ -1751,7 +1663,6 @@ export default function EventAlbumManagement() {
           albumTitle={selectedAlbum.title}
           eventId={selectedAlbumEvent.id}
           ownerId={selectedAlbumEvent.owner_id}
-          albumSwappedDefault={selectedAlbum.lr_swapped_default ?? false}
           onUploaded={loadData}
         />
       )}
@@ -1763,19 +1674,6 @@ export default function EventAlbumManagement() {
           albumId={selectedAlbum.id}
           albumTitle={selectedAlbum.title}
           onSynced={loadData}
-        />
-      )}
-
-      {autoAlignScope && (
-        <AutoAlignDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setAutoAlignScope(null);
-          }}
-          albumIds={autoAlignScope.albumIds}
-          scopeLabel={autoAlignScope.label}
-          albumSwapDefaults={Object.fromEntries(galleryData.albums.map((album) => [album.id, !!album.lr_swapped_default]))}
-          onAligned={loadData}
         />
       )}
 

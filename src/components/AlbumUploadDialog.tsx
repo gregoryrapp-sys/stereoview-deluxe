@@ -10,7 +10,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
@@ -18,7 +17,6 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { uploadSbsPhoto } from '@/services/galleryService';
-import { applyEstimate, estimateFileAlignment, STORE_MIN_CONFIDENCE } from '@/lib/stereoAlign/estimateForImage';
 import { convertSpatialToSbs } from '@/lib/spatial/convertSpatial';
 import { isHeifFile } from '@/lib/spatial/heifBoxes';
 
@@ -77,8 +75,6 @@ interface AlbumUploadDialogProps {
   albumTitle: string;
   eventId: string;
   ownerId: string;
-  /** The album's camera writes right-eye-first; alignment is measured in that order. */
-  albumSwappedDefault?: boolean;
   /** Called once after a run that uploaded at least one photo, so the page can refresh. */
   onUploaded: () => void;
 }
@@ -90,12 +86,10 @@ export default function AlbumUploadDialog({
   albumTitle,
   eventId,
   ownerId,
-  albumSwappedDefault = false,
   onUploaded,
 }: AlbumUploadDialogProps) {
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [namePrefix, setNamePrefix] = useState('');
-  const [autoAlign, setAutoAlign] = useState(true);
   const [step, setStep] = useState<Step>('select');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -220,13 +214,6 @@ export default function AlbumUploadDialog({
           }
           setStatus(item.id, 'uploading');
 
-          // Measure alignment and left/right order while the file is in hand.
-          // The decode dominates and uploads already run a few at a time; a
-          // failed or unsure measurement stores nothing rather than a guess.
-          const estimate = autoAlign
-            ? await estimateFileAlignment(file, { swapped: albumSwappedDefault }).catch(() => null)
-            : null;
-
           await uploadSbsPhoto({
             albumId,
             eventId,
@@ -235,14 +222,6 @@ export default function AlbumUploadDialog({
             alt: namePrefix
               ? `${namePrefix} ${index + 1}`
               : item.file.name.replace(/\.[^.]+$/, ''),
-            alignment:
-              estimate && estimate.confidence >= STORE_MIN_CONFIDENCE
-                ? {
-                    alignment: applyEstimate(estimate, albumSwappedDefault),
-                    version: estimate.version,
-                    confidence: estimate.confidence,
-                  }
-                : null,
           });
           setStatus(item.id, 'done');
         } catch (error) {
@@ -376,20 +355,6 @@ export default function AlbumUploadDialog({
                     placeholder="Leave blank to keep the original file names"
                     onChange={(event) => setNamePrefix(event.target.value)}
                   />
-                </div>
-
-                <div className="flex items-start gap-2">
-                  <Checkbox
-                    id="album-upload-autoalign"
-                    checked={autoAlign}
-                    onCheckedChange={(value) => setAutoAlign(value === true)}
-                    className="mt-0.5"
-                  />
-                  <Label htmlFor="album-upload-autoalign" className="text-xs font-normal text-muted-foreground">
-                    Auto-align on upload: measure the offset between the two eyes, correct the left/right
-                    order when the photo clearly shows it, and save the result. Photos are not modified.
-                    {albumSwappedDefault && ' This album shows photos with L/R swapped.'}
-                  </Label>
                 </div>
               </>
             )}
