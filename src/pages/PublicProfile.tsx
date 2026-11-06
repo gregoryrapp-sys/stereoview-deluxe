@@ -14,6 +14,7 @@ import { type DropboxFile, fetchDropboxThumbnailBlob, GalleryPhoto, SharedGaller
 import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
+import ShareLinkButton from '@/components/ShareLinkButton';
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto } from '@/lib/galleryUtils';
 import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
@@ -327,11 +328,6 @@ export default function PublicProfile() {
     setSelectedPhotoIndex(index);
   }, [linkedPhotoId, sortedActivePhotos]);
 
-  const linkForPhoto = useCallback(
-    (photo: { id: string }) => `${window.location.origin}${window.location.pathname}?photo=${encodeURIComponent(photo.id)}`,
-    [],
-  );
-
   const handleCloseViewer = useCallback(async () => {
     await exitPhotoFullscreen();
     setSelectedPhotoIndex(null);
@@ -394,6 +390,10 @@ export default function PublicProfile() {
   }, [data, selectedAlbum, selectedEvent, activePhotos, photosByEvent, isAlbumPage, isEventPage, dropboxProfileCover, dropboxCoverUrls]);
 
   const profileLabel = data?.profile.display_name ?? data?.profile.slug ?? profileSlug;
+  // The page on screen, as a visitor would open it: the photographer, an event, or an album.
+  const pageShareUrl = data?.profile.slug
+    ? `${window.location.origin}/${[data.profile.slug, selectedEvent?.slug, selectedAlbum?.slug].filter(Boolean).join('/')}`
+    : null;
 
   return (
     <div className="min-h-screen px-4 py-6">
@@ -448,6 +448,9 @@ export default function PublicProfile() {
                 />
                 <span className={cn(previewAsVisitor && 'font-medium')}>Visitor</span>
               </label>
+            )}
+            {pageShareUrl && (
+              <ShareLinkButton url={pageShareUrl} what={selectedAlbum ? 'album' : selectedEvent ? 'event' : 'gallery'} />
             )}
             {/* Manage opens management at the level being viewed, so uploading
                 to the album on screen is one click, not a drill-down from the
@@ -736,7 +739,6 @@ export default function PublicProfile() {
             // `ownerView` comes from the server: the session belongs to this
             // profile. Live Dropbox photos have no row to write an alignment to.
             canEdit={ownerView && !previewAsVisitor && !isLiveDropboxAlbum(selectedAlbum)}
-            linkForPhoto={isAlbumPage ? linkForPhoto : undefined}
             onAlignmentSaved={(photoId, alignment, version) =>
               setData((current) =>
                 current

@@ -10,6 +10,7 @@ import {
   getFileExtension,
 } from '@/services/galleryService';
 import SmartViewer from '@/components/SmartViewer';
+import ShareLinkButton from '@/components/ShareLinkButton';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
@@ -94,15 +95,16 @@ export default function Gallery() {
     [galleryData.albums, selectedAlbumId],
   );
 
-  // Share links point at the public album page (a visitor's address), so the
-  // viewer can offer "photo or link" here too. Only for the photographer's own
-  // events: an admin browsing someone else's content has no slug to build from.
-  const linkForPhoto = useMemo(() => {
-    if (!profile?.slug || !selectedEvent?.slug || !selectedAlbum?.slug) return undefined;
-    if (selectedEvent.owner_id !== profile.id) return undefined;
-    const base = `${window.location.origin}/${profile.slug}/${selectedEvent.slug}/${selectedAlbum.slug}`;
-    return (photo: { id: string }) => `${base}?photo=${encodeURIComponent(photo.id)}`;
-  }, [profile?.slug, profile?.id, selectedEvent?.slug, selectedEvent?.owner_id, selectedAlbum?.slug]);
+  // Share points at the public page for the level on screen (a visitor's
+  // address): the photographer, the event, or the album. Only for the
+  // photographer's own events: an admin browsing someone else's content has
+  // no slug to build from.
+  const pageShareUrl = useMemo(() => {
+    if (!profile?.slug) return null;
+    if (selectedEvent && (selectedEvent.owner_id !== profile.id || !selectedEvent.slug)) return null;
+    if (selectedAlbum && !selectedAlbum.slug) return null;
+    return `${window.location.origin}/${[profile.slug, selectedEvent?.slug, selectedAlbum?.slug].filter(Boolean).join('/')}`;
+  }, [profile?.slug, profile?.id, selectedEvent, selectedAlbum]);
 
   const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
 
@@ -381,6 +383,9 @@ export default function Gallery() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {pageShareUrl && (
+              <ShareLinkButton url={pageShareUrl} what={selectedAlbum ? 'album' : selectedEvent ? 'event' : 'gallery'} />
+            )}
             <Button asChild variant="secondary" size="icon" title="Manage Current View">
               <Link to={manageLink}>
                 <Settings className="h-4 w-4" />
@@ -543,7 +548,6 @@ export default function Gallery() {
             // anything with a row here is theirs to auto-align on view. Live Dropbox photos have
             // no row to write to.
             canEdit={isAuthenticated && !isLiveDropboxAlbum(selectedAlbum)}
-            linkForPhoto={linkForPhoto}
             onAlignmentSaved={(photoId, alignment, version) =>
               setGalleryData((current) => ({
                 ...current,
