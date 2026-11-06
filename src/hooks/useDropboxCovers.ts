@@ -4,6 +4,8 @@ import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { fetchDropboxFolderCover, fetchDropboxThumbnailBlob } from '@/services/galleryService';
 import type { DropboxCoverMap } from '@/lib/galleryUtils';
 
+const errorMessage = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
+
 /**
  * Fetches and caches Dropbox cover images for albums and events of live (not
  * yet imported) Dropbox albums. Imported albums never come here: their covers
@@ -91,7 +93,9 @@ export function useDropboxCovers(
         if (result.status === 'fulfilled') {
           newCoverUrls[result.value.albumId] = { src: result.value.src, name: result.value.name };
         } else {
-          console.error('Failed to fetch a Dropbox cover photo:', result.reason);
+          // The card keeps its placeholder; usually a Dropbox link that no longer
+          // resolves, which the owner fixes in Album Settings.
+          console.warn('Dropbox album cover unavailable, showing placeholder:', errorMessage(result.reason));
         }
       });
 
@@ -136,7 +140,7 @@ export function useDropboxCovers(
         if (result.status === 'fulfilled' && result.value) {
           newCoverUrls[`event:${result.value.eventId}`] = { src: result.value.src, name: result.value.name };
         } else if (result.status === 'rejected') {
-          console.error('Failed to fetch a Dropbox event cover photo:', result.reason);
+          console.warn('Dropbox event cover unavailable, showing placeholder:', errorMessage(result.reason));
         }
       });
 
