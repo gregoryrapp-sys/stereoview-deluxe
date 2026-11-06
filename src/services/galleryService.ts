@@ -994,6 +994,7 @@ export async function updateAlbum({
   coverPhotoId,
   dropboxCoverImageName,
   dropbox_folder_url,
+  sourceType,
   lrSwappedDefault,
   isPublic,
   isListed,
@@ -1006,6 +1007,8 @@ export async function updateAlbum({
   coverPhotoId?: string | null;
   dropboxCoverImageName?: string | null;
   dropbox_folder_url?: string | null;
+  /** Only while the album is empty: an album with photos keeps its source. */
+  sourceType?: 'upload' | 'dropbox';
   /** The camera behind this album writes right-eye-first. */
   lrSwappedDefault?: boolean;
   isPublic?: boolean;
@@ -1044,6 +1047,7 @@ export async function updateAlbum({
       description: description || null,
       ...(slug !== undefined ? { slug: makeSlug(slug) } : {}),
       ...(dropbox_folder_url !== undefined ? { dropbox_folder_url: dropbox_folder_url } : {}),
+      ...(sourceType !== undefined ? { source_type: sourceType } : {}),
       ...(lrSwappedDefault !== undefined ? { lr_swapped_default: lrSwappedDefault } : {}),
       ...coverUpdate,
       ...privacyUpdate,
