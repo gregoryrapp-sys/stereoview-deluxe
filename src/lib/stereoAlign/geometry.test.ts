@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { computeEyeRects, transformMargin, MIN_OVERLAP } from './geometry';
-import { alignmentFromRow, IDENTITY_ALIGNMENT, toggleSwapped } from './types';
+import { albumAlignment, IDENTITY_ALIGNMENT, toggleSwapped } from './types';
 
 const W = 2000; // one eye
 const H = 1500;
@@ -94,17 +94,10 @@ describe('toggleSwapped', () => {
   });
 });
 
-describe('alignmentFromRow', () => {
-  it('inherits the album default when lr_swapped is null and reports nothing stored', () => {
-    const { alignment, hasStored } = alignmentFromRow({}, true);
-    expect(alignment).toEqual({ dx: 0, dy: 0, swapped: true });
-    expect(hasStored).toBe(false);
-  });
-
-  it('a stored lr_swapped overrides the default', () => {
-    const { alignment, hasStored } = alignmentFromRow({ lr_swapped: false, align_dy: 4 }, true);
-    expect(alignment).toEqual({ dx: 0, dy: 4, swapped: false });
-    expect(hasStored).toBe(true);
+describe('albumAlignment', () => {
+  it('is the album\'s left/right order with no shift', () => {
+    expect(albumAlignment(true)).toEqual({ dx: 0, dy: 0, swapped: true });
+    expect(albumAlignment(false)).toEqual(IDENTITY_ALIGNMENT);
   });
 });
 
@@ -137,13 +130,5 @@ describe('rotation and scale', () => {
     const r = computeEyeRects(40, 40, { dx: 0, dy: 0, swapped: false, rotation: 3 });
     expect(r.cropW).toBeGreaterThanOrEqual(16);
     expect(r.cropH).toBeGreaterThanOrEqual(16);
-  });
-});
-
-describe('alignmentFromRow: rotation noise floor', () => {
-  it('ignores stored rotations below 0.1° and keeps real ones', async () => {
-    const { alignmentFromRow } = await import('./types');
-    expect(alignmentFromRow({ align_dx: 0, align_dy: 0, lr_swapped: false, align_rotation: -0.021 }, false).alignment.rotation).toBeUndefined();
-    expect(alignmentFromRow({ align_dx: 0, align_dy: 0, lr_swapped: false, align_rotation: -0.556 }, false).alignment.rotation).toBe(-0.556);
   });
 });

@@ -4,8 +4,7 @@ import { decodeSpatialFile } from './spatialClient';
 /**
  * Turns an Apple Spatial Photo into the side-by-side JPEG the rest of the app
  * already understands: left eye on the left, right eye on the right, same
- * height. From here it is an ordinary upload - thumbnail, auto-alignment,
- * storage - and the viewer never learns where it came from.
+ * height. From here it is an ordinary upload - thumbnail, storage - and the viewer never learns where it came from.
  */
 
 /** Visually lossless for photos; a 12 MP pair lands around 6-8 MB, like the originals we store today. */

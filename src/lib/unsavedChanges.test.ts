@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges } from './unsavedChanges';
 
 const savedAlbum = { title: 'Tift Merritt', description: null, slug: 'tift-merritt', cover_photo_id: null, dropbox_cover_image_name: null, dropbox_folder_url: null, is_public: true, is_listed: true, lr_swapped_default: false };
-const albumForm = { title: 'Tift Merritt', description: '', slug: 'tift-merritt', coverPhotoId: null, dropboxCoverImageName: null, dropboxUrl: '', isPublic: true, isListed: true, lrSwappedDefault: false, passwordDirty: false };
+const albumForm = { title: 'Tift Merritt', description: '', slug: 'tift-merritt', coverPhotoId: null, dropboxCoverImageName: null, dropboxUrl: '', sourceType: 'upload', isPublic: true, isListed: true, lrSwappedDefault: false, passwordDirty: false };
 
 describe('albumHasUnsavedChanges', () => {
   it('a freshly loaded form, with database nulls, is not dirty', () => {
@@ -15,6 +15,7 @@ describe('albumHasUnsavedChanges', () => {
     expect(albumHasUnsavedChanges({ ...albumForm, lrSwappedDefault: true }, savedAlbum)).toBe(true);
     expect(albumHasUnsavedChanges({ ...albumForm, coverPhotoId: 'p1' }, savedAlbum)).toBe(true);
     expect(albumHasUnsavedChanges({ ...albumForm, passwordDirty: true }, savedAlbum)).toBe(true);
+    expect(albumHasUnsavedChanges({ ...albumForm, sourceType: 'dropbox' }, savedAlbum)).toBe(true);
   });
 });
 

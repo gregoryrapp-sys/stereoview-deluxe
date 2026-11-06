@@ -1,7 +1,7 @@
 import { FUNCTIONS_REGION, supabase } from '@/lib/supabase';
 import { adoptSignedUrl, flushSignedUrlCache } from '@/services/galleryService';
 import type { GalleryPhoto, SharedGalleryData } from '@/services/galleryService';
-import { alignmentFromRow } from '@/lib/stereoAlign/types';
+import { albumAlignment } from '@/lib/stereoAlign/types';
 
 /**
  * PIN unlock grants for private profiles, events and albums.
@@ -125,25 +125,13 @@ export async function fetchGallery(params: {
   if (error) throw new Error(error.message);
   if (!data?.found) return null;
 
-  // The function returns raw alignment columns; resolve them against each
-  // album's lr_swapped_default exactly as mapPhotoRowsToGalleryPhotos does.
+  // Only the album's left/right order is used. The function may still send
+  // per-photo alignment fields (deployed before auto-align was removed); they
+  // are dropped here so nothing downstream sees them.
   const albums = (data.albums ?? []) as Array<{ id: string; lr_swapped_default?: boolean }>;
   const swapDefaults = new Map(albums.map((album) => [album.id, !!album.lr_swapped_default]));
   const photos: GalleryPhoto[] = ((data.photos ?? []) as Array<Record<string, unknown>>).map((raw) => {
-    const { alignDx, alignDy, lrSwapped, alignRotation, alignScale, alignVersion, alignConfidence, ...photo } = raw as Record<string, never> & {
-      alignDx?: number | null;
-      alignRotation?: number | null;
-      alignScale?: number | null;
-      alignDy?: number | null;
-      lrSwapped?: boolean | null;
-      alignVersion?: number | null;
-      alignConfidence?: number | null;
-      albumId?: string;
-    };
-    const { alignment, hasStored } = alignmentFromRow(
-      { align_dx: alignDx, align_dy: alignDy, lr_swapped: lrSwapped, align_rotation: alignRotation, align_scale: alignScale },
-      swapDefaults.get(String(photo.albumId)) ?? false,
-    );
+    const { alignDx, alignDy, lrSwapped, alignRotation, alignScale, alignVersion, alignConfidence, ...photo } = raw;
     const gallery = photo as unknown as GalleryPhoto;
     return {
       ...gallery,
@@ -151,9 +139,7 @@ export async function fetchGallery(params: {
       // browser cache answer for covers and thumbnails.
       src: adoptSignedUrl(gallery.storagePath, gallery.src) ?? gallery.src,
       thumbSrc: adoptSignedUrl(gallery.thumbPath, gallery.thumbSrc),
-      alignment,
-      alignVersion: hasStored ? alignVersion ?? 0 : null,
-      alignConfidence: alignConfidence ?? null,
+      alignment: albumAlignment(swapDefaults.get(String(photo.albumId)) ?? false),
     };
   });
 

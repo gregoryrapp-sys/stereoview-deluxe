@@ -7,7 +7,7 @@ import {
   ArrowLeft,
   FolderOpen,
   ImagePlus,
-  Crosshair,
+  Pause,
   Images,
   Loader2,
   Plus,
@@ -48,8 +48,6 @@ import ThumbnailGrid from '@/components/ThumbnailGrid';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import AlbumUploadDialog from '@/components/AlbumUploadDialog';
 import DropboxSyncDialog from '@/components/DropboxSyncDialog';
-import AutoAlignDialog from '@/components/AutoAlignDialog';
-import { describeAlignment, realignPhoto } from '@/lib/stereoAlign/realignPhoto';
 import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
 import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges, type ProfileSaved } from '@/lib/unsavedChanges';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -125,7 +123,6 @@ export default function EventAlbumManagement() {
   /** Where the owner was heading when the unsaved-changes prompt opened. */
   const [pendingLeave, setPendingLeave] = useState<string | null>(null);
   const [isEventDialogOpen, setIsEventDialogOpen] = useState(false);
-  const [isAlbumDialogOpen, setIsAlbumDialogOpen] = useState(false);
   const [coverPicker, setCoverPicker] = useState<'profile' | EventRecord | AlbumRecord | null>(null);
   const [deletingEvent, setDeletingEvent] = useState<EventRecord | null>(null);
   const [deletingAlbum, setDeletingAlbum] = useState<AlbumRecord | null>(null);
@@ -148,12 +145,11 @@ export default function EventAlbumManagement() {
   const [eventCoverPhotoId, setEventCoverPhotoId] = useState<string | null>(null);
   const [eventDropboxCoverAlbumId, setEventDropboxCoverAlbumId] = useState<string | null>(null);
   const [eventDropboxCoverImageName, setEventDropboxCoverImageName] = useState<string | null>(null);
-  const [newAlbumTitle, setNewAlbumTitle] = useState('');
-  const [newAlbumDescription, setNewAlbumDescription] = useState('');
-  const [newAlbumSlug, setNewAlbumSlug] = useState('');
-  const [newAlbumSlugTouched, setNewAlbumSlugTouched] = useState(false);
-  const [newAlbumSourceType, setNewAlbumSourceType] = useState<'upload' | 'dropbox'>('upload');
-  const [newAlbumDropboxUrl, setNewAlbumDropboxUrl] = useState('');
+  // Add Album creates the album at once and opens its settings. Until that
+  // album is first saved (or its slug edited), the slug follows the name, as
+  // the old create popup did; an existing album's URL never moves on rename.
+  const [slugFollowsTitleFor, setSlugFollowsTitleFor] = useState<string | null>(null);
+  const [albumSourceType, setAlbumSourceType] = useState<'upload' | 'dropbox'>('upload');
   const [albumTitle, setAlbumTitle] = useState('');
   const [albumDescription, setAlbumDescription] = useState('');
   const [albumSlug, setAlbumSlug] = useState('');
@@ -163,9 +159,6 @@ export default function EventAlbumManagement() {
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false);
   // Thumbnail backfill for photos uploaded before thumbnails existed; scoped
   // to one album or to every upload album of an event.
-  const [autoAlignScope, setAutoAlignScope] = useState<{ albumIds: string[]; label: string } | null>(null);
-  // Per-photo "Re-align" in progress (one at a time; each downloads an original).
-  const [realigningPhotoId, setRealigningPhotoId] = useState<string | null>(null);
   const [isSyncDialogOpen, setIsSyncDialogOpen] = useState(false);
   // The camera behind this album writes right-eye-first; photos without their
   // own setting are displayed with the halves exchanged.
@@ -246,8 +239,8 @@ export default function EventAlbumManagement() {
     return loadData();
   }, [isAuthenticated, profile, loadData]);
 
-  // Background preparation: thumbnails + alignment for every photo that lacks
-  // them, while the owner is here. Patches rows in place as they finish; one
+  // Background preparation: a thumbnail for every photo that lacks one,
+  // while the owner is here. Patches rows in place as they finish; one
   // refresh at the end picks up the signed thumbnail URLs the patch cannot mint.
   const preparation = usePhotoPreparation(galleryData.photos, galleryData.albums, {
     enabled: isAuthenticated && !!profile && !isLoading,
@@ -433,6 +426,14 @@ export default function EventAlbumManagement() {
   }, [galleryData.photos]);
 
   const albumPhotos = selectedAlbum ? photosByAlbum[selectedAlbum.id] ?? [] : [];
+  // Photo source is chosen while the album is still empty: no uploaded photos,
+  // and not a Dropbox folder that is linked or imported (a live Dropbox album
+  // has no photo rows, so "no rows" alone would not mean empty).
+  const canChangeAlbumSource =
+    !!selectedAlbum &&
+    albumPhotos.length === 0 &&
+    (selectedAlbum.source_type !== 'dropbox' ||
+      (!selectedAlbum.dropbox_folder_url && (selectedAlbum.import_state ?? 'live') === 'live'));
   // Live semantics: photos of an IMPORTED Dropbox album come from rows like
   // any upload album. The folder URL field and the Sync button key on
   // source_type instead.
@@ -666,6 +667,7 @@ export default function EventAlbumManagement() {
     setAlbumCoverPhotoId(selectedAlbum.cover_photo_id);
     setAlbumDropboxCoverImageName(selectedAlbum.dropbox_cover_image_name);
     setAlbumDropboxUrl(selectedAlbum.dropbox_folder_url ?? '');
+    setAlbumSourceType(selectedAlbum.source_type === 'dropbox' ? 'dropbox' : 'upload');
     setAlbumIsPublic(selectedAlbum.is_public ?? true);
     setAlbumIsListed(selectedAlbum.is_listed ?? true);
     setAlbumLrSwappedDefault(selectedAlbum.lr_swapped_default ?? false);
@@ -849,35 +851,17 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const handleCreateAlbum = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const handleAddAlbum = async () => {
     if (!selectedEvent) return;
     setIsSaving(true);
     try {
-      await createAlbum({
-        eventId: selectedEvent.id,
-        title: newAlbumTitle,
-        description: newAlbumDescription,
-        slug: newAlbumSlug || undefined,
-        source_type: newAlbumSourceType,
-        dropbox_folder_url: newAlbumSourceType === 'dropbox' ? newAlbumDropboxUrl : null,
-      });
-      setNewAlbumTitle('');
-      setNewAlbumDescription('');
-      setNewAlbumSlug('');
-      setNewAlbumSlugTouched(false);
-      setNewAlbumSourceType('upload');
-      setNewAlbumDropboxUrl('');
-      setIsAlbumDialogOpen(false);
-      toast(
-        newAlbumSourceType === 'dropbox'
-          ? {
-              title: 'Album created',
-              description: 'Open it and press "Import from Dropbox" to copy its photos into the app.',
-            }
-          : { title: 'Album created' },
-      );
-      loadData();
+      const album = await createAlbum({ eventId: selectedEvent.id, title: 'New album' });
+      setGalleryData((prevData) => ({ ...prevData, albums: [...prevData.albums, album] }));
+      setSlugFollowsTitleFor(album.id);
+      const to = `/manage/events/${selectedEvent.id}/albums/${album.id}`;
+      // The event form may hold edits; the album exists either way.
+      if (hasUnsavedChanges) setPendingLeave(to);
+      else navigate(to);
     } catch (error) {
       console.error('Album creation failed:', error);
       toast({
@@ -890,46 +874,9 @@ export default function EventAlbumManagement() {
     }
   };
 
-  const handleRealignPhoto = async (photo: GalleryPhoto) => {
-    setRealigningPhotoId(photo.id);
-    try {
-      const outcome = await realignPhoto(photo);
-      if (outcome.status === 'unsure') {
-        toast({
-          title: 'Not confident enough to align this photo',
-          description: 'Too little matching detail between the two eyes. Left unchanged; adjust it by hand in the viewer.',
-        });
-        return;
-      }
-      const { estimate, alignment, flipped } = outcome;
-      const notes = [
-        flipped && 'Left and right were exchanged.',
-        estimate.rotationSuspected && 'Rotation detected; a shift alone cannot fully fix it.',
-      ].filter(Boolean);
-      toast({
-        title: 'Photo re-aligned',
-        description: [describeAlignment(alignment, estimate.confidence), ...notes].join(' '),
-      });
-      // Patch in place so the grid and viewer pick it up without a refetch.
-      setGalleryData((current) => ({
-        ...current,
-        photos: current.photos.map((p) =>
-          p.id === photo.id ? { ...p, alignment, alignVersion: estimate.version, alignConfidence: estimate.confidence } : p,
-        ),
-      }));
-    } catch (error) {
-      toast({
-        title: 'Could not re-align photo',
-        description: error instanceof Error ? error.message : 'Re-align failed',
-        variant: 'destructive',
-      });
-    } finally {
-      setRealigningPhotoId(null);
-    }
-  };
-
   const saveAlbum = async (): Promise<boolean> => {
     if (!selectedAlbum) return false;
+    const savedSourceType = canChangeAlbumSource ? albumSourceType : selectedAlbum.source_type;
     setIsSaving(true);
     try {
       await updateAlbum({
@@ -937,10 +884,10 @@ export default function EventAlbumManagement() {
         title: albumTitle,
         description: albumDescription,
         slug: albumSlug,
-        // For now, we are not allowing to change the source type of an existing album
+        sourceType: canChangeAlbumSource ? albumSourceType : undefined,
         coverPhotoId: albumCoverPhotoId,
         dropboxCoverImageName: albumDropboxCoverImageName,
-        dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
+        dropbox_folder_url: savedSourceType === 'dropbox' ? albumDropboxUrl : null,
         isPublic: albumIsPublic,
         isListed: albumIsListed,
         lrSwappedDefault: albumLrSwappedDefault,
@@ -951,6 +898,7 @@ export default function EventAlbumManagement() {
           ? { title: 'Album saved' }
           : { title: 'Album saved', description: 'Visitors will be asked for the PIN. You see it without one while signed in.' },
       );
+      setSlugFollowsTitleFor(null);
       setGalleryData((prevData) => {
         const newAlbums = prevData.albums.map((album) =>
           album.id === selectedAlbum.id
@@ -959,9 +907,10 @@ export default function EventAlbumManagement() {
                 title: albumTitle,
                 description: albumDescription,
                 slug: albumSlug,
+                source_type: savedSourceType,
                 cover_photo_id: albumCoverPhotoId,
                 dropbox_cover_image_name: albumDropboxCoverImageName,
-                dropbox_folder_url: selectedAlbum.source_type === 'dropbox' ? albumDropboxUrl : null,
+                dropbox_folder_url: savedSourceType === 'dropbox' ? albumDropboxUrl : null,
                 is_public: albumIsPublic,
                 is_listed: albumIsListed,
                 lr_swapped_default: albumLrSwappedDefault,
@@ -1048,6 +997,7 @@ export default function EventAlbumManagement() {
           {
             title: albumTitle, description: albumDescription, slug: albumSlug,
             coverPhotoId: albumCoverPhotoId, dropboxCoverImageName: albumDropboxCoverImageName, dropboxUrl: albumDropboxUrl,
+            sourceType: albumSourceType,
             isPublic: albumIsPublic, isListed: albumIsListed, lrSwappedDefault: albumLrSwappedDefault, passwordDirty: albumPasswordDirty,
           },
           selectedAlbum,
@@ -1080,8 +1030,9 @@ export default function EventAlbumManagement() {
   };
   const saveCurrentLevel = (): Promise<boolean> =>
     albumId ? saveAlbum() : eventId ? saveEvent() : saveProfile();
+  const canSaveAlbum = !!albumTitle && !!albumSlug && !(albumSourceType === 'dropbox' && !albumDropboxUrl);
   const canSaveCurrentLevel = albumId
-    ? !!albumTitle && !!albumSlug
+    ? canSaveAlbum
     : eventId
       ? !!eventTitle && !!eventSlug && eventPrivacyValid
       : !!profileSlug && profilePrivacyValid;
@@ -1098,7 +1049,7 @@ export default function EventAlbumManagement() {
         {(preparation.total > preparation.done + preparation.failed || preparation.failed > 0) && (
           <p className="mt-1 inline-flex items-center gap-2 rounded-full bg-secondary px-3 py-1 text-xs text-muted-foreground">
             {preparation.paused ? (
-              <Crosshair className="h-3 w-3" />
+              <Pause className="h-3 w-3" />
             ) : (
               <Loader2 className="h-3 w-3 animate-spin" />
             )}
@@ -1343,24 +1294,7 @@ export default function EventAlbumManagement() {
             <div className="flex items-center justify-between gap-3">
               <h2 className="text-xl font-light">Albums</h2>
               <div className="flex flex-wrap items-center gap-2">
-                {eventAlbums.some((album) => album.source_type === 'upload' || album.import_state === 'imported') && (
-                  <Button
-                    variant="ghost"
-                    className="gap-2"
-                    onClick={() =>
-                      setAutoAlignScope({
-                        albumIds: eventAlbums
-                          .filter((album) => album.source_type === 'upload' || album.import_state === 'imported')
-                          .map((album) => album.id),
-                        label: `every album in ${selectedEvent.title}`,
-                      })
-                    }
-                  >
-                    <Crosshair className="h-4 w-4" />
-                    Auto-align
-                  </Button>
-                )}
-                <Button onClick={() => setIsAlbumDialogOpen(true)} variant="secondary" className="gap-2">
+                <Button onClick={handleAddAlbum} variant="secondary" className="gap-2" disabled={isSaving}>
                   <Plus className="h-4 w-4" />
                   Add Album
                 </Button>
@@ -1436,11 +1370,28 @@ export default function EventAlbumManagement() {
                 </button>
                 <div className="space-y-2">
                   <Label htmlFor="album-title">Name</Label>
-                  <Input id="album-title" value={albumTitle} onChange={(event) => setAlbumTitle(event.target.value)} />
+                  <Input
+                    id="album-title"
+                    value={albumTitle}
+                    onChange={(event) => {
+                      setAlbumTitle(event.target.value);
+                      if (slugFollowsTitleFor === selectedAlbum.id) setAlbumSlug(makeSlug(event.target.value));
+                    }}
+                    // A just-added album opens here named "New album": ready to type over.
+                    autoFocus={slugFollowsTitleFor === selectedAlbum.id}
+                    onFocus={slugFollowsTitleFor === selectedAlbum.id ? (event) => event.currentTarget.select() : undefined}
+                  />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="album-slug">Public URL slug</Label>
-                  <Input id="album-slug" value={albumSlug} onChange={(event) => setAlbumSlug(makeSlug(event.target.value))} />
+                  <Input
+                    id="album-slug"
+                    value={albumSlug}
+                    onChange={(event) => {
+                      setSlugFollowsTitleFor(null);
+                      setAlbumSlug(makeSlug(event.target.value));
+                    }}
+                  />
                 </div>
                 <div className="space-y-2 md:col-start-2">
                   <Label htmlFor="album-description">Description</Label>
@@ -1456,8 +1407,7 @@ export default function EventAlbumManagement() {
                   <div className="space-y-0.5">
                     <Label htmlFor="album-lr-swapped">Camera writes right-eye first - swap L/R for this album</Label>
                     <p className="text-xs text-muted-foreground">
-                      Every photo here is shown with the halves exchanged unless it has its own alignment
-                      saved in the viewer. Viewers can also flip any photo for themselves.
+                      Every photo in this album is shown with its left and right halves exchanged.
                     </p>
                   </div>
                 </div>
@@ -1465,7 +1415,26 @@ export default function EventAlbumManagement() {
                     URL has room, with the Import / Sync button beside it. The
                     button reads the SAVED folder URL; an edited-but-unsaved URL is
                     not what gets synced. */}
-                <div className={`space-y-2 md:col-span-2 md:col-start-2 ${selectedAlbum.source_type === 'dropbox' ? '' : 'hidden'}`}>
+                {canChangeAlbumSource && (
+                  <div className="space-y-2 md:col-span-2 md:col-start-2">
+                    <Label>Photo Source</Label>
+                    <RadioGroup
+                      value={albumSourceType}
+                      onValueChange={(value) => setAlbumSourceType(value as 'upload' | 'dropbox')}
+                      className="flex flex-wrap gap-4"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="upload" id="album-source-upload" />
+                        <Label htmlFor="album-source-upload">Direct Uploads</Label>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <RadioGroupItem value="dropbox" id="album-source-dropbox" />
+                        <Label htmlFor="album-source-dropbox">Dropbox Folder</Label>
+                      </div>
+                    </RadioGroup>
+                  </div>
+                )}
+                <div className={`space-y-2 md:col-span-2 md:col-start-2 ${albumSourceType === 'dropbox' ? '' : 'hidden'}`}>
                   <Label htmlFor="album-dropbox-url">Dropbox Folder URL</Label>
                   <div className="flex flex-wrap items-center gap-2">
                     <Input
@@ -1480,7 +1449,7 @@ export default function EventAlbumManagement() {
                       variant="secondary"
                       className="shrink-0 gap-2"
                       onClick={() => setIsSyncDialogOpen(true)}
-                      disabled={isSaving || !selectedAlbum.dropbox_folder_url}
+                      disabled={isSaving || selectedAlbum.source_type !== 'dropbox' || !selectedAlbum.dropbox_folder_url}
                     >
                       <RefreshCw className="h-4 w-4" />
                       {selectedAlbum.import_state === 'imported' ? 'Sync with Dropbox' : 'Import from Dropbox'}
@@ -1547,7 +1516,7 @@ export default function EventAlbumManagement() {
                     shareUrlStale={albumSlug !== selectedAlbum.slug}
                   />
                 </div>
-                {selectedAlbum.source_type === 'upload' && (
+                {albumSourceType === 'upload' && selectedAlbum.source_type === 'upload' && (
                   <div className="space-y-3 border-t pt-3 md:col-span-3">
                     <div>
                       <div className="flex items-center gap-2 text-sm font-medium">
@@ -1569,20 +1538,11 @@ export default function EventAlbumManagement() {
                         <ImagePlus className="h-4 w-4" />
                         Select and upload photos
                       </Button>
-                      <Button
-                        variant="ghost"
-                        className="gap-2"
-                        onClick={() => setAutoAlignScope({ albumIds: [selectedAlbum.id], label: selectedAlbum.title })}
-                        disabled={isSaving}
-                      >
-                        <Crosshair className="h-4 w-4" />
-                        Auto-align
-                      </Button>
                     </div>
                   </div>
                 )}
                 <div className="flex flex-wrap gap-2 md:col-span-2 md:col-start-1">
-                  <Button variant="secondary" onClick={saveAlbum} disabled={!albumTitle || !albumSlug || isSaving}>
+                  <Button variant="secondary" onClick={saveAlbum} disabled={!canSaveAlbum || isSaving}>
                     Save Album
                   </Button>
                 </div>
@@ -1681,24 +1641,6 @@ export default function EventAlbumManagement() {
                                 variant="secondary"
                                 size="icon"
                                 className="h-9 w-9"
-                                onClick={() => handleRealignPhoto(photo as GalleryPhoto)}
-                                disabled={isSaving || realigningPhotoId !== null}
-                                title={
-                                  (photo as GalleryPhoto).alignVersion == null
-                                    ? 'Re-align: measure and save the L/R alignment (not measured yet)'
-                                    : `Re-align: measure again (currently vertical ${(photo as GalleryPhoto).alignment?.dy ?? 0} px, horizontal ${(photo as GalleryPhoto).alignment?.dx ?? 0} px${(photo as GalleryPhoto).alignVersion === 0 ? ', set by hand' : ''})`
-                                }
-                              >
-                                {realigningPhotoId === photo.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Crosshair className="h-4 w-4" />
-                                )}
-                              </Button>
-                              <Button
-                                variant="secondary"
-                                size="icon"
-                                className="h-9 w-9"
                                 onClick={() => setDeletingPhoto(photo)}
                                 disabled={isSaving}
                                 title="Delete Photo"
@@ -1751,7 +1693,6 @@ export default function EventAlbumManagement() {
           albumTitle={selectedAlbum.title}
           eventId={selectedAlbumEvent.id}
           ownerId={selectedAlbumEvent.owner_id}
-          albumSwappedDefault={selectedAlbum.lr_swapped_default ?? false}
           onUploaded={loadData}
         />
       )}
@@ -1763,19 +1704,6 @@ export default function EventAlbumManagement() {
           albumId={selectedAlbum.id}
           albumTitle={selectedAlbum.title}
           onSynced={loadData}
-        />
-      )}
-
-      {autoAlignScope && (
-        <AutoAlignDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setAutoAlignScope(null);
-          }}
-          albumIds={autoAlignScope.albumIds}
-          scopeLabel={autoAlignScope.label}
-          albumSwapDefaults={Object.fromEntries(galleryData.albums.map((album) => [album.id, !!album.lr_swapped_default]))}
-          onAligned={loadData}
         />
       )}
 
@@ -1948,76 +1876,6 @@ export default function EventAlbumManagement() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isAlbumDialogOpen} onOpenChange={setIsAlbumDialogOpen}>
-        <DialogContent>
-          <form onSubmit={handleCreateAlbum} className="space-y-4">
-            <DialogHeader>
-              <DialogTitle>Add Album</DialogTitle>
-              <DialogDescription>Create an album inside this event.</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-2">
-              <Label htmlFor="new-album-title">Name</Label>
-              <Input
-                id="new-album-title"
-                value={newAlbumTitle}
-                onChange={(event) => {
-                  setNewAlbumTitle(event.target.value);
-                  if (!newAlbumSlugTouched) setNewAlbumSlug(makeSlug(event.target.value));
-                }}
-                autoFocus
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="new-album-slug">Public URL slug</Label>
-              <Input
-                id="new-album-slug"
-                value={newAlbumSlug}
-                onChange={(event) => {
-                  setNewAlbumSlugTouched(true);
-                  setNewAlbumSlug(makeSlug(event.target.value));
-                }}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="new-album-description">Description</Label>
-              <Textarea id="new-album-description" value={newAlbumDescription} onChange={(event) => setNewAlbumDescription(event.target.value)} />
-            </div>
-            <div className="space-y-3 rounded-md border p-3">
-              <Label>Photo Source</Label>
-              <RadioGroup value={newAlbumSourceType} onValueChange={(value) => setNewAlbumSourceType(value as 'upload' | 'dropbox')}>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="upload" id="source-upload" />
-                  <Label htmlFor="source-upload">Direct Uploads</Label>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <RadioGroupItem value="dropbox" id="source-dropbox" />
-                  <Label htmlFor="source-dropbox">Dropbox Folder</Label>
-                </div>
-              </RadioGroup>
-              {newAlbumSourceType === 'dropbox' && (
-                <div className="space-y-2 pl-2 pt-2">
-                  <Label htmlFor="new-album-dropbox-url">Dropbox Folder URL</Label>
-                  <Input
-                    id="new-album-dropbox-url"
-                    value={newAlbumDropboxUrl}
-                    onChange={(e) => setNewAlbumDropboxUrl(e.target.value)}
-                    placeholder="Paste a public Dropbox folder link"
-                  />
-                </div>
-              )}
-            </div>
-            <DialogFooter>
-              <Button
-                type="submit"
-                variant="secondary"
-                disabled={!newAlbumTitle || isSaving || (newAlbumSourceType === 'dropbox' && !newAlbumDropboxUrl)}
-              >
-                Create Album
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
