@@ -51,6 +51,7 @@ import DropboxSyncDialog from '@/components/DropboxSyncDialog';
 import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
 import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges, type ProfileSaved } from '@/lib/unsavedChanges';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
+import { isUnnamedNewAlbum, NEW_ALBUM_TITLE } from '@/lib/newAlbum';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -145,10 +146,11 @@ export default function EventAlbumManagement() {
   const [eventCoverPhotoId, setEventCoverPhotoId] = useState<string | null>(null);
   const [eventDropboxCoverAlbumId, setEventDropboxCoverAlbumId] = useState<string | null>(null);
   const [eventDropboxCoverImageName, setEventDropboxCoverImageName] = useState<string | null>(null);
-  // Add Album creates the album at once and opens its settings. Until that
-  // album is first saved (or its slug edited), the slug follows the name, as
-  // the old create popup did; an existing album's URL never moves on rename.
-  const [slugFollowsTitleFor, setSlugFollowsTitleFor] = useState<string | null>(null);
+  // Add Album creates the album at once and opens its settings with Name and
+  // slug blank (see isUnnamedNewAlbum). Until it is saved with a name, the
+  // slug follows the name unless edited by hand; an existing album's URL never
+  // moves on rename.
+  const [slugEditedFor, setSlugEditedFor] = useState<string | null>(null);
   const [albumSourceType, setAlbumSourceType] = useState<'upload' | 'dropbox'>('upload');
   const [albumTitle, setAlbumTitle] = useState('');
   const [albumDescription, setAlbumDescription] = useState('');
@@ -426,6 +428,8 @@ export default function EventAlbumManagement() {
   }, [galleryData.photos]);
 
   const albumPhotos = selectedAlbum ? photosByAlbum[selectedAlbum.id] ?? [] : [];
+  const albumUnnamed = !!selectedAlbum && isUnnamedNewAlbum(selectedAlbum);
+  const slugFollowsTitle = albumUnnamed && slugEditedFor !== selectedAlbum?.id;
   // Photo source is chosen while the album is still empty: no uploaded photos,
   // and not a Dropbox folder that is linked or imported (a live Dropbox album
   // has no photo rows, so "no rows" alone would not mean empty).
@@ -661,9 +665,10 @@ export default function EventAlbumManagement() {
 
   useEffect(() => {
     if (!selectedAlbum) return;
-    setAlbumTitle(selectedAlbum.title);
+    const unnamed = isUnnamedNewAlbum(selectedAlbum);
+    setAlbumTitle(unnamed ? '' : selectedAlbum.title);
     setAlbumDescription(selectedAlbum.description ?? '');
-    setAlbumSlug(selectedAlbum.slug);
+    setAlbumSlug(unnamed ? '' : selectedAlbum.slug);
     setAlbumCoverPhotoId(selectedAlbum.cover_photo_id);
     setAlbumDropboxCoverImageName(selectedAlbum.dropbox_cover_image_name);
     setAlbumDropboxUrl(selectedAlbum.dropbox_folder_url ?? '');
@@ -855,9 +860,8 @@ export default function EventAlbumManagement() {
     if (!selectedEvent) return;
     setIsSaving(true);
     try {
-      const album = await createAlbum({ eventId: selectedEvent.id, title: 'New album' });
+      const album = await createAlbum({ eventId: selectedEvent.id, title: NEW_ALBUM_TITLE });
       setGalleryData((prevData) => ({ ...prevData, albums: [...prevData.albums, album] }));
-      setSlugFollowsTitleFor(album.id);
       const to = `/manage/events/${selectedEvent.id}/albums/${album.id}`;
       // The event form may hold edits; the album exists either way.
       if (hasUnsavedChanges) setPendingLeave(to);
@@ -898,7 +902,6 @@ export default function EventAlbumManagement() {
           ? { title: 'Album saved' }
           : { title: 'Album saved', description: 'Visitors will be asked for the PIN. You see it without one while signed in.' },
       );
-      setSlugFollowsTitleFor(null);
       setGalleryData((prevData) => {
         const newAlbums = prevData.albums.map((album) =>
           album.id === selectedAlbum.id
@@ -1000,7 +1003,8 @@ export default function EventAlbumManagement() {
             sourceType: albumSourceType,
             isPublic: albumIsPublic, isListed: albumIsListed, lrSwappedDefault: albumLrSwappedDefault, passwordDirty: albumPasswordDirty,
           },
-          selectedAlbum,
+          // An unnamed new album's form is blank by design; that is not an edit.
+          isUnnamedNewAlbum(selectedAlbum) ? { ...selectedAlbum, title: '', slug: '' } : selectedAlbum,
         )
       : eventId && selectedEvent
         ? eventHasUnsavedChanges(
@@ -1375,11 +1379,10 @@ export default function EventAlbumManagement() {
                     value={albumTitle}
                     onChange={(event) => {
                       setAlbumTitle(event.target.value);
-                      if (slugFollowsTitleFor === selectedAlbum.id) setAlbumSlug(makeSlug(event.target.value));
+                      if (slugFollowsTitle) setAlbumSlug(makeSlug(event.target.value));
                     }}
-                    // A just-added album opens here named "New album": ready to type over.
-                    autoFocus={slugFollowsTitleFor === selectedAlbum.id}
-                    onFocus={slugFollowsTitleFor === selectedAlbum.id ? (event) => event.currentTarget.select() : undefined}
+                    placeholder="Album name"
+                    autoFocus={albumUnnamed}
                   />
                 </div>
                 <div className="space-y-2">
@@ -1388,9 +1391,10 @@ export default function EventAlbumManagement() {
                     id="album-slug"
                     value={albumSlug}
                     onChange={(event) => {
-                      setSlugFollowsTitleFor(null);
+                      setSlugEditedFor(selectedAlbum.id);
                       setAlbumSlug(makeSlug(event.target.value));
                     }}
+                    placeholder={albumUnnamed ? 'Filled in from the name' : undefined}
                   />
                 </div>
                 <div className="space-y-2 md:col-start-2">
