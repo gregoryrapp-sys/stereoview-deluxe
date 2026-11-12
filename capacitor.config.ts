@@ -2,7 +2,7 @@ import { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.gregoryrapp.stereoview',
-  appName: 'StereoView Deluxe',
+  appName: 'Stereoscopic Viewer',
   webDir: 'dist',
   bundledWebRuntime: false,
 };

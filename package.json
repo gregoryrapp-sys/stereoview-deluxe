@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "capacitor:init": "npx @capacitor/cli@latest init \"StereoView Deluxe\" com.gregoryrapp.stereoview --webDir=dist",
+    "capacitor:init": "npx @capacitor/cli@latest init \"Stereoscopic Viewer\" com.gregoryrapp.stereoview --webDir=dist",
     "capacitor:add-android": "npx cap add android",
     "capacitor:add-ios": "npx cap add ios",
     "capacitor:copy": "npx cap copy",

@@ -1,6 +1,6 @@
 {
-  "name": "StereoView Deluxe",
-  "short_name": "StereoView",
+  "name": "Stereoscopic Viewer",
+  "short_name": "Stereo Viewer",
   "description": "A stereoscopic photo viewer for VR headsets and 3D viewing devices",
   "start_url": "/",
   "display": "fullscreen",
