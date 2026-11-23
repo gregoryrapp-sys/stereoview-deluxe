@@ -28,6 +28,8 @@ const EDGE_FLICK_VELOCITY = 0.6;
 // gets read as a double tap, zooming in and killing all further swipes.
 const TAP_MAX_MOVEMENT = 10;
 const TAP_MAX_DURATION = 250;
+/** Portrait: a downward drag this long closes the viewer (when not zoomed). */
+const SWIPE_DOWN_DISTANCE = 100;
 
 /** Touches that start on a viewer control are the control's, not the photo's. */
 export function isViewerControl(target: EventTarget | null): boolean {
@@ -50,8 +52,18 @@ export function useStereoGestures(
      * refused taps while zoomed in.
      */
     onTap?: () => void;
+    /**
+     * One eye fills the whole container (portrait 2D) rather than half of it
+     * (stereo). Pan limits and the edge flick are measured against the eye.
+     */
+    singleEye?: boolean;
+    /** A downward swipe at normal size (portrait closes the viewer with it). */
+    onSwipeDown?: () => void;
   } = {},
 ) {
+  const eyeWidth = options.singleEye ? containerWidth : containerWidth / 2;
+  const onSwipeDownRef = useRef(options.onSwipeDown);
+  onSwipeDownRef.current = options.onSwipeDown;
   const [state, setState] = useState<GestureState>({
     scale: DEFAULT_SCALE,
     translateX: 0,
@@ -80,17 +92,16 @@ export function useStereoGestures(
       return { x: 0, y: 0 };
     }
 
-    // Calculate max pan based on zoom level
-    // Each half of the image is containerWidth/2 wide
-    const halfWidth = containerWidth / 2;
-    const maxPanX = (halfWidth * (scale - 1)) / 2;
+    // Calculate max pan based on zoom level: the eye is half the container
+    // in stereo, all of it in portrait 2D.
+    const maxPanX = (eyeWidth * (scale - 1)) / 2;
     const maxPanY = (containerHeight * (scale - 1)) / 2;
 
     return {
       x: Math.max(-maxPanX, Math.min(maxPanX, x)),
       y: Math.max(-maxPanY, Math.min(maxPanY, y)),
     };
-  }, [containerWidth, containerHeight]);
+  }, [eyeWidth, containerHeight]);
 
   const getDistance = (touches: React.TouchList): number => {
     const t1 = touches[0];
@@ -223,7 +234,7 @@ export function useStereoGestures(
         // starts with the photo already panned to its edge in that direction
         // (the Photos-app convention), so panning around never changes photo.
         const startScale = panAtStartRef.current.scale;
-        const maxPanX = ((containerWidth / 2) * (startScale - 1)) / 2;
+        const maxPanX = (eyeWidth * (startScale - 1)) / 2;
         const pinnedForLeft = panAtStartRef.current.x <= -maxPanX + 1;
         const pinnedForRight = panAtStartRef.current.x >= maxPanX - 1;
         const edgeFlick =
@@ -241,6 +252,16 @@ export function useStereoGestures(
           } else {
             onSwipeLeft();
           }
+        } else if (
+          onSwipeDownRef.current &&
+          isZoomedOut &&
+          !startedOnControlRef.current &&
+          !multiTouchRef.current &&
+          deltaY > SWIPE_DOWN_DISTANCE &&
+          Math.abs(deltaY) > Math.abs(deltaX)
+        ) {
+          didSwipe = true;
+          onSwipeDownRef.current();
         }
       }
 
@@ -286,7 +307,7 @@ export function useStereoGestures(
       const touch = e.touches[0];
       lastTouchRef.current = { x: touch.clientX, y: touch.clientY };
     }
-  }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta, containerWidth]);
+  }, [state.scale, onSwipeLeft, onSwipeRight, transformDelta, eyeWidth]);
 
   // The browser can steal a gesture mid-swipe (Android's edge-back gesture,
   // pull-to-refresh, an incoming call). touchend never fires in that case, so

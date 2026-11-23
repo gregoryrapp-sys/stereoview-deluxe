@@ -159,3 +159,57 @@ describe('useStereoGestures: navigating while zoomed', () => {
     expect(onRight).not.toHaveBeenCalled();
   });
 });
+
+describe('useStereoGestures in portrait (one eye fills the screen)', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function setupPortrait(singleEye: boolean) {
+    const onSwipeDown = vi.fn();
+    const hook = renderHook(() =>
+      useStereoGestures(vi.fn(), vi.fn(), 400, 800, false, { onTap: vi.fn(), singleEye, onSwipeDown }),
+    );
+    const g = () => hook.result.current;
+    const doubleTap = () => {
+      for (const gap of [100, 0]) {
+        const p = { x: 200, y: 400 };
+        act(() => g().handleTouchStart(ev([p])));
+        act(() => vi.advanceTimersByTime(40));
+        act(() => g().handleTouchEnd(ev([], [p])));
+        act(() => vi.advanceTimersByTime(gap));
+      }
+    };
+    const drag = (from: Pt, to: Pt) => {
+      act(() => g().handleTouchStart(ev([from])));
+      act(() => g().handleTouchMove(ev([to])));
+      act(() => vi.advanceTimersByTime(400));
+      act(() => g().handleTouchEnd(ev([], [to])));
+    };
+    return { g, doubleTap, drag, onSwipeDown };
+  }
+
+  it('pans across the whole eye, not half of it', () => {
+    const portrait = setupPortrait(true);
+    portrait.doubleTap();
+    expect(portrait.g().scale).toBe(2.5);
+    portrait.drag({ x: 50, y: 400 }, { x: 390, y: 400 });
+    // One eye 400 px wide at 2.5x can move (400 * 1.5) / 2 = 300 px.
+    expect(portrait.g().translateX).toBe(300);
+
+    const stereo = setupPortrait(false);
+    stereo.doubleTap();
+    stereo.drag({ x: 50, y: 400 }, { x: 390, y: 400 });
+    expect(stereo.g().translateX).toBe(150);
+  });
+
+  it('a downward swipe closes at normal size, but pans when zoomed', () => {
+    const { doubleTap, drag, onSwipeDown, g } = setupPortrait(true);
+    drag({ x: 200, y: 200 }, { x: 205, y: 450 });
+    expect(onSwipeDown).toHaveBeenCalledTimes(1);
+
+    doubleTap();
+    drag({ x: 200, y: 200 }, { x: 205, y: 450 });
+    expect(onSwipeDown).toHaveBeenCalledTimes(1);
+    expect(g().translateY).toBeGreaterThan(0);
+  });
+});

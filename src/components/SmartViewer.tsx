@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react';
 import type { Photo } from '@/data/photos';
-import { isViewerControl, useStereoGestures } from '@/hooks/useStereoGestures';
+import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
 import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
@@ -131,55 +131,6 @@ export default function SmartViewer({
     setShowControls((current) => !current);
   }, []);
 
-  // --- 2D Viewer Logic ---
-  const touchStartX_2d = useRef(0);
-  const touchStartY_2d = useRef(0);
-
-  const touchStartAt_2d = useRef(0);
-  const startedOnControl_2d = useRef(false);
-  const multiTouch_2d = useRef(false);
-
-  const handleTouchStart_2d = (event: React.TouchEvent) => {
-    if (event.touches.length > 1) {
-      multiTouch_2d.current = true;
-      return;
-    }
-    multiTouch_2d.current = false;
-    startedOnControl_2d.current = isViewerControl(event.target);
-    touchStartX_2d.current = event.touches[0].clientX;
-    touchStartY_2d.current = event.touches[0].clientY;
-    touchStartAt_2d.current = Date.now();
-  };
-
-  const handleTouchEnd_2d = (event: React.TouchEvent) => {
-    if (event.touches.length > 0) return; // a finger is still down
-    // The control's own click does the work; a multi-finger touch is not a
-    // tap or a swipe.
-    if (startedOnControl_2d.current || multiTouch_2d.current) return;
-    const touchEndX = event.changedTouches[0].clientX;
-    const touchEndY = event.changedTouches[0].clientY;
-    const deltaX = touchEndX - touchStartX_2d.current;
-    const deltaY = touchEndY - touchStartY_2d.current;
-    const threshold = 50;
-
-    // A short, still touch is a tap: toggle the controls from the touch
-    // path itself, anywhere in the viewer, instead of hoping the browser
-    // synthesizes a click (iOS does not always, on the letterbox area).
-    if (Math.hypot(deltaX, deltaY) < 10 && Date.now() - touchStartAt_2d.current < 300) {
-      toggleControlsFromTouch();
-      return;
-    }
-
-    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > threshold) {
-      if (deltaX < 0 && hasNext) onNext();
-      else if (deltaX > 0 && hasPrevious) onPrevious();
-    }
-
-    if (deltaY > 100 && Math.abs(deltaY) > Math.abs(deltaX)) {
-      onClose();
-    }
-  };
-
   // iOS Safari treats a horizontal drag it is allowed to scroll as its own
   // (page scroll, back gesture) and cancels the touch, so the swipe never
   // ends in our handler. React registers touchmove as passive, where
@@ -197,11 +148,6 @@ export default function SmartViewer({
     el.addEventListener('touchmove', keep, { passive: false });
     return () => el.removeEventListener('touchmove', keep);
   }, [mode]);
-
-  const handleTouchCancel_2d = () => {
-    multiTouch_2d.current = false;
-    startedOnControl_2d.current = false;
-  };
 
   // --- Stereo Viewer Logic ---
   useEffect(() => {
@@ -238,11 +184,21 @@ export default function SmartViewer({
     resetTransform,
   } = useStereoGestures(handleSwipeLeft, handleSwipeRight, containerSize.width, containerSize.height, false, {
     onTap: toggleControlsFromTouch,
+    // Portrait shows one eye across the whole screen, and a downward swipe
+    // (at normal size) closes the viewer, as it always has there.
+    singleEye: mode === '2d',
+    onSwipeDown: mode === '2d' ? onClose : undefined,
   });
+
+  // Rotating between portrait and landscape changes what one eye is; start
+  // the new layout unzoomed rather than carry a pan that no longer fits.
+  useEffect(() => {
+    resetTransform();
+  }, [mode, resetTransform]);
 
   // Pinched past the fit tier's headroom: ask for eyes at (up to) source
   // resolution. The fit tier stays on screen until the sharper one arrives.
-  const tier: EyeTier = mode === 'stereo' && scale >= ZOOM_TIER_MIN_SCALE ? 'zoom' : 'fit';
+  const tier: EyeTier = scale >= ZOOM_TIER_MIN_SCALE ? 'zoom' : 'fit';
   const { leftUrl, rightUrl, isLoading: imageLoading, error: imageError, dimensions } = useProcessedImage(isVideo ? null : photo, album, {
     eyes,
     alignment: storedAlignment,
@@ -622,6 +578,12 @@ export default function SmartViewer({
     </div>
   );
 
+  const zoomBadge = Math.abs(scale - 1) > 0.01 && (
+    <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
+      {Math.round(scale * 100)}%
+    </div>
+  );
+
   // --- Render Logic ---
   if (mode === '2d') {
     return (
@@ -629,15 +591,16 @@ export default function SmartViewer({
         ref={containerRef}
         className="viewer-container flex h-full w-full items-center justify-center bg-black"
         onPointerMove={handleMouseActivity}
-        onTouchCancel={handleTouchCancel_2d}
         onTouchStartCapture={markTouch}
         onTouchEndCapture={markTouch}
-        onTouchStart={handleTouchStart_2d}
-        onTouchEnd={handleTouchEnd_2d}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
         onClick={handleContainerClick}
       >
         <div className="flex h-full w-full items-center justify-center overflow-hidden">
-          {renderEye('left', leftUrl, 'none', 'auto')}
+          {renderEye('left', leftUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
         </div>
         {videoElement}
         {loadingIndicator}
@@ -646,6 +609,7 @@ export default function SmartViewer({
         {shareButton}
         {videoControls}
         {navButtons}
+        {zoomBadge}
       </div>
     );
   }
@@ -679,11 +643,7 @@ export default function SmartViewer({
       {shareButton}
       {videoControls}
       {navButtons}
-      {Math.abs(scale - 1) > 0.01 && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
-          {Math.round(scale * 100)}%
-        </div>
-      )}
+      {zoomBadge}
     </div>
   );
 }
