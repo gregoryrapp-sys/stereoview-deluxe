@@ -70,6 +70,19 @@ describe('useStereoGestures taps', () => {
     expect(onTap).not.toHaveBeenCalled();
   });
 
+  it('dragging a control sideways (the video seek slider) does not change photo', () => {
+    const { g, onTap, onLeft, onRight } = setup();
+    const start = { x: 900, y: 700 }, end = { x: 600, y: 705 };
+    act(() => g().handleTouchStart(ev([start], [start], control)));
+    act(() => g().handleTouchMove(ev([end], [end], control)));
+    act(() => vi.advanceTimersByTime(150));
+    act(() => g().handleTouchEnd(ev([], [end], control)));
+    act(() => vi.advanceTimersByTime(400));
+    expect(onLeft).not.toHaveBeenCalled();
+    expect(onRight).not.toHaveBeenCalled();
+    expect(onTap).not.toHaveBeenCalled();
+  });
+
   it('a swipe navigates and is not a tap', () => {
     const { g, onTap, onLeft } = setup();
     const start = { x: 900, y: 400 }, end = { x: 600, y: 410 };

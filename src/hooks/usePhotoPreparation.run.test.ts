@@ -10,7 +10,11 @@ vi.mock('@/services/galleryService', () => ({
   signedOriginalUrl: async (path: string) => `https://example.test/${path}`,
   uploadThumbnail: async () => 'thumb.webp',
 }));
-vi.mock('@/lib/makeThumbnail', () => ({ makeSbsThumbnail: async () => ({ blob: new Blob(['t']), extension: 'webp', width: 1, height: 1 }) }));
+const videoPoster = vi.fn(async () => ({ blob: new Blob(['t']), extension: 'webp', width: 1, height: 1 }));
+vi.mock('@/lib/makeThumbnail', () => ({
+  makeSbsThumbnail: async () => ({ blob: new Blob(['t']), extension: 'webp', width: 1, height: 1 }),
+  makeSbsVideoThumbnail: (...a: unknown[]) => videoPoster(...(a as [])),
+}));
 
 const album = { id: 'a', source_type: 'upload', import_state: null, lr_swapped_default: false } as unknown as AlbumRecord;
 const photo = (id: string, over: Partial<GalleryPhoto> = {}) =>
@@ -33,6 +37,17 @@ describe('usePhotoPreparation run', () => {
     expect(fetches).toBe(2);
     expect(finish).toHaveBeenCalledWith({ storagePath: 'p/t1.jpg', thumbPath: 'thumb.webp' });
     expect(onPrepared).toHaveBeenCalledWith('t2', { thumbPath: 'thumb.webp' });
+  });
+
+  it('makes a video poster from its URL without downloading the video', async () => {
+    videoPoster.mockClear();
+    const { result } = renderHook(() =>
+      usePhotoPreparation([photo('v1', { storagePath: 'p/v1.mp4', thumbPath: undefined })], [album], { enabled: true, onPrepared: () => {} }),
+    );
+    await waitFor(() => expect(result.current.done).toBe(1));
+    expect(fetches).toBe(0);
+    expect(videoPoster).toHaveBeenCalledWith('https://example.test/p/v1.mp4');
+    expect(finish).toHaveBeenCalledWith({ storagePath: 'p/v1.mp4', thumbPath: 'thumb.webp' });
   });
 
   it('does nothing at all when every photo has a thumbnail', async () => {

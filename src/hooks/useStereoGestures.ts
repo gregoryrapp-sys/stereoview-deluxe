@@ -156,7 +156,8 @@ export function useStereoGestures(
           translateY: clamped.y,
         };
       });
-    } else if (e.touches.length === 1 && lastTouchRef.current && !isPinchingRef.current) {
+    } else if (e.touches.length === 1 && lastTouchRef.current && !isPinchingRef.current && !startedOnControlRef.current) {
+      // A drag that started on a control (e.g. the video's seek slider) belongs to it.
       const touch = e.touches[0];
       const rawDeltaX = touch.clientX - lastTouchRef.current.x;
       const rawDeltaY = touch.clientY - lastTouchRef.current.y;
@@ -232,7 +233,8 @@ export function useStereoGestures(
           velocity > EDGE_FLICK_VELOCITY &&
           (deltaX < 0 ? pinnedForLeft : pinnedForRight);
 
-        if ((isZoomedOut && isHorizontal && farEnough && fastOrFarEnough) || edgeFlick) {
+        // Dragging a control (the video's seek slider) is never a swipe.
+        if (!startedOnControlRef.current && ((isZoomedOut && isHorizontal && farEnough && fastOrFarEnough) || edgeFlick)) {
           didSwipe = true;
           if (deltaX > 0) {
             onSwipeRight();

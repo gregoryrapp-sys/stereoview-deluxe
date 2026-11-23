@@ -19,6 +19,10 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
 
 export const PHOTOS_BUCKET = 'photos';
 
+/** For requests the client library cannot make with progress events (large video uploads). */
+export const SUPABASE_URL: string = supabaseUrl;
+export const SUPABASE_KEY: string = supabaseKey;
+
 /**
  * Edge functions run wherever the caller is unless told otherwise, while the
  * database lives in East US. The gallery function alone makes six sequential

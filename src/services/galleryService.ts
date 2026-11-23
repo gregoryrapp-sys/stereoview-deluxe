@@ -1,9 +1,10 @@
 import type { Photo } from '@/data/photos';
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { FUNCTIONS_REGION, PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { FUNCTIONS_REGION, PHOTOS_BUCKET, SUPABASE_KEY, SUPABASE_URL, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
 import { type PhotoFiles, unusedObjects } from '@/lib/photoFiles';
-import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
+import { makeSbsThumbnail, makeSbsVideoThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
+import { videoContentType } from '@/lib/media';
 import { albumAlignment, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
   AlbumRecord,
@@ -838,6 +839,115 @@ export async function uploadSbsPhoto({
   });
 
   if (insertResult.error) {
+    throw insertResult.error;
+  }
+}
+
+/**
+ * Uploads a large file straight to Storage's REST endpoint - the same request
+ * the client library makes - but through XMLHttpRequest, which reports upload
+ * progress. A 600 MB video otherwise shows a spinner for minutes with no sign
+ * of life. Refusals come back with Storage's reason in plain words.
+ */
+function uploadLargeObject(
+  storagePath: string,
+  file: File,
+  contentType: string,
+  accessToken: string,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  const encodedPath = storagePath.split('/').map(encodeURIComponent).join('/');
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${PHOTOS_BUCKET}/${encodedPath}`);
+    xhr.setRequestHeader('authorization', `Bearer ${accessToken}`);
+    xhr.setRequestHeader('apikey', SUPABASE_KEY);
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.setRequestHeader('cache-control', `max-age=${PHOTO_CACHE_CONTROL_SECONDS}`);
+    xhr.setRequestHeader('content-type', contentType);
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+        return;
+      }
+      let message = xhr.responseText;
+      try {
+        message = JSON.parse(xhr.responseText).message ?? message;
+      } catch {
+        // Not JSON; keep the raw text.
+      }
+      if (xhr.status === 413 || /maximum allowed size|too large/i.test(message)) {
+        reject(new Error(`The video is larger than Storage accepts (${(file.size / 1024 / 1024).toFixed(0)} MB). Raise the upload size limit in Supabase.`));
+      } else if (/mime type/i.test(message)) {
+        reject(new Error('Storage does not accept videos yet. The database update for videos needs to be applied.'));
+      } else {
+        reject(new Error(`Upload failed (HTTP ${xhr.status}): ${message || 'no details'}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Upload interrupted. Check the connection and retry.'));
+    xhr.send(file);
+  });
+}
+
+/** Grid poster for a video; never throws (a video without one shows a placeholder tile). */
+async function tryMakeVideoThumbnail(file: File): Promise<SbsThumbnail | null> {
+  try {
+    return await makeSbsVideoThumbnail(file);
+  } catch (error) {
+    console.warn('Video poster could not be made; the grid will show a placeholder.', error);
+    return null;
+  }
+}
+
+/**
+ * A side-by-side video, stored like a photo: the original as-is (no
+ * re-encoding), a poster frame as its thumbnail, one photos row. `onProgress`
+ * reports the upload of the video itself, 0 to 1.
+ */
+export async function uploadSbsVideo({
+  albumId,
+  eventId,
+  ownerId,
+  file,
+  alt,
+  onProgress,
+}: {
+  albumId: string;
+  eventId: string;
+  ownerId: string;
+  file: File;
+  alt: string;
+  onProgress?: (fraction: number) => void;
+}): Promise<void> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const accessToken = sessionData.session?.access_token;
+  if (!accessToken) throw new Error('Sign in again to upload.');
+
+  const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-video');
+  const photoId = crypto.randomUUID();
+  const extension = getFileExtension(file.name) || 'mp4';
+  const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId, extension);
+  const thumb = await tryMakeVideoThumbnail(file);
+
+  await uploadLargeObject(storagePath, file, videoContentType(file), accessToken, onProgress);
+
+  const thumbPath = await uploadThumbnailSoft(storagePath, thumb);
+
+  const insertResult = await supabase.from('photos').insert({
+    id: photoId,
+    album_id: albumId,
+    storage_path: storagePath,
+    thumb_path: thumbPath,
+    alt: baseName,
+    file_modified_at: getFileModifiedIso(file),
+  });
+
+  if (insertResult.error) {
+    // Do not leave hundreds of megabytes behind with no row pointing at them.
+    await supabase.storage.from(PHOTOS_BUCKET).remove(thumbPath ? [storagePath, thumbPath] : [storagePath]);
     throw insertResult.error;
   }
 }

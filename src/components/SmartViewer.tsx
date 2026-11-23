@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Loader2, X, Share2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { isViewerControl, useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { type EyeTier, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import type { GalleryPhoto } from '@/services/galleryService';
+import { formatDuration, isVideoPhoto } from '@/lib/media';
+import { useSbsVideo } from '@/hooks/useSbsVideo';
 import type { AlbumRecord } from '@/types/database';
 
 interface SmartViewerProps {
@@ -64,6 +66,9 @@ export default function SmartViewer({
   // right-eye first. There is no per-photo alignment.
   const storedAlignment = resolveAlignment(photo);
   const galleryPhoto = photo as GalleryPhoto;
+  // A side-by-side video plays into the same two eye stages a photo is split
+  // into (see useSbsVideo), so zoom, pan and swipe behave identically.
+  const isVideo = isVideoPhoto(galleryPhoto);
 
   // --- Common Hooks ---
   // 2D mode renders the left eye only, so the right one is never worth decoding
@@ -78,7 +83,9 @@ export default function SmartViewer({
     return result;
   }, [photoIndex, photos]);
 
-  usePreloadImages(adjacentPhotos, album, { eyes });
+  // Neighbouring videos are not preloaded: they stream when opened.
+  const adjacentStills = useMemo(() => adjacentPhotos.filter((item) => !isVideoPhoto(item as GalleryPhoto)), [adjacentPhotos]);
+  usePreloadImages(adjacentStills, album, { eyes });
 
   // --- Mode Switching Logic ---
   useEffect(() => {
@@ -183,6 +190,8 @@ export default function SmartViewer({
     const el = containerRef.current;
     if (!el) return;
     const keep = (event: TouchEvent) => {
+      // A range input (the video's seek slider) needs the browser's own drag.
+      if (event.target instanceof HTMLInputElement && event.target.type === 'range') return;
       if (event.cancelable) event.preventDefault();
     };
     el.addEventListener('touchmove', keep, { passive: false });
@@ -234,11 +243,15 @@ export default function SmartViewer({
   // Pinched past the fit tier's headroom: ask for eyes at (up to) source
   // resolution. The fit tier stays on screen until the sharper one arrives.
   const tier: EyeTier = mode === 'stereo' && scale >= ZOOM_TIER_MIN_SCALE ? 'zoom' : 'fit';
-  const { leftUrl, rightUrl, isLoading, error, dimensions } = useProcessedImage(photo, album, {
+  const { leftUrl, rightUrl, isLoading: imageLoading, error: imageError, dimensions } = useProcessedImage(isVideo ? null : photo, album, {
     eyes,
     alignment: storedAlignment,
     tier,
   });
+  const video = useSbsVideo({ src: isVideo ? photo.src : null, swapped: storedAlignment.swapped });
+  const { togglePlay: toggleVideoPlay, toggleMute: toggleVideoMute } = video;
+  const isLoading = isVideo ? !video.ready && !video.error : imageLoading;
+  const error = isVideo ? video.error : imageError;
 
   useEffect(() => {
     resetTransform();
@@ -274,6 +287,10 @@ export default function SmartViewer({
         if (hasNext) onNext();
       } else if (event.key === 'Escape') {
         onClose();
+      } else if (isVideo && (event.key === ' ' || event.key === 'k')) {
+        toggleVideoPlay();
+      } else if (isVideo && event.key === 'm') {
+        toggleVideoMute();
       } else {
         return;
       }
@@ -283,7 +300,7 @@ export default function SmartViewer({
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [hasPrevious, hasNext, onPrevious, onNext, onClose]);
+  }, [hasPrevious, hasNext, onPrevious, onNext, onClose, isVideo, toggleVideoPlay, toggleVideoMute]);
 
   // One stage for both the placeholder and the sharp eyes. Until the split
   // result exists, the eye's shape comes from the grid thumbnail (half its
@@ -292,7 +309,7 @@ export default function SmartViewer({
   // alignment crop changes the final shape by a pixel or two at most.
   const thumbSrc = galleryPhoto.thumbSrc;
   const thumbSize = useNaturalImageSize(thumbSrc);
-  const eyeSource = dimensions ?? (thumbSize ? eyeSizeFromThumb(thumbSize.width, thumbSize.height) : null);
+  const eyeSource = (isVideo ? video.eyeSize : dimensions) ?? (thumbSize ? eyeSizeFromThumb(thumbSize.width, thumbSize.height) : null);
   const viewport = eyeViewport(mode, containerSize.width, containerSize.height);
   const stage = eyeSource ? fitContain(eyeSource.width, eyeSource.height, viewport.width, viewport.height) : null;
 
@@ -345,6 +362,15 @@ export default function SmartViewer({
     : `translate(${translateX}px, ${translateY}px) scale(${scale})`;
 
   const handleShare = useCallback(async () => {
+    // A video is far too large to attach; share the page that plays it.
+    if (isVideo) {
+      try {
+        await navigator.share?.({ url: window.location.href });
+      } catch (e) {
+        if ((e as Error)?.name !== 'AbortError') console.warn('Share failed', e);
+      }
+      return;
+    }
     if (!leftUrl) return;
     try {
       const res = await fetch(leftUrl);
@@ -383,7 +409,7 @@ export default function SmartViewer({
         console.warn('Share failed', e);
       }
     }
-  }, [leftUrl]);
+  }, [leftUrl, isVideo]);
 
   // --- Common UI Elements ---
   // Previous, Next, Close and Share show and hide together: one tap on the photo flips them. Taps that start on a
@@ -434,6 +460,32 @@ export default function SmartViewer({
   const renderEye = (eye: 'left' | 'right', url: string | null, transform: string, willChange: string) => {
     if (!stage) return null;
     const rightHalf = eye === 'right' ? !storedAlignment.swapped : storedAlignment.swapped;
+    if (isVideo) {
+      // The poster frame stays underneath until the first video frame is drawn.
+      return (
+        <div
+          className="viewer-stage relative overflow-hidden"
+          style={{ width: stage.width, height: stage.height, transform, willChange }}
+        >
+          {thumbSrc && !video.ready && (
+            <img
+              src={thumbSrc}
+              alt=""
+              draggable={false}
+              className={cn(
+                'absolute inset-y-0 h-full w-[200%] max-w-none object-cover',
+                rightHalf ? 'right-0 object-right' : 'left-0 object-left',
+              )}
+            />
+          )}
+          <canvas
+            ref={eye === 'left' ? video.leftCanvasRef : video.rightCanvasRef}
+            aria-label={eye === 'left' ? `${photo.alt} (left)` : `${photo.alt} (right)`}
+            className="absolute inset-0 h-full w-full"
+          />
+        </div>
+      );
+    }
     return (
       <div
         className="viewer-stage relative overflow-hidden"
@@ -492,6 +544,57 @@ export default function SmartViewer({
     </div>
   );
 
+  // The decoder. Kept in the DOM (tiny and invisible) because some browsers
+  // stop decoding a detached or display:none video; its frames are drawn
+  // into the eye canvases.
+  const videoElement = isVideo && (
+    <video
+      key={photo.id}
+      ref={video.videoRef}
+      src={photo.src}
+      crossOrigin="anonymous"
+      playsInline
+      muted
+      autoPlay
+      loop
+      preload="auto"
+      aria-hidden
+      className="pointer-events-none absolute left-0 top-0 h-px w-px opacity-0"
+    />
+  );
+
+  // Play / sound / position, bottom left, showing and hiding with the other controls.
+  const videoControls = isVideo && !video.error && (
+    <div
+      data-viewer-control
+      onClick={(e) => e.stopPropagation()}
+      className={cn(
+        'absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-32 flex items-center gap-2 transition-opacity duration-200',
+        controlVisibility,
+      )}
+    >
+      <button onClick={video.togglePlay} className={navButton} aria-label={video.playing ? 'Pause' : 'Play'}>
+        {video.playing ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
+      </button>
+      <button onClick={video.toggleMute} className={navButton} aria-label={video.muted ? 'Unmute' : 'Mute'}>
+        {video.muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
+      </button>
+      <input
+        type="range"
+        min={0}
+        max={video.duration || 0}
+        step={0.1}
+        value={Math.min(video.currentTime, video.duration || 0)}
+        onChange={(e) => video.seek(Number(e.target.value))}
+        aria-label="Position"
+        className="min-w-0 flex-1 accent-white"
+      />
+      <span className="shrink-0 text-xs tabular-nums text-white/80 drop-shadow">
+        {formatDuration(video.currentTime)} / {formatDuration(video.duration)}
+      </span>
+    </div>
+  );
+
   const navButtons = (hasPrevious || hasNext) && (
     <div
       data-viewer-control
@@ -536,10 +639,12 @@ export default function SmartViewer({
         <div className="flex h-full w-full items-center justify-center overflow-hidden">
           {renderEye('left', leftUrl, 'none', 'auto')}
         </div>
+        {videoElement}
         {loadingIndicator}
         {errorIndicator}
         {closeButton}
         {shareButton}
+        {videoControls}
         {navButtons}
       </div>
     );
@@ -567,10 +672,12 @@ export default function SmartViewer({
           {renderEye('right', rightUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
         </div>
       </div>
+      {videoElement}
       {loadingIndicator}
       {errorIndicator}
       {closeButton}
       {shareButton}
+      {videoControls}
       {navButtons}
       {Math.abs(scale - 1) > 0.01 && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
