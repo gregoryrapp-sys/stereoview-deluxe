@@ -2,6 +2,7 @@ import type { Photo } from '@/data/photos';
 import { FunctionsHttpError } from '@supabase/supabase-js';
 import { FUNCTIONS_REGION, PHOTOS_BUCKET, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
+import { type PhotoFiles, unusedObjects } from '@/lib/photoFiles';
 import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
 import { albumAlignment, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
@@ -518,7 +519,8 @@ export async function backfillPhotoThumbnail(photo: PhotoMissingThumbnail): Prom
   const { data, error } = await supabase
     .from('photos')
     .update({ thumb_path: thumbPath })
-    .eq('id', photo.id)
+    // Every album showing this file gets the thumbnail.
+    .eq('storage_path', photo.storage_path)
     .select('id');
   if (error) throw error;
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
@@ -533,8 +535,9 @@ export async function signedOriginalUrl(storagePath: string): Promise<string> {
 }
 
 /** Records the thumbnail background preparation made for a photo. */
-export async function finishPhotoPreparation({ photoId, thumbPath }: { photoId: string; thumbPath: string }): Promise<void> {
-  const { data, error } = await supabase.from('photos').update({ thumb_path: thumbPath }).eq('id', photoId).select('id');
+export async function finishPhotoPreparation({ storagePath, thumbPath }: { storagePath: string; thumbPath: string }): Promise<void> {
+  // Every album showing this file gets the thumbnail, not just the row being prepared.
+  const { data, error } = await supabase.from('photos').update({ thumb_path: thumbPath }).eq('storage_path', storagePath).select('id');
   if (error) throw error;
   if (!data || data.length === 0) throw new Error('Photo row could not be updated');
 }
@@ -1259,13 +1262,13 @@ async function removeStorageObjects(paths: string[]) {
 }
 
 /**
- * Every storage object belonging to photos in the given albums - originals and
- * thumbnails - paged past PostgREST's `max_rows` cap so a large album is not
- * silently half-deleted.
+ * The files (original + thumbnail) of every photo row in the given albums,
+ * paged past PostgREST's `max_rows` cap so a large album is not silently
+ * half-deleted.
  */
-async function collectPhotoObjectPaths(albumIds: string[]): Promise<string[]> {
+async function collectPhotoFiles(albumIds: string[]): Promise<PhotoFiles[]> {
   if (albumIds.length === 0) return [];
-  const paths: string[] = [];
+  const files: PhotoFiles[] = [];
   for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
     const { data, error } = await supabase
       .from('photos')
@@ -1274,38 +1277,82 @@ async function collectPhotoObjectPaths(albumIds: string[]): Promise<string[]> {
       .order('id')
       .range(from, from + PHOTO_PAGE_SIZE - 1);
     if (error) throw error;
-    const page = (data ?? []) as Pick<PhotoRecord, 'storage_path' | 'thumb_path'>[];
-    for (const row of page) {
-      paths.push(row.storage_path);
-      if (row.thumb_path) paths.push(row.thumb_path);
-    }
+    const page = (data ?? []) as PhotoFiles[];
+    files.push(...page);
     if (page.length < PHOTO_PAGE_SIZE) break;
   }
-  return paths;
+  return files;
 }
 
+/** `in` filters go in the URL; keep each list short. */
+const PATH_FILTER_BATCH_SIZE = 100;
+
+/**
+ * How many photo rows use each file, in any album and including rows a Dropbox
+ * sync soft-deleted (so Restore still finds the file). All rows sharing a file
+ * belong to one photographer (enforced in the database), so the owner sees
+ * every one of them.
+ */
+async function fileUseCounts(storagePaths: string[]): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  const unique = [...new Set(storagePaths)];
+  for (let offset = 0; offset < unique.length; offset += PATH_FILTER_BATCH_SIZE) {
+    const batch = unique.slice(offset, offset + PATH_FILTER_BATCH_SIZE);
+    for (let from = 0; ; from += PHOTO_PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from('photos')
+        .select('storage_path')
+        .in('storage_path', batch)
+        .order('id')
+        .range(from, from + PHOTO_PAGE_SIZE - 1);
+      if (error) throw error;
+      const page = (data ?? []) as Pick<PhotoRecord, 'storage_path'>[];
+      for (const row of page) counts.set(row.storage_path, (counts.get(row.storage_path) ?? 0) + 1);
+      if (page.length < PHOTO_PAGE_SIZE) break;
+    }
+  }
+  return counts;
+}
+
+/**
+ * Takes a photo out of its album. The file itself is deleted only when no
+ * other album shows it: returns 'deleted' then, 'removed' when it stays.
+ * The row goes first, so a failed file removal leaves an unused file (costs
+ * storage) rather than a photo whose file is gone.
+ */
 export async function deletePhoto(
   photoId: string,
   storagePath: string,
   thumbPath?: string | null,
-): Promise<void> {
-  await removeStorageObjects(thumbPath ? [storagePath, thumbPath] : [storagePath]);
-
-  const { error } = await supabase.from('photos').delete().eq('id', photoId);
-
-  if (error) {
-    throw error;
+): Promise<'deleted' | 'removed'> {
+  const { data, error } = await supabase.from('photos').delete().eq('id', photoId).select('id');
+  if (error) throw error;
+  if (!data || data.length === 0) {
+    throw new Error('Photo could not be deleted. You may not have permission to edit this album.');
   }
+
+  const orphaned = unusedObjects(
+    [{ storage_path: storagePath, thumb_path: thumbPath ?? null }],
+    await fileUseCounts([storagePath]),
+  );
+  await removeStorageObjects(orphaned);
+  return orphaned.length > 0 ? 'deleted' : 'removed';
+}
+
+/** Deletes rows' files that no remaining row uses (after an album or event delete). */
+async function removeUnusedFiles(files: PhotoFiles[]): Promise<void> {
+  const remaining = await fileUseCounts(files.map((file) => file.storage_path));
+  await removeStorageObjects(unusedObjects(files, remaining));
 }
 
 export async function deleteAlbumWithPhotos(albumId: string): Promise<void> {
-  await removeStorageObjects(await collectPhotoObjectPaths([albumId]));
+  const files = await collectPhotoFiles([albumId]);
 
   const { error } = await supabase.from('albums').delete().eq('id', albumId);
+  if (error) throw error;
 
-  if (error) {
-    throw error;
-  }
+  // Photos also shown in other albums keep their files.
+  await removeUnusedFiles(files);
 }
 
 export async function deleteEventWithPhotos(eventId: string): Promise<void> {
@@ -1318,13 +1365,79 @@ export async function deleteEventWithPhotos(eventId: string): Promise<void> {
     throw albumsError;
   }
 
-  await removeStorageObjects(await collectPhotoObjectPaths(albums.map((album) => album.id)));
+  const files = await collectPhotoFiles(albums.map((album) => album.id));
 
   const { error } = await supabase.from('events').delete().eq('id', eventId);
+  if (error) throw error;
 
-  if (error) {
-    throw error;
+  await removeUnusedFiles(files);
+}
+
+type PlacementSource = Pick<PhotoRecord, 'id' | 'storage_path' | 'thumb_path' | 'alt' | 'file_modified_at' | 'created_at'>;
+
+async function fetchPlacementSources(photoIds: string[]): Promise<PlacementSource[]> {
+  const { data, error } = await supabase
+    .from('photos')
+    .select('id, storage_path, thumb_path, alt, file_modified_at, created_at')
+    .in('id', photoIds);
+  if (error) throw error;
+  return (data ?? []) as PlacementSource[];
+}
+
+/** Files the destination album already shows; the same file appears once per album. */
+async function filesAlreadyIn(albumId: string, storagePaths: string[]): Promise<Set<string>> {
+  const present = new Set<string>();
+  const unique = [...new Set(storagePaths)];
+  for (let offset = 0; offset < unique.length; offset += PATH_FILTER_BATCH_SIZE) {
+    const { data, error } = await supabase
+      .from('photos')
+      .select('storage_path')
+      .eq('album_id', albumId)
+      .in('storage_path', unique.slice(offset, offset + PATH_FILTER_BATCH_SIZE));
+    if (error) throw error;
+    for (const row of (data ?? []) as Pick<PhotoRecord, 'storage_path'>[]) present.add(row.storage_path);
   }
+  return present;
+}
+
+/**
+ * Shows photos in another album as well, without copying any file: each gets
+ * a new row in the destination pointing at the same original and thumbnail.
+ * Photos the destination already shows are skipped.
+ */
+export async function copyPhotos({
+  photoIds,
+  destinationAlbumId,
+}: {
+  photoIds: string[];
+  destinationAlbumId: string;
+}): Promise<{ copied: number; alreadyThere: number }> {
+  if (photoIds.length === 0) return { copied: 0, alreadyThere: 0 };
+
+  const sources = await fetchPlacementSources(photoIds);
+  const present = await filesAlreadyIn(destinationAlbumId, sources.map((photo) => photo.storage_path));
+  const seen = new Set<string>();
+  const rows = sources
+    .filter((photo) => {
+      if (present.has(photo.storage_path) || seen.has(photo.storage_path)) return false;
+      seen.add(photo.storage_path);
+      return true;
+    })
+    .map((photo) => ({
+      album_id: destinationAlbumId,
+      storage_path: photo.storage_path,
+      thumb_path: photo.thumb_path,
+      alt: photo.alt,
+      file_modified_at: photo.file_modified_at,
+      // Same date as the original, so date sorting places it the same way.
+      created_at: photo.created_at,
+    }));
+
+  if (rows.length > 0) {
+    const { error } = await supabase.from('photos').insert(rows);
+    if (error) throw error;
+  }
+  return { copied: rows.length, alreadyThere: sources.length - rows.length };
 }
 
 export async function movePhotos({
@@ -1362,9 +1475,29 @@ export async function movePhotos({
   const photos = (photoRows ?? []) as Pick<PhotoRecord, 'id' | 'storage_path' | 'thumb_path'>[];
   if (photos.length === 0) return;
 
+  const paths = photos.map((photo) => photo.storage_path);
+  const useCounts = await fileUseCounts(paths);
+  const present = await filesAlreadyIn(destinationAlbumId, paths);
+
   // 3. Move each photo - the original and, when present, its thumbnail
   for (const photo of photos) {
     if (!photo.storage_path) continue;
+
+    // The destination already shows this file: moving just takes it out of
+    // the source album. The destination's row keeps the file.
+    if (present.has(photo.storage_path)) {
+      const { error } = await supabase.from('photos').delete().eq('id', photo.id);
+      if (error) throw new Error(`Failed to move photo ${photo.id}: ${error.message}`);
+      continue;
+    }
+
+    // Shown in other albums too: those rows point at this file, so it stays
+    // where it is and only this row changes album.
+    if ((useCounts.get(photo.storage_path) ?? 0) > 1) {
+      const { error } = await supabase.from('photos').update({ album_id: destinationAlbumId }).eq('id', photo.id);
+      if (error) throw new Error(`Failed to update database for photo ${photo.id}: ${error.message}`);
+      continue;
+    }
 
     // Keep the original's extension rather than forcing `.jpg`: legacy admin
     // uploads may be PNG/WebP, and the stored bytes do not change on a move.

@@ -31,7 +31,7 @@ describe('usePhotoPreparation run', () => {
     const { result } = renderHook(() => usePhotoPreparation(photos, [album], { enabled: true, onPrepared }));
     await waitFor(() => expect(result.current.done).toBe(2));
     expect(fetches).toBe(2);
-    expect(finish).toHaveBeenCalledWith({ photoId: 't1', thumbPath: 'thumb.webp' });
+    expect(finish).toHaveBeenCalledWith({ storagePath: 'p/t1.jpg', thumbPath: 'thumb.webp' });
     expect(onPrepared).toHaveBeenCalledWith('t2', { thumbPath: 'thumb.webp' });
   });
 

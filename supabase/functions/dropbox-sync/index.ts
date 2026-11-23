@@ -591,6 +591,25 @@ async function applyItem(
     const { data } = await db.from("photos").select("storage_path, thumb_path").eq("id", photoId).maybeSingle();
     return { storagePath: data?.storage_path ?? null, thumbPath: data?.thumb_path ?? null };
   };
+  /**
+   * A photo can be shown in other albums too (rows pointing at the same file).
+   * When a new version replaces the file, point those rows at it as well, so
+   * removing the old object below does not leave them with nothing to show.
+   */
+  const repointOtherAlbums = async (
+    photoId: string,
+    previous: { storagePath: string | null; thumbPath: string | null },
+    current: { storagePath: string; thumbPath: string | null },
+  ) => {
+    if (!previous.storagePath || previous.storagePath === current.storagePath) return;
+    const { error } = await db
+      .from("photos")
+      .update({ storage_path: current.storagePath, thumb_path: current.thumbPath })
+      .eq("storage_path", previous.storagePath)
+      .neq("id", photoId);
+    if (error) throw new StageError("db", error.message);
+  };
+
   const removeSuperseded = async (
     previous: { storagePath: string | null; thumbPath: string | null },
     current: { storagePath: string; thumbPath: string | null },
@@ -621,6 +640,7 @@ async function applyItem(
       const previous = await currentObjects(entry.item.photoId);
       const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied, { revision: entry.item.file.rev });
       await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+      await repointOtherAlbums(entry.item.photoId, previous, paths);
       await removeSuperseded(previous, paths);
       applied.updated += 1;
       return;
@@ -630,6 +650,7 @@ async function applyItem(
         const previous = await currentObjects(entry.item.photoId);
         const paths = await importFile(db, album, entry.item.photoId, entry.item.file, entry.item.thumbnailEligible, applied, { revision: entry.item.file.rev });
         await upsert(rowFor(entry.item.photoId, entry.item.file, paths));
+        await repointOtherAlbums(entry.item.photoId, previous, paths);
         await removeSuperseded(previous, paths);
       } else {
         await update(entry.item.photoId, {

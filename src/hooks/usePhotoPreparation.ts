@@ -143,7 +143,7 @@ export function usePhotoPreparation(
           const blob = await response.blob();
 
           const thumbPath = await makeSbsThumbnail(blob).then((thumb) => uploadThumbnail(photo!.storagePath!, thumb));
-          await finishPhotoPreparation({ photoId: photo.id, thumbPath });
+          await finishPhotoPreparation({ storagePath: photo.storagePath!, thumbPath });
           onPreparedRef.current(photo.id, { thumbPath });
           setProgress((current) => ({ ...current, done: current.done + 1 }));
         } catch (error) {
