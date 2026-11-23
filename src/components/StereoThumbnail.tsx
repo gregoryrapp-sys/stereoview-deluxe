@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
+import { Film, Play } from 'lucide-react';
 import type { Photo } from '@/data/photos';
+import { isVideoPhoto } from '@/lib/media';
 import { cn } from '@/lib/utils';
 import { rememberNaturalSize } from '@/hooks/useNaturalImageSize';
 
 interface StereoThumbnailProps {
-  photo: Photo & { thumbSrc?: string; alignment?: { swapped: boolean } };
+  photo: Photo & { thumbSrc?: string; storagePath?: string; alignment?: { swapped: boolean } };
   /**
    * Accepted for call-site compatibility (ObjectCoverPickerDialog passes it);
    * the thumbnail itself has no Dropbox-specific behaviour.
@@ -26,6 +28,10 @@ interface StereoThumbnailProps {
  * and only falls back to the original when there is no thumbnail or it fails
  * to load. Being a real <img> rather than a CSS background is what makes
  * `loading="lazy"` possible: tiles below the fold are not fetched at all.
+ *
+ * A side-by-side video shows its poster frame (stored as its thumbnail) with
+ * a play badge. Without a poster it shows a film icon: the original is a
+ * video file, which an <img> cannot display.
  */
 export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoThumbnailProps) {
   const [thumbFailed, setThumbFailed] = useState(false);
@@ -36,7 +42,16 @@ export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoT
   // A new photo (or a re-signed URL) gets a fresh attempt at the thumbnail.
   useEffect(() => setThumbFailed(false), [photo.thumbSrc]);
 
-  const src = photo.thumbSrc && !thumbFailed ? photo.thumbSrc : photo.src;
+  const isVideo = isVideoPhoto(photo);
+  const src = photo.thumbSrc && !thumbFailed ? photo.thumbSrc : isVideo ? null : photo.src;
+
+  if (!src) {
+    return (
+      <div className="flex h-full w-full items-center justify-center bg-secondary" role="img" aria-label={photo.alt}>
+        <Film className="h-6 w-6 text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="relative h-full w-full overflow-hidden" role="img" aria-label={photo.alt}>
@@ -57,6 +72,11 @@ export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoT
           if (photo.thumbSrc && !thumbFailed) setThumbFailed(true);
         }}
       />
+      {isVideo && (
+        <span className="pointer-events-none absolute bottom-1.5 left-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white">
+          <Play className="h-3 w-3 fill-current" />
+        </span>
+      )}
     </div>
   );
 }

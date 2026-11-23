@@ -16,9 +16,10 @@ import { Progress } from '@/components/ui/progress';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
-import { uploadSbsPhoto } from '@/services/galleryService';
+import { uploadSbsPhoto, uploadSbsVideo } from '@/services/galleryService';
 import { convertSpatialToSbs } from '@/lib/spatial/convertSpatial';
 import { isHeifFile } from '@/lib/spatial/heifBoxes';
+import { isVideoFile } from '@/lib/media';
 
 /**
  * Guided upload flow for an album.
@@ -40,6 +41,8 @@ interface QueuedFile {
   file: File;
   status: UploadStatus;
   error?: string;
+  /** Videos only: how much of the file has been sent, 0-100. */
+  percent?: number;
 }
 
 type Step = 'select' | 'uploading' | 'summary';
@@ -52,14 +55,19 @@ const UPLOAD_CONCURRENCY = 3;
  * extension entries matter because Safari and Chrome disagree on the MIME type
  * a picker reports for HEIC.
  */
-const ACCEPTED_TYPES = 'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif';
+const ACCEPTED_TYPES =
+  'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,.mp4,.mov,.m4v';
 
 /**
  * Dropped files bypass the picker's `accept` filter, so apply the same rule by
  * hand. Extension first: HEIC arrives with an empty or vendor MIME type.
  */
 export function isAcceptedFile(file: File): boolean {
-  return /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name) || /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type);
+  return (
+    /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name) ||
+    /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type) ||
+    isVideoFile(file)
+  );
 }
 
 function formatBytes(bytes: number): string {
@@ -177,7 +185,7 @@ export default function AlbumUploadDialog({
       const skipped = dropped.length - accepted.length;
       toast({
         title: `${skipped} ${skipped === 1 ? 'file' : 'files'} skipped`,
-        description: 'Only JPG, PNG, WebP and HEIC images can be uploaded.',
+        description: 'Only JPG, PNG, WebP and HEIC images and MP4/MOV videos can be uploaded.',
       });
     }
   };
@@ -189,6 +197,16 @@ export default function AlbumUploadDialog({
   const setStatus = (id: string, status: UploadStatus, error?: string) => {
     setQueue((current) =>
       current.map((item) => (item.id === id ? { ...item, status, error } : item)),
+    );
+  };
+
+  /** Re-renders only when the whole percentage changes, not on every progress event. */
+  const setPercent = (id: string, fraction: number) => {
+    const percent = Math.floor(fraction * 100);
+    setQueue((current) =>
+      current.some((item) => item.id === id && item.percent !== percent)
+        ? current.map((item) => (item.id === id ? { ...item, percent } : item))
+        : current,
     );
   };
 
@@ -214,15 +232,14 @@ export default function AlbumUploadDialog({
           }
           setStatus(item.id, 'uploading');
 
-          await uploadSbsPhoto({
-            albumId,
-            eventId,
-            ownerId,
-            file,
-            alt: namePrefix
-              ? `${namePrefix} ${index + 1}`
-              : item.file.name.replace(/\.[^.]+$/, ''),
-          });
+          const alt = namePrefix ? `${namePrefix} ${index + 1}` : item.file.name.replace(/\.[^.]+$/, '');
+          // Videos are stored as they are, with a progress readout: they run to
+          // hundreds of megabytes.
+          if (isVideoFile(file)) {
+            await uploadSbsVideo({ albumId, eventId, ownerId, file, alt, onProgress: (fraction) => setPercent(item.id, fraction) });
+          } else {
+            await uploadSbsPhoto({ albumId, eventId, ownerId, file, alt });
+          }
           setStatus(item.id, 'done');
         } catch (error) {
           // One bad file must not abandon the rest of the batch. The old loop
@@ -266,10 +283,10 @@ export default function AlbumUploadDialog({
         onInteractOutside={(event) => isUploading && event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Upload photos</DialogTitle>
+          <DialogTitle>Upload photos and videos</DialogTitle>
           <DialogDescription>
-            Add side-by-side stereo images or Apple spatial photos (.HEIC) to {albumTitle}. You
-            can select several files at once.
+            Add side-by-side stereo images, Apple spatial photos (.HEIC) or side-by-side videos
+            (MP4/MOV) to {albumTitle}. You can select several files at once.
           </DialogDescription>
         </DialogHeader>
 
@@ -299,7 +316,7 @@ export default function AlbumUploadDialog({
                 }}
               />
               <p className="text-xs text-muted-foreground">
-                {dragActive ? 'Drop to add them to the list.' : 'Or drag photos from your computer and drop them here.'}
+                {dragActive ? 'Drop to add them to the list.' : 'Or drag photos and videos from your computer and drop them here.'}
               </p>
             </div>
 
@@ -307,7 +324,7 @@ export default function AlbumUploadDialog({
               <>
                 <div className="flex items-center justify-between text-sm">
                   <span className="font-medium">
-                    {queue.length} {queue.length === 1 ? 'photo' : 'photos'} ready
+                    {queue.length} {queue.length === 1 ? 'file' : 'files'} ready
                   </span>
                   <span className="text-muted-foreground">{formatBytes(totalBytes)}</span>
                 </div>
@@ -321,6 +338,11 @@ export default function AlbumUploadDialog({
                         {isHeifFile(item.file) && (
                           <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                             Spatial
+                          </span>
+                        )}
+                        {isVideoFile(item.file) && (
+                          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                            Video
                           </span>
                         )}
                         <span className="shrink-0 text-xs text-muted-foreground">
@@ -338,6 +360,14 @@ export default function AlbumUploadDialog({
                     ))}
                   </ul>
                 </ScrollArea>
+
+                {queue.some((item) => isVideoFile(item.file)) && (
+                  <p className="text-xs text-muted-foreground">
+                    Videos are uploaded as they are, with no conversion. Large videos take a while;
+                    keep this window open until they finish. If the connection drops, Retry (or
+                    choosing the same file again) continues where it stopped.
+                  </p>
+                )}
 
                 {queue.some((item) => isHeifFile(item.file)) && (
                   <p className="text-xs text-muted-foreground">
@@ -395,6 +425,9 @@ export default function AlbumUploadDialog({
                     {item.status === 'converting' && (
                       <span className="shrink-0 text-xs text-muted-foreground">converting spatial photo</span>
                     )}
+                    {item.status === 'uploading' && item.percent !== undefined && (
+                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{item.percent}%</span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -405,8 +438,7 @@ export default function AlbumUploadDialog({
         {step === 'summary' && (
           <div className="space-y-3">
             <p className="text-sm">
-              {counts.done} of {counts.total} {counts.total === 1 ? 'photo' : 'photos'}{' '}
-              uploaded.
+              {counts.done} of {counts.total} {counts.total === 1 ? 'file' : 'files'} uploaded.
             </p>
             {counts.failed > 0 && (
               <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
@@ -436,7 +468,7 @@ export default function AlbumUploadDialog({
               <Button onClick={startUpload} disabled={queue.length === 0} className="gap-2">
                 <Upload className="h-4 w-4" />
                 Upload {queue.length > 0 && `${queue.length} `}
-                {queue.length === 1 ? 'photo' : 'photos'}
+                {queue.length === 1 ? 'file' : 'files'}
               </Button>
             </>
           )}

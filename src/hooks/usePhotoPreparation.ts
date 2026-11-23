@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { makeSbsThumbnail } from '@/lib/makeThumbnail';
+import { makeSbsThumbnail, makeSbsVideoThumbnail } from '@/lib/makeThumbnail';
+import { isVideoPath } from '@/lib/media';
 import {
   finishPhotoPreparation,
   type GalleryPhoto,
@@ -138,11 +139,15 @@ export function usePhotoPreparation(
         try {
           const album = albumsRef.current.find((a) => a.id === photo!.albumId);
           const url = await signedOriginalUrl(photo.storagePath!);
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const blob = await response.blob();
-
-          const thumbPath = await makeSbsThumbnail(blob).then((thumb) => uploadThumbnail(photo!.storagePath!, thumb));
+          // A video's poster is read straight from the URL: only the first
+          // second is fetched, not hundreds of megabytes.
+          const thumb = isVideoPath(photo.storagePath)
+            ? await makeSbsVideoThumbnail(url)
+            : await fetch(url).then(async (response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                return makeSbsThumbnail(await response.blob());
+              });
+          const thumbPath = await uploadThumbnail(photo.storagePath!, thumb);
           await finishPhotoPreparation({ storagePath: photo.storagePath!, thumbPath });
           onPreparedRef.current(photo.id, { thumbPath });
           setProgress((current) => ({ ...current, done: current.done + 1 }));

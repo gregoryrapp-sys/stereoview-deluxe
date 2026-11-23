@@ -1,9 +1,11 @@
 import type { Photo } from '@/data/photos';
 import { FunctionsHttpError } from '@supabase/supabase-js';
-import { FUNCTIONS_REGION, PHOTOS_BUCKET, supabase } from '@/lib/supabase';
+import { FUNCTIONS_REGION, PHOTOS_BUCKET, SUPABASE_KEY, SUPABASE_URL, supabase } from '@/lib/supabase';
 import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/photoPaths';
 import { type PhotoFiles, unusedObjects } from '@/lib/photoFiles';
-import { makeSbsThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
+import { makeSbsThumbnail, makeSbsVideoThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
+import { videoContentType } from '@/lib/media';
+import { findSavedUpload, resumableUpload, videoUploadFingerprint } from '@/lib/resumableUpload';
 import { albumAlignment, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
   AlbumRecord,
@@ -838,6 +840,81 @@ export async function uploadSbsPhoto({
   });
 
   if (insertResult.error) {
+    throw insertResult.error;
+  }
+}
+
+/** Grid poster for a video; never throws (a video without one shows a placeholder tile). */
+async function tryMakeVideoThumbnail(file: File): Promise<SbsThumbnail | null> {
+  try {
+    return await makeSbsVideoThumbnail(file);
+  } catch (error) {
+    console.warn('Video poster could not be made; the grid will show a placeholder.', error);
+    return null;
+  }
+}
+
+/**
+ * A side-by-side video, stored like a photo: the original as-is (no
+ * re-encoding), a poster frame as its thumbnail, one photos row. The video
+ * goes up resumably (see resumableUpload); `onProgress` reports it, 0 to 1.
+ */
+export async function uploadSbsVideo({
+  albumId,
+  eventId,
+  ownerId,
+  file,
+  alt,
+  onProgress,
+}: {
+  albumId: string;
+  eventId: string;
+  ownerId: string;
+  file: File;
+  alt: string;
+  onProgress?: (fraction: number) => void;
+}): Promise<void> {
+  const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-video');
+  // An unfinished upload of this same file (Retry, or the file picked again
+  // after a reload) continues into the object it started, so it keeps that
+  // path rather than starting a new one.
+  const fingerprint = videoUploadFingerprint(albumId, file);
+  const extension = getFileExtension(file.name) || 'mp4';
+  const storagePath =
+    findSavedUpload(fingerprint)?.objectName ?? photoObjectPath(ownerId, eventId, albumId, crypto.randomUUID(), extension);
+  const thumb = await tryMakeVideoThumbnail(file);
+
+  await resumableUpload({
+    endpoint: `${SUPABASE_URL}/storage/v1/upload/resumable`,
+    bucket: PHOTOS_BUCKET,
+    objectName: storagePath,
+    file,
+    contentType: videoContentType(file),
+    cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
+    // Fresh each request: a long upload can outlive the access token it began with.
+    getHeaders: async () => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in again to upload.');
+      return { authorization: `Bearer ${token}`, apikey: SUPABASE_KEY };
+    },
+    fingerprint,
+    onProgress,
+  });
+
+  const thumbPath = await uploadThumbnailSoft(storagePath, thumb);
+
+  const insertResult = await supabase.from('photos').insert({
+    album_id: albumId,
+    storage_path: storagePath,
+    thumb_path: thumbPath,
+    alt: baseName,
+    file_modified_at: getFileModifiedIso(file),
+  });
+
+  if (insertResult.error) {
+    // Do not leave hundreds of megabytes behind with no row pointing at them.
+    await supabase.storage.from(PHOTOS_BUCKET).remove(thumbPath ? [storagePath, thumbPath] : [storagePath]);
     throw insertResult.error;
   }
 }
