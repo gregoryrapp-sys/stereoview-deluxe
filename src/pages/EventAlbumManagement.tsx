@@ -32,6 +32,7 @@ import {
   restorePhoto,
   type SoftDeletedPhoto,
   fetchGalleryData,
+  copyPhotos,
   movePhotos,
   GalleryData,
   GalleryPhoto,
@@ -52,6 +53,7 @@ import { usePhotoPreparation } from '@/hooks/usePhotoPreparation';
 import { albumHasUnsavedChanges, eventHasUnsavedChanges, profileHasUnsavedChanges, type ProfileSaved } from '@/lib/unsavedChanges';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { isUnnamedNewAlbum, NEW_ALBUM_TITLE } from '@/lib/newAlbum';
+import { albumCountsByFile } from '@/lib/photoFiles';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -172,6 +174,8 @@ export default function EventAlbumManagement() {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
   const [managePhotoSort, setManagePhotoSort] = useState('alt_asc');
   const [isMovePhotosDialogOpen, setIsMovePhotosDialogOpen] = useState(false);
+  /** The selection dialog either moves photos or also shows them in another album. */
+  const [placementMode, setPlacementMode] = useState<'move' | 'copy'>('move');
   const [moveDestinationEventId, setMoveDestinationEventId] = useState<string | null>(null);
   const [moveDestinationAlbumId, setMoveDestinationAlbumId] = useState<string | null>(null);
   const shouldShowUploadRedirectNotice = searchParams.get('reason') === 'missing-destination';
@@ -428,6 +432,9 @@ export default function EventAlbumManagement() {
   }, [galleryData.photos]);
 
   const albumPhotos = selectedAlbum ? photosByAlbum[selectedAlbum.id] ?? [] : [];
+  // One file can be shown in several albums (one row each); deleting a row
+  // keeps the file while another album still shows it.
+  const albumsPerFile = useMemo(() => albumCountsByFile(galleryData.photos), [galleryData.photos]);
   const albumUnnamed = !!selectedAlbum && isUnnamedNewAlbum(selectedAlbum);
   const slugFollowsTitle = albumUnnamed && slugEditedFor !== selectedAlbum?.id;
   // Photo source is chosen while the album is still empty: no uploaded photos,
@@ -592,15 +599,28 @@ export default function EventAlbumManagement() {
     );
   }, [moveDestinationEventId, galleryData.albums, selectedAlbum]);
 
+  const openPlacementDialog = (mode: 'move' | 'copy') => {
+    setPlacementMode(mode);
+    setIsMovePhotosDialogOpen(true);
+  };
+
   const handleConfirmMovePhotos = async () => {
     if (!moveDestinationAlbumId || selectedPhotoIds.length === 0) return;
-    
+    const destinationTitle = galleryData.albums.find((album) => album.id === moveDestinationAlbumId)?.title ?? 'the album';
+
     setIsSaving(true);
     try {
-      // Ensure 'movePhotos' is available from 'galleryService'
-      await movePhotos(selectedPhotoIds, moveDestinationAlbumId);
-      
-      toast({ title: 'Photos moved successfully' });
+      if (placementMode === 'copy') {
+        // No file is copied: the destination gets its own entry for the same file.
+        const { copied, alreadyThere } = await copyPhotos({ photoIds: selectedPhotoIds, destinationAlbumId: moveDestinationAlbumId });
+        toast({
+          title: `${copied} ${copied === 1 ? 'photo' : 'photos'} added to ${destinationTitle}`,
+          description: alreadyThere > 0 ? `${alreadyThere} ${alreadyThere === 1 ? 'was' : 'were'} already there.` : undefined,
+        });
+      } else {
+        await movePhotos({ photoIds: selectedPhotoIds, destinationAlbumId: moveDestinationAlbumId });
+        toast({ title: `Photos moved to ${destinationTitle}` });
+      }
       setIsMovePhotosDialogOpen(false);
       setSelectedPhotoIds([]); // Clear selection after move
       setMoveDestinationEventId(null);
@@ -608,7 +628,7 @@ export default function EventAlbumManagement() {
       loadData(); // Refresh UI to reflect changes
     } catch (error) {
       toast({
-        title: 'Could not move photos',
+        title: placementMode === 'copy' ? 'Could not add photos' : 'Could not move photos',
         description: error instanceof Error ? error.message : 'Move failed',
         variant: 'destructive',
       });
@@ -952,6 +972,22 @@ export default function EventAlbumManagement() {
   const deleteTarget = deletingEvent ?? deletingAlbum ?? deletingPhoto;
   const deleteTargetName = deleteTarget?.title ?? (deleteTarget as any)?.alt ?? '';
 
+  // Shown in other albums too? Then deleting only takes it out of this one.
+  const deletingPhotoOtherAlbums =
+    deletingPhoto && !deletingPhoto.isDropbox && deletingPhoto.storagePath
+      ? (albumsPerFile.get(deletingPhoto.storagePath) ?? 1) - 1
+      : 0;
+  // Photos in the album or event being deleted that other albums also show; they stay there.
+  const photosStayingElsewhere = (() => {
+    const inTarget = deletingAlbum
+      ? photosByAlbum[deletingAlbum.id] ?? []
+      : deletingEvent
+        ? photosByEvent[deletingEvent.id] ?? []
+        : [];
+    const withinTarget = albumCountsByFile(inTarget);
+    return [...withinTarget].filter(([file, count]) => (albumsPerFile.get(file) ?? 0) > count).length;
+  })();
+
   const confirmDelete = async () => {
     if (!deleteTarget) return;
     setIsSaving(true);
@@ -963,8 +999,8 @@ export default function EventAlbumManagement() {
         await deleteAlbumWithPhotos(deletingAlbum.id);
         toast({ title: 'Album deleted' });
       } else if (deletingPhoto && deletingPhoto.storagePath && !deletingPhoto.isDropbox) {
-        await deletePhoto(deletingPhoto.id, deletingPhoto.storagePath, deletingPhoto.thumbPath);
-        toast({ title: 'Photo deleted' });
+        const outcome = await deletePhoto(deletingPhoto.id, deletingPhoto.storagePath, deletingPhoto.thumbPath);
+        toast({ title: outcome === 'removed' ? 'Removed from album' : 'Photo deleted' });
       } else if (deletingPhoto?.isDropbox) {
         throw new Error("Dropbox photos cannot be deleted from this interface.");
       }
@@ -1565,8 +1601,8 @@ export default function EventAlbumManagement() {
                   )}
                 </p>
               </div>
-              {albumPhotos.length > 0 && selectedAlbum.source_type === 'upload' && (
-                <div className="flex gap-2">
+              {albumPhotos.length > 0 && (selectedAlbum.source_type === 'upload' || selectedAlbum.import_state === 'imported') && (
+                <div className="flex flex-wrap gap-2">
                   <Button variant="outline" onClick={handleSelectAllPhotos} disabled={isSaving || selectablePhotoIds.length === 0}>
                     {selectedPhotoIds.length === selectablePhotoIds.length && selectablePhotoIds.length > 0
                       ? 'Deselect All'
@@ -1574,11 +1610,22 @@ export default function EventAlbumManagement() {
                   </Button>
                   <Button
                     variant="secondary"
-                    onClick={() => setIsMovePhotosDialogOpen(true)}
+                    onClick={() => openPlacementDialog('copy')}
                     disabled={selectedPhotoIds.length === 0 || isSaving}
+                    title="Also show the selected photos in another album. No file is copied."
                   >
-                    Move Selected ({selectedPhotoIds.length})
+                    Copy Selected ({selectedPhotoIds.length})
                   </Button>
+                  {/* A Dropbox-synced album gets its photos back on the next sync, so it only copies out. */}
+                  {selectedAlbum.source_type === 'upload' && (
+                    <Button
+                      variant="secondary"
+                      onClick={() => openPlacementDialog('move')}
+                      disabled={selectedPhotoIds.length === 0 || isSaving}
+                    >
+                      Move Selected ({selectedPhotoIds.length})
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -1636,6 +1683,12 @@ export default function EventAlbumManagement() {
                             {(photo as GalleryPhoto).created_at && (
                               <p className="truncate text-[10px] leading-tight text-muted-foreground">
                                 {new Date((photo as GalleryPhoto).created_at!).toLocaleDateString()}
+                              </p>
+                            )}
+                            {/* Live Dropbox photos have no stored file, so they never match. */}
+                            {(albumsPerFile.get((photo as GalleryPhoto).storagePath ?? '') ?? 1) > 1 && (
+                              <p className="truncate text-[10px] leading-tight text-sky-600 dark:text-sky-400">
+                                In {albumsPerFile.get((photo as GalleryPhoto).storagePath ?? '')} albums
                               </p>
                             )}
                           </div>
@@ -1741,9 +1794,14 @@ export default function EventAlbumManagement() {
       <Dialog open={isMovePhotosDialogOpen} onOpenChange={setIsMovePhotosDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Move {selectedPhotoIds.length} Photos</DialogTitle>
+            <DialogTitle>
+              {placementMode === 'copy' ? 'Copy' : 'Move'} {selectedPhotoIds.length} {selectedPhotoIds.length === 1 ? 'photo' : 'photos'}
+            </DialogTitle>
             <DialogDescription>
-              Select a destination event and album. Only 'upload' type albums are shown.
+              {placementMode === 'copy'
+                ? 'The photos will also appear in the album you choose. No file is copied, so no extra storage is used.'
+                : 'The photos leave this album and appear in the album you choose.'}{' '}
+              Only albums you upload to are listed (not Dropbox albums).
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 py-4">
@@ -1796,7 +1854,7 @@ export default function EventAlbumManagement() {
               Cancel
             </Button>
             <Button variant="secondary" disabled={isSaving || !moveDestinationAlbumId} onClick={handleConfirmMovePhotos}>
-              {isSaving ? 'Moving...' : 'Confirm Move'}
+              {placementMode === 'copy' ? (isSaving ? 'Copying...' : 'Copy') : isSaving ? 'Moving...' : 'Move'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1813,14 +1871,28 @@ export default function EventAlbumManagement() {
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete {deletingEvent ? 'event' : deletingAlbum ? 'album' : 'photo'}</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete "{deleteTargetName}"?
-              {deletingEvent && ' This will delete the entire event, including all albums and photos inside it.'}
-              {deletingAlbum && ' This will delete the entire album and all photos inside it.'}
-              {deletingPhoto && ' This will permanently delete the photo.'}
-              {' '}This action cannot be undone.
-            </DialogDescription>
+            {deletingPhotoOtherAlbums > 0 ? (
+              <>
+                <DialogTitle>Remove image from album?</DialogTitle>
+                <DialogDescription>
+                  "{deleteTargetName}" will be removed from this album. (Original will not be deleted.) It stays in
+                  the other {deletingPhotoOtherAlbums === 1 ? 'album' : `${deletingPhotoOtherAlbums} albums`} that show it.
+                </DialogDescription>
+              </>
+            ) : (
+              <>
+                <DialogTitle>Delete {deletingEvent ? 'event' : deletingAlbum ? 'album' : 'photo'}</DialogTitle>
+                <DialogDescription>
+                  Are you sure you want to delete "{deleteTargetName}"?
+                  {deletingEvent && ' This will delete the entire event, including all albums and photos inside it.'}
+                  {deletingAlbum && ' This will delete the entire album and all photos inside it.'}
+                  {deletingPhoto && ' This will permanently delete the photo.'}
+                  {' '}This action cannot be undone.
+                  {photosStayingElsewhere > 0 &&
+                    ` ${photosStayingElsewhere} ${photosStayingElsewhere === 1 ? 'photo is' : 'photos are'} also in other albums and will stay there.`}
+                </DialogDescription>
+              </>
+            )}
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => {
@@ -1831,7 +1903,7 @@ export default function EventAlbumManagement() {
               Cancel
             </Button>
             <Button variant="secondary" disabled={isSaving} onClick={confirmDelete}>
-              Yes, delete
+              {deletingPhotoOtherAlbums > 0 ? 'Remove' : 'Yes, delete'}
             </Button>
           </DialogFooter>
         </DialogContent>
