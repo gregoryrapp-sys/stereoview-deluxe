@@ -5,6 +5,7 @@ import { deriveThumbPath, photoObjectPath, type ThumbExtension } from '@/lib/pho
 import { type PhotoFiles, unusedObjects } from '@/lib/photoFiles';
 import { makeSbsThumbnail, makeSbsVideoThumbnail, type SbsThumbnail } from '@/lib/makeThumbnail';
 import { videoContentType } from '@/lib/media';
+import { findSavedUpload, resumableUpload, videoUploadFingerprint } from '@/lib/resumableUpload';
 import { albumAlignment, type StereoAlignment } from '@/lib/stereoAlign/types';
 import type {
   AlbumRecord,
@@ -843,55 +844,6 @@ export async function uploadSbsPhoto({
   }
 }
 
-/**
- * Uploads a large file straight to Storage's REST endpoint - the same request
- * the client library makes - but through XMLHttpRequest, which reports upload
- * progress. A 600 MB video otherwise shows a spinner for minutes with no sign
- * of life. Refusals come back with Storage's reason in plain words.
- */
-function uploadLargeObject(
-  storagePath: string,
-  file: File,
-  contentType: string,
-  accessToken: string,
-  onProgress?: (fraction: number) => void,
-): Promise<void> {
-  const encodedPath = storagePath.split('/').map(encodeURIComponent).join('/');
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${PHOTOS_BUCKET}/${encodedPath}`);
-    xhr.setRequestHeader('authorization', `Bearer ${accessToken}`);
-    xhr.setRequestHeader('apikey', SUPABASE_KEY);
-    xhr.setRequestHeader('x-upsert', 'false');
-    xhr.setRequestHeader('cache-control', `max-age=${PHOTO_CACHE_CONTROL_SECONDS}`);
-    xhr.setRequestHeader('content-type', contentType);
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) onProgress?.(event.loaded / event.total);
-    };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-        return;
-      }
-      let message = xhr.responseText;
-      try {
-        message = JSON.parse(xhr.responseText).message ?? message;
-      } catch {
-        // Not JSON; keep the raw text.
-      }
-      if (xhr.status === 413 || /maximum allowed size|too large/i.test(message)) {
-        reject(new Error(`The video is larger than Storage accepts (${(file.size / 1024 / 1024).toFixed(0)} MB). Raise the upload size limit in Supabase.`));
-      } else if (/mime type/i.test(message)) {
-        reject(new Error('Storage does not accept videos yet. The database update for videos needs to be applied.'));
-      } else {
-        reject(new Error(`Upload failed (HTTP ${xhr.status}): ${message || 'no details'}`));
-      }
-    };
-    xhr.onerror = () => reject(new Error('Upload interrupted. Check the connection and retry.'));
-    xhr.send(file);
-  });
-}
-
 /** Grid poster for a video; never throws (a video without one shows a placeholder tile). */
 async function tryMakeVideoThumbnail(file: File): Promise<SbsThumbnail | null> {
   try {
@@ -904,8 +856,8 @@ async function tryMakeVideoThumbnail(file: File): Promise<SbsThumbnail | null> {
 
 /**
  * A side-by-side video, stored like a photo: the original as-is (no
- * re-encoding), a poster frame as its thumbnail, one photos row. `onProgress`
- * reports the upload of the video itself, 0 to 1.
+ * re-encoding), a poster frame as its thumbnail, one photos row. The video
+ * goes up resumably (see resumableUpload); `onProgress` reports it, 0 to 1.
  */
 export async function uploadSbsVideo({
   albumId,
@@ -922,22 +874,37 @@ export async function uploadSbsVideo({
   alt: string;
   onProgress?: (fraction: number) => void;
 }): Promise<void> {
-  const { data: sessionData } = await supabase.auth.getSession();
-  const accessToken = sessionData.session?.access_token;
-  if (!accessToken) throw new Error('Sign in again to upload.');
-
   const baseName = safeFileName(alt || file.name.replace(/\.[^.]+$/, '') || 'stereo-video');
-  const photoId = crypto.randomUUID();
+  // An unfinished upload of this same file (Retry, or the file picked again
+  // after a reload) continues into the object it started, so it keeps that
+  // path rather than starting a new one.
+  const fingerprint = videoUploadFingerprint(albumId, file);
   const extension = getFileExtension(file.name) || 'mp4';
-  const storagePath = photoObjectPath(ownerId, eventId, albumId, photoId, extension);
+  const storagePath =
+    findSavedUpload(fingerprint)?.objectName ?? photoObjectPath(ownerId, eventId, albumId, crypto.randomUUID(), extension);
   const thumb = await tryMakeVideoThumbnail(file);
 
-  await uploadLargeObject(storagePath, file, videoContentType(file), accessToken, onProgress);
+  await resumableUpload({
+    endpoint: `${SUPABASE_URL}/storage/v1/upload/resumable`,
+    bucket: PHOTOS_BUCKET,
+    objectName: storagePath,
+    file,
+    contentType: videoContentType(file),
+    cacheControl: PHOTO_CACHE_CONTROL_SECONDS,
+    // Fresh each request: a long upload can outlive the access token it began with.
+    getHeaders: async () => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) throw new Error('Sign in again to upload.');
+      return { authorization: `Bearer ${token}`, apikey: SUPABASE_KEY };
+    },
+    fingerprint,
+    onProgress,
+  });
 
   const thumbPath = await uploadThumbnailSoft(storagePath, thumb);
 
   const insertResult = await supabase.from('photos').insert({
-    id: photoId,
     album_id: albumId,
     storage_path: storagePath,
     thumb_path: thumbPath,

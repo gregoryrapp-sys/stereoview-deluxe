@@ -364,7 +364,8 @@ export default function AlbumUploadDialog({
                 {queue.some((item) => isVideoFile(item.file)) && (
                   <p className="text-xs text-muted-foreground">
                     Videos are uploaded as they are, with no conversion. Large videos take a while;
-                    keep this window open until they finish.
+                    keep this window open until they finish. If the connection drops, Retry (or
+                    choosing the same file again) continues where it stopped.
                   </p>
                 )}
 
