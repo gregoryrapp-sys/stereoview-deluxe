@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
+import CollectionDescription from '@/components/CollectionDescription';
 import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
 import { useDropboxListing } from '@/hooks/useDropboxListing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -477,6 +478,10 @@ export default function PublicProfile() {
         )}
 
         {data && !accessPrompt && isEventPage && selectedEvent && (
+          <CollectionDescription text={selectedEvent.description} className="mb-6" />
+        )}
+
+        {data && !accessPrompt && isEventPage && selectedEvent && (
           <ThumbnailGrid
             items={activeAlbums}
             sortOptions={COLLECTION_SORT_OPTIONS}
@@ -548,6 +553,7 @@ export default function PublicProfile() {
                   previewsSettled={isLiveDropbox ? dropboxThumbsSettled : undefined}
                   dropboxLive={isLiveDropbox}
                 />
+                <CollectionDescription text={selectedAlbum.description} className="mt-2" />
               </div>
             </div>
             {(activePhotos.length > 1 || isDropboxLoading) && (
