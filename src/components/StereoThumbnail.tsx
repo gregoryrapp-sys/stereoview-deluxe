@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Film, Play } from 'lucide-react';
+import { Film, ImageOff, Play } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { isVideoPhoto } from '@/lib/media';
 import { cn } from '@/lib/utils';
@@ -7,7 +7,13 @@ import { eyeRatioOf, fitBox } from '@/lib/thumbnailFit';
 import { knownNaturalSize, rememberNaturalSize } from '@/hooks/useNaturalImageSize';
 
 interface StereoThumbnailProps {
-  photo: Photo & { thumbSrc?: string; storagePath?: string; alignment?: { swapped: boolean } };
+  photo: Photo & {
+    thumbSrc?: string;
+    storagePath?: string;
+    alignment?: { swapped: boolean };
+    /** Its preview is still on the way (live Dropbox): hold the tile's place. */
+    thumbPending?: boolean;
+  };
   /**
    * Accepted for call-site compatibility (ObjectCoverPickerDialog passes it);
    * the thumbnail itself has no Dropbox-specific behaviour.
@@ -56,9 +62,13 @@ export default function StereoThumbnail({ photo, swapped: swappedProp }: StereoT
   useEffect(() => setEyeRatio(eyeRatioOf(src ? knownNaturalSize(src) : null)), [src]);
 
   if (!src) {
+    if (photo.thumbPending) {
+      return <div className="h-full w-full animate-pulse bg-secondary" role="img" aria-label={`${photo.alt} (loading)`} />;
+    }
+    const Icon = isVideo ? Film : ImageOff;
     return (
       <div className="flex h-full w-full items-center justify-center bg-secondary" role="img" aria-label={photo.alt}>
-        <Film className="h-6 w-6 text-muted-foreground" />
+        <Icon className="h-6 w-6 text-muted-foreground" />
       </div>
     );
   }

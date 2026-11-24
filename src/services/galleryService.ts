@@ -27,6 +27,8 @@ export interface GalleryPhoto extends Photo {
   rightSrc?: string; // For Dropbox pairs
   created_at?: string;
   extension?: string; // File extension (lowercase, without dot) when available
+  /** Live Dropbox: the grid preview is still being fetched. */
+  thumbPending?: boolean;
 }
 
 export interface DropboxFile {

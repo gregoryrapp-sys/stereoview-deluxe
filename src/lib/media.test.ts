@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatDuration, isVideoFile, isVideoPath, isVideoPhoto, videoContentType } from './media';
+import { formatDuration, isVideoFile, isVideoPath, isVideoPhoto, videoContentType, photoDisplayName } from './media';
 
 describe('isVideoPath', () => {
   it('recognises video extensions, ignoring case and query strings', () => {
@@ -40,5 +40,14 @@ describe('formatDuration', () => {
     expect(formatDuration(68.9)).toBe('1:08');
     expect(formatDuration(3725)).toBe('1:02:05');
     expect(formatDuration(NaN)).toBe('0:00');
+  });
+});
+
+describe('photoDisplayName', () => {
+  it('drops the file extension, keeping the rest of the name', () => {
+    expect(photoDisplayName('HSB2026-Robert Plant-02-3767.jpg')).toBe('HSB2026-Robert Plant-02-3767');
+    expect(photoDisplayName('stage.left.MOV')).toBe('stage.left');
+    expect(photoDisplayName('notes.txt')).toBe('notes.txt');
+    expect(photoDisplayName(undefined)).toBe('');
   });
 });

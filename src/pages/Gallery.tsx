@@ -2,8 +2,6 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  DropboxFile,
-  fetchDropboxPhotos,
   fetchGalleryData,
   GalleryData,
   GalleryPhoto,
@@ -24,6 +22,8 @@ import { exitPhotoFullscreen } from '@/lib/fullscreen';
 import { usePhotoSort } from '@/hooks/usePhotoSort';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
 import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
+import { useDropboxListing } from '@/hooks/useDropboxListing';
+import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { useViewerFullscreen } from '@/hooks/useViewerFullscreen';
 
@@ -87,8 +87,6 @@ export default function Gallery() {
 
   const { dropboxCoverUrls } = useDropboxCovers(galleryData.events, galleryData.albums, activeAlbums);
 
-  const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
-  const [isDropboxLoading, setIsDropboxLoading] = useState(false);
 
   const selectedAlbum = useMemo(
     () => galleryData.albums.find((album) => album.id === selectedAlbumId) ?? null,
@@ -108,44 +106,18 @@ export default function Gallery() {
 
   const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
 
-  useEffect(() => {
-  if (!selectedAlbum?.dropbox_folder_url) {
-    setDropboxPhotos([]);
-    return;
-  }
+  // Live Dropbox albums only: an imported one has rows like an upload album.
+  const { files: dropboxPhotos, status: dropboxStatus } = useDropboxListing(
+    isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null,
+    (error) =>
+      toast({ title: 'Could not load Dropbox photos', description: error.message, variant: 'destructive' }),
+  );
+  const isDropboxLoading = dropboxStatus === 'loading';
 
-  let cancelled = false;
-
-  const run = async () => {
-    setIsDropboxLoading(true);
-
-    try {
-      const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url);
-
-      if (cancelled) return;
-
-      setDropboxPhotos(files);
-    } catch (error) {
-      toast({
-        title: 'Could not load Dropbox photos',
-        description: error instanceof Error ? error.message : 'Unknown error',
-        variant: 'destructive',
-      });
-
-      setDropboxPhotos([]);
-    } finally {
-      if (!cancelled) setIsDropboxLoading(false);
-    }
-  };
-
-  run();
-
-  return () => {
-    cancelled = true;
-  };
-}, [isDropboxAlbum, selectedAlbum?.dropbox_folder_url]);
-
-  const dropboxThumbs = useDropboxThumbnails(isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null, dropboxPhotos);
+  const { urls: dropboxThumbs, failed: dropboxThumbsFailed, settled: dropboxThumbsSettled } = useDropboxThumbnails(
+    isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null,
+    dropboxPhotos,
+  );
 
   const activePhotos = useMemo(() => {
   if (isDropboxAlbum) {
@@ -159,10 +131,11 @@ export default function Gallery() {
         eventId: selectedEventId,
         created_at: file.client_modified,
         extension: getFileExtension(file.name),
+        thumbPending: !dropboxThumbs[file.id] && !dropboxThumbsFailed[file.id],
       }));
   }
   return galleryData.photos.filter((photo) => photo.albumId === selectedAlbumId);
-}, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, galleryData.photos, selectedAlbumId, selectedEventId]);
+}, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, dropboxThumbsFailed, galleryData.photos, selectedAlbumId, selectedEventId]);
 
   const sortedActivePhotos = usePhotoSort(activePhotos, photoSort);
 
@@ -178,8 +151,8 @@ export default function Gallery() {
     // Imported ones are counted from their rows like any upload album.
     galleryData.albums.forEach((album) => {
       if (isLiveDropboxAlbum(album)) {
-        if (selectedAlbumId === album.id) {
-          // If this album is selected, show the count from the loaded dropboxPhotos
+        if (selectedAlbumId === album.id && dropboxStatus === 'ready') {
+          // The selected album's listing is complete: its count is final.
           counts[album.id] = dropboxPhotos.length;
         } else if (!counts[album.id]) {
           // Use -1 as a sentinel for "unknown count" for non-selected dropbox albums
@@ -189,7 +162,7 @@ export default function Gallery() {
     });
 
     return counts;
-  }, [galleryData.photos, galleryData.albums, selectedAlbumId, dropboxPhotos]);
+  }, [galleryData.photos, galleryData.albums, selectedAlbumId, dropboxPhotos, dropboxStatus]);
 
   const handleCloseViewer = useCallback(async () => {
     // Exit fullscreen first
@@ -373,14 +346,16 @@ export default function Gallery() {
               {selectedAlbum && <span>{selectedAlbum.title}</span>}
             </div>
             <h2 className="truncate text-xl font-light">{galleryTitle}</h2>
-            <p className="text-sm text-muted-foreground">
-              {gallerySubtitle}
-              {galleryLevel === 'photos' && isDropboxAlbum && (
-                <span className="font-medium text-sky-600 dark:text-sky-400">
-                  {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
-                </span>
-              )}
-            </p>
+            {galleryLevel === 'photos' ? (
+              <PhotoCount
+                total={activePhotos.length}
+                status={isDropboxAlbum ? dropboxStatus : undefined}
+                previewsSettled={isDropboxAlbum ? dropboxThumbsSettled : undefined}
+                dropboxLive={isDropboxAlbum}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">{gallerySubtitle}</p>
+            )}
           </div>
           <div className="flex flex-wrap gap-2">
             {pageShareUrl && (
@@ -394,10 +369,10 @@ export default function Gallery() {
           </div>
         </div>
 
-        {galleryLevel === 'photos' && activePhotos.length > 1 && (
+        {galleryLevel === 'photos' && (activePhotos.length > 1 || isDropboxLoading) && (
           <div className="mb-4 flex items-center justify-start gap-2">
             <span className="text-xs font-medium text-muted-foreground">Sort by</span>
-            <Select value={photoSort} onValueChange={setPhotoSort}>
+            <Select value={photoSort} onValueChange={setPhotoSort} disabled={isDropboxLoading}>
               <SelectTrigger className="w-[180px]">
                 <SelectValue />
               </SelectTrigger>
@@ -488,10 +463,7 @@ export default function Gallery() {
         )}
 
         {galleryLevel === 'photos' && (isDropboxLoading ? (
-            <div className="flex items-center justify-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-              <Cloud className="mr-2 h-4 w-4 animate-pulse" />
-              Loading photos from Dropbox...
-            </div>
+            <PhotoGridSkeleton />
           ) : sortedActivePhotos.length > 0 ? (
             <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
               {sortedActivePhotos.map((photo, index) => (

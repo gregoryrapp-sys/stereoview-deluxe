@@ -23,7 +23,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   createAlbum,
   createEvent,
-  fetchDropboxPhotos,
   fetchDropboxThumbnailBlob,
   deleteAlbumWithPhotos,
   deleteEventWithPhotos,
@@ -40,7 +39,6 @@ import {
   updateAlbum,
   updateEvent,
   updateProfilePresentation,
-  DropboxFile,
   getFileExtension,
 } from '@/services/galleryService';
 import type { AlbumRecord, EventRecord } from '@/types/database';
@@ -85,6 +83,8 @@ import { isPrivacyValid, type PendingPinChange, PrivacySettings } from '@/compon
 import { COLLECTION_SORT_OPTIONS, getCoverPhoto, resolveAlbumCover, resolveEventCover } from '@/lib/galleryUtils';
 import { useDropboxCovers } from '@/hooks/useDropboxCovers';
 import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
+import { useDropboxListing } from '@/hooks/useDropboxListing';
+import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
 
 function CoverPreview({
   photo,
@@ -169,8 +169,6 @@ export default function EventAlbumManagement() {
   const [albumLrSwappedDefault, setAlbumLrSwappedDefault] = useState(false);
   // Photos a Dropbox sync removed; restorable from the album page.
   const [removedPhotos, setRemovedPhotos] = useState<SoftDeletedPhoto[]>([]);
-  const [dropboxPhotos, setDropboxPhotos] = useState<DropboxFile[]>([]);
-  const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<string[]>([]);
   const [managePhotoSort, setManagePhotoSort] = useState('alt_asc');
   const [isMovePhotosDialogOpen, setIsMovePhotosDialogOpen] = useState(false);
@@ -449,7 +447,16 @@ export default function EventAlbumManagement() {
   // any upload album. The folder URL field and the Sync button key on
   // source_type instead.
   const isDropboxAlbum = isLiveDropboxAlbum(selectedAlbum);
-  const dropboxThumbs = useDropboxThumbnails(isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null, dropboxPhotos);
+  const { files: dropboxPhotos, status: dropboxStatus } = useDropboxListing(
+    isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null,
+    (error) =>
+      toast({ title: 'Could not load Dropbox photos', description: error.message, variant: 'destructive' }),
+  );
+  const isDropboxLoading = dropboxStatus === 'loading';
+  const { urls: dropboxThumbs, failed: dropboxThumbsFailed, settled: dropboxThumbsSettled } = useDropboxThumbnails(
+    isDropboxAlbum ? selectedAlbum?.dropbox_folder_url : null,
+    dropboxPhotos,
+  );
 
   const displayPhotos = useMemo(() => {
     if (isDropboxAlbum) {
@@ -466,6 +473,7 @@ export default function EventAlbumManagement() {
         rightSrc: undefined,
         created_at: file.client_modified,
         extension: getFileExtension(file.name),
+        thumbPending: !dropboxThumbs[file.id] && !dropboxThumbsFailed[file.id],
       }));
     }
     // Explicitly map properties to ensure type consistency and add isDropbox flag
@@ -473,7 +481,7 @@ export default function EventAlbumManagement() {
       ...p,
       isDropbox: false,
     }));
-  }, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, albumPhotos, selectedAlbum]);
+  }, [isDropboxAlbum, dropboxPhotos, dropboxThumbs, dropboxThumbsFailed, albumPhotos, selectedAlbum]);
 
   const sortedDisplayPhotos = usePhotoSort(displayPhotos as GalleryPhoto[], managePhotoSort);
 
@@ -717,42 +725,6 @@ export default function EventAlbumManagement() {
       cancelled = true;
     };
   }, [selectedAlbum, galleryData.photos]);
-
-  useEffect(() => {
-    if (!isDropboxAlbum || !selectedAlbum?.dropbox_folder_url) {
-      setDropboxPhotos([]);
-      return;
-    }
-
-    let cancelled = false;
-    const run = async () => {
-      setIsDropboxLoading(true);
-      try {
-        const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
-        if (!cancelled) {
-          setDropboxPhotos(files);
-        }
-      } catch (error) {
-        toast({
-          title: 'Could not load Dropbox photos',
-          description: error instanceof Error ? error.message : 'Unknown error',
-          variant: 'destructive',
-        });
-        if (!cancelled) {
-          setDropboxPhotos([]);
-        }
-      } finally {
-        if (!cancelled) {
-          setIsDropboxLoading(false);
-        }
-      }
-    };
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, [isDropboxAlbum, selectedAlbum?.dropbox_folder_url]);
 
   if (isAuthLoading) {
     return <div className="flex min-h-screen items-center justify-center text-muted-foreground">Loading...</div>;
@@ -1592,14 +1564,12 @@ export default function EventAlbumManagement() {
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-light">Photos in this album</h2>
-                <p className="text-sm text-muted-foreground">
-                  {displayPhotos.length} {displayPhotos.length === 1 ? 'photo' : 'photos'}
-                  {isDropboxAlbum && (
-                    <span className="font-medium text-sky-600 dark:text-sky-400">
-                      {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
-                    </span>
-                  )}
-                </p>
+                <PhotoCount
+                  total={displayPhotos.length}
+                  status={isDropboxAlbum ? dropboxStatus : undefined}
+                  previewsSettled={isDropboxAlbum ? dropboxThumbsSettled : undefined}
+                  dropboxLive={isDropboxAlbum}
+                />
               </div>
               {albumPhotos.length > 0 && (selectedAlbum.source_type === 'upload' || selectedAlbum.import_state === 'imported') && (
                 <div className="flex flex-wrap gap-2">
@@ -1648,10 +1618,7 @@ export default function EventAlbumManagement() {
             )}
 
             {isDropboxLoading ? (
-              <div className="flex items-center justify-center rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">
-                <Cloud className="mr-2 h-4 w-4 animate-pulse" />
-                Loading photos from Dropbox...
-              </div>
+              <PhotoGridSkeleton />
             ) : (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {sortedDisplayPhotos.map((photo) => {

@@ -61,3 +61,8 @@ export function formatDuration(seconds: number): string {
   const ss = String(s).padStart(2, '0');
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
+
+/** A photo's name for captions: its file name without the extension. */
+export function photoDisplayName(alt: string | undefined): string {
+  return (alt ?? '').replace(/\.(jpe?g|png|webp|gif|heic|heif|avif|mp4|mov|m4v)$/i, '').trim();
+}

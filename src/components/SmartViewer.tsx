@@ -10,7 +10,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/hooks/use-toast';
 import { type EyeTier, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import type { GalleryPhoto } from '@/services/galleryService';
-import { formatDuration, isVideoPhoto } from '@/lib/media';
+import { formatDuration, isVideoPhoto, photoDisplayName } from '@/lib/media';
 import { useSbsVideo } from '@/hooks/useSbsVideo';
 import { MAX_SEPARATION_STEPS, separationOffsetPx, useEyeSeparation } from '@/hooks/useEyeSeparation';
 import type { AlbumRecord } from '@/types/database';
@@ -667,6 +667,34 @@ export default function SmartViewer({
     </div>
   );
 
+  // Caption: the photo's name and its place in the album ("2 / 9"), compact,
+  // at the top between Share and Close, and only while the controls show.
+  // In side-by-side it is drawn once per eye, at the same spot in each half,
+  // so in a headset it fuses into one label instead of straddling the seam.
+  // QuickView's Flip L/R owns the top centre, so there it sits just below.
+  const captionName = photoDisplayName(photo.alt);
+  const counter = photos.length > 1 ? `${photoIndex + 1} / ${photos.length}` : null;
+  const captionPill = (
+    <span className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-black/45 px-3 py-1 text-xs text-white/90 backdrop-blur-sm">
+      {captionName && <span className="truncate">{captionName}</span>}
+      {counter && <span className="shrink-0 tabular-nums text-white/60">{counter}</span>}
+    </span>
+  );
+  const captionTop = onFlipEyes ? 'top-[4.75rem]' : 'top-[1.625rem]';
+  const caption = (captionName || counter) && (
+    mode === 'stereo' ? (
+      <div aria-hidden className={cn('pointer-events-none absolute inset-x-0 flex transition-opacity duration-200', captionTop, controlVisibility)}>
+        {/* Each half keeps clear of the round buttons (and the loading spinner) in its outer corner. */}
+        <div className="flex w-1/2 justify-center px-24">{captionPill}</div>
+        <div className="flex w-1/2 justify-center px-24">{captionPill}</div>
+      </div>
+    ) : (
+      <div className={cn('pointer-events-none absolute inset-x-0 flex justify-center px-24 transition-opacity duration-200', captionTop, controlVisibility)}>
+        {captionPill}
+      </div>
+    )
+  );
+
   const zoomBadge = Math.abs(scale - 1) > 0.01 && (
     <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
       {Math.round(scale * 100)}%
@@ -697,6 +725,7 @@ export default function SmartViewer({
         {closeButton}
         {shareButton}
         {flipButton}
+        {caption}
         {bottomLeftBar}
         {navButtons}
         {zoomBadge}
@@ -737,6 +766,7 @@ export default function SmartViewer({
       {closeButton}
       {shareButton}
       {flipButton}
+      {caption}
       {bottomLeftBar}
       {navButtons}
       {zoomBadge}
