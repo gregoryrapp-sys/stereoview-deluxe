@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
+import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
+import { useDropboxListing } from '@/hooks/useDropboxListing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -10,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { useAuth } from '@/contexts/AuthContext';
 import PinGate from '@/components/PinGate';
 import { fetchGallery, type LockedInfo } from '@/lib/accessGrant';
-import { type DropboxFile, fetchDropboxThumbnailBlob, GalleryPhoto, SharedGalleryData, fetchDropboxPhotos, getFileExtension } from '@/services/galleryService';
+import { fetchDropboxThumbnailBlob, GalleryPhoto, SharedGalleryData, getFileExtension } from '@/services/galleryService';
 import { useDropboxThumbnails } from '@/hooks/useDropboxThumbnails';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import SmartViewer from '@/components/SmartViewer';
@@ -54,8 +56,6 @@ export default function PublicProfile() {
   const [reloadKey, setReloadKey] = useState(0);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number | null>(null);
   const [photoSort, setPhotoSort] = useState('alt_asc');
-  const [dropboxFiles, setDropboxFiles] = useState<DropboxFile[]>([]);
-  const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
@@ -191,35 +191,20 @@ export default function PublicProfile() {
     [albumSlug, selectedEvent, data?.albums],
   );
 
-  useEffect(() => {
-    if (!isLiveDropboxAlbum(selectedAlbum) || !selectedAlbum.dropbox_folder_url) {
-      setDropboxFiles([]);
-      return;
-    }
-
-    let cancelled = false;
-    const fetchAlbumFiles = async () => {
-      setIsDropboxLoading(true);
-      try {
-        const files = await fetchDropboxPhotos(selectedAlbum.dropbox_folder_url!);
-        if (!cancelled) setDropboxFiles(files);
-      } catch (e) {
-        console.error('Failed to fetch dropbox album photos', e);
-        if (!cancelled) setError('Could not load photos for this Dropbox album.');
-      } finally {
-        if (!cancelled) setIsDropboxLoading(false);
-      }
-    };
-
-    fetchAlbumFiles();
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedAlbum]);
+  // One listing per live Dropbox album; 'loading' from the first render on.
+  const isLiveDropbox = isLiveDropboxAlbum(selectedAlbum);
+  const { files: dropboxFiles, status: dropboxStatus } = useDropboxListing(
+    isLiveDropbox ? selectedAlbum?.dropbox_folder_url : null,
+    () => setError('Could not load photos for this Dropbox album.'),
+  );
+  const isDropboxLoading = dropboxStatus === 'loading';
 
   // Grid tiles are cached thumbnails from the proxy; the viewer fetches the
   // original of the photo being viewed, by name, on demand.
-  const dropboxThumbs = useDropboxThumbnails(selectedAlbum?.dropbox_folder_url, dropboxFiles);
+  const { urls: dropboxThumbs, failed: dropboxThumbsFailed, settled: dropboxThumbsSettled } = useDropboxThumbnails(
+    isLiveDropbox ? selectedAlbum?.dropbox_folder_url : null,
+    dropboxFiles,
+  );
   const dropboxAlbumPhotos = useMemo<GalleryPhoto[]>(
     () =>
       dropboxFiles.map((file) => ({
@@ -229,8 +214,9 @@ export default function PublicProfile() {
         alt: file.name,
         created_at: file.client_modified,
         extension: getFileExtension(file.name),
+        thumbPending: !dropboxThumbs[file.id] && !dropboxThumbsFailed[file.id],
       })),
-    [dropboxFiles, dropboxThumbs],
+    [dropboxFiles, dropboxThumbs, dropboxThumbsFailed],
   );
 
   // Management route for the object on screen (album, event, or the page).
@@ -556,20 +542,18 @@ export default function PublicProfile() {
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-2xl font-light">{selectedAlbum.title}</h2>
-                <p className="text-sm text-muted-foreground">
-                  {activePhotos.length} {activePhotos.length === 1 ? 'photo' : 'photos'}
-                  {isLiveDropboxAlbum(selectedAlbum) && (
-                    <span className="font-medium text-sky-600 dark:text-sky-400">
-                      {' · '} <Cloud className="inline h-3 w-3" /> Dropbox Live
-                    </span>
-                  )}
-                </p>
+                <PhotoCount
+                  total={activePhotos.length}
+                  status={isLiveDropbox ? dropboxStatus : undefined}
+                  previewsSettled={isLiveDropbox ? dropboxThumbsSettled : undefined}
+                  dropboxLive={isLiveDropbox}
+                />
               </div>
             </div>
-            {activePhotos.length > 1 && (
+            {(activePhotos.length > 1 || isDropboxLoading) && (
               <div className="flex items-center justify-start gap-2">
                 <span className="text-xs font-medium text-muted-foreground">Sort by</span>
-                <Select value={photoSort} onValueChange={setPhotoSort}>
+                <Select value={photoSort} onValueChange={setPhotoSort} disabled={isDropboxLoading}>
                   <SelectTrigger className="w-[180px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -583,10 +567,7 @@ export default function PublicProfile() {
               </div>
             )}
             {isDropboxLoading ? (
-              <div className="flex items-center justify-center rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-                <Cloud className="mr-2 h-4 w-4 animate-pulse" />
-                Loading photos from Dropbox...
-              </div>
+              <PhotoGridSkeleton />
             ) : sortedActivePhotos.length > 0 ? (
               <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
                 {sortedActivePhotos.map((photo, index) => (
@@ -599,13 +580,7 @@ export default function PublicProfile() {
                     className="group overflow-hidden rounded-lg bg-secondary text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-wait disabled:hover:scale-100"
                   >
                     <span className="block aspect-square overflow-hidden">
-                      {photo.src ? (
-                        <StereoThumbnail photo={photo} />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center">
-                          <Images className="h-6 w-6 text-muted-foreground/60" />
-                        </div>
-                      )}
+                      <StereoThumbnail photo={photo} />
                     </span>
                     <span className="block p-1.5">
                       <span className="block truncate text-[10px] font-medium leading-tight text-foreground">

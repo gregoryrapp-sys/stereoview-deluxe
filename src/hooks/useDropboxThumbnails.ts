@@ -14,16 +14,28 @@ const THUMBNAIL_CONCURRENCY = 6;
  * so a grid costs one small request per tile instead of a multi-megabyte
  * original. The viewer still fetches the original of the photo being viewed.
  * Everything is revoked when the folder changes or the component unmounts.
+ *
+ * `failed` holds the files whose thumbnail could not be fetched, so a grid can
+ * stop showing them as still loading; `settled` counts both, for progress.
  */
+export interface DropboxThumbnails {
+  urls: Record<string, string>;
+  failed: Record<string, true>;
+  /** Thumbnails fetched or given up on so far. */
+  settled: number;
+}
+
 export function useDropboxThumbnails(
   folderUrl: string | null | undefined,
   files: DropboxFile[],
-): Record<string, string> {
+): DropboxThumbnails {
   const [urls, setUrls] = useState<Record<string, string>>({});
+  const [failed, setFailed] = useState<Record<string, true>>({});
   const filesKey = files.map((file) => `${file.id}:${file.client_modified ?? ''}`).join('|');
 
   useEffect(() => {
     setUrls({});
+    setFailed({});
     if (!folderUrl || files.length === 0) return;
 
     let cancelled = false;
@@ -31,11 +43,17 @@ export function useDropboxThumbnails(
 
     void mapWithConcurrency(files, THUMBNAIL_CONCURRENCY, async (file) => {
       if (cancelled) return;
-      const blob = await fetchDropboxThumbnailBlob({
-        folderUrl,
-        fileName: file.name,
-        modified: file.client_modified,
-      });
+      let blob: Blob;
+      try {
+        blob = await fetchDropboxThumbnailBlob({
+          folderUrl,
+          fileName: file.name,
+          modified: file.client_modified,
+        });
+      } catch (error) {
+        if (!cancelled) setFailed((current) => ({ ...current, [file.id]: true }));
+        throw error;
+      }
       const url = URL.createObjectURL(blob);
       if (cancelled) {
         URL.revokeObjectURL(url);
@@ -54,5 +72,5 @@ export function useDropboxThumbnails(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [folderUrl, filesKey]);
 
-  return urls;
+  return { urls, failed, settled: Object.keys(urls).length + Object.keys(failed).length };
 }
