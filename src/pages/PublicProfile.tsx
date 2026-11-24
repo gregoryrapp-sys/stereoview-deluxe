@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import CollectionDescription from '@/components/CollectionDescription';
+import ViewingTips from '@/components/ViewingTips';
 import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
 import { useDropboxListing } from '@/hooks/useDropboxListing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -556,6 +557,7 @@ export default function PublicProfile() {
                 <CollectionDescription text={selectedAlbum.description} className="mt-2" />
               </div>
             </div>
+            <ViewingTips />
             {(activePhotos.length > 1 || isDropboxLoading) && (
               <div className="flex items-center justify-start gap-2">
                 <span className="text-xs font-medium text-muted-foreground">Sort by</span>

@@ -11,6 +11,7 @@ import SmartViewer from '@/components/SmartViewer';
 import ShareLinkButton from '@/components/ShareLinkButton';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import CollectionDescription from '@/components/CollectionDescription';
+import ViewingTips from '@/components/ViewingTips';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -371,6 +372,8 @@ export default function Gallery() {
             </Button>
           </div>
         </div>
+
+        {galleryLevel === 'photos' && <ViewingTips className="mb-4" />}
 
         {galleryLevel === 'photos' && (activePhotos.length > 1 || isDropboxLoading) && (
           <div className="mb-4 flex items-center justify-start gap-2">

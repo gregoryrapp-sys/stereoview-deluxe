@@ -90,3 +90,27 @@ All colors MUST be HSL.
   0%, 100% { opacity: 1; }
   50% { opacity: 0.6; }
 }
+
+/* Rotate hint (RotatePhoneGraphic): turn sideways, hold, turn back. */
+@keyframes rotate-phone-hint {
+  0%, 18% { transform: rotate(0deg); }
+  42%, 78% { transform: rotate(-90deg); }
+  100% { transform: rotate(0deg); }
+}
+@keyframes rotate-phone-hint-eyes {
+  0%, 30% { opacity: 0; }
+  42%, 78% { opacity: 0.55; }
+  90%, 100% { opacity: 0; }
+}
+.rotate-phone-hint__phone {
+  transform-box: view-box;
+  transform-origin: 16px 16px;
+  animation: rotate-phone-hint 3.6s ease-in-out infinite;
+}
+.rotate-phone-hint__eyes {
+  animation: rotate-phone-hint-eyes 3.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rotate-phone-hint__phone { animation: none; transform: rotate(-90deg); }
+  .rotate-phone-hint__eyes { animation: none; opacity: 0.55; }
+}

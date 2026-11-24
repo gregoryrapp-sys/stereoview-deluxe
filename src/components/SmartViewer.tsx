@@ -7,6 +7,8 @@ import { useTransformSettle } from '@/hooks/useTransformSettle';
 import { useNaturalImageSize } from '@/hooks/useNaturalImageSize';
 import { eyeSizeFromThumb, eyeViewport, fitContain } from '@/lib/viewerGeometry';
 import { cn } from '@/lib/utils';
+import { deviceKind } from '@/lib/device';
+import RotatePhoneGraphic from '@/components/RotatePhoneGraphic';
 import { toast } from '@/hooks/use-toast';
 import { type EyeTier, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/imageProcessing';
 import type { GalleryPhoto } from '@/services/galleryService';
@@ -69,6 +71,7 @@ export default function SmartViewer({
   eyesFlipped = false,
 }: SmartViewerProps) {
   const [mode, setMode] = useState<ViewMode>('stereo');
+  const touchDevice = useMemo(() => deviceKind() !== 'desktop', []);
   const [showControls, setShowControls] = useState(true);
   /** Bumped by any interaction, so the auto-hide countdown starts over. */
   const [interaction, setInteraction] = useState(0);
@@ -695,6 +698,24 @@ export default function SmartViewer({
     )
   );
 
+  // Rotate hint: upright on a phone or tablet the viewer shows one eye, so a
+  // small turning-phone graphic suggests going sideways for 3D. It comes and
+  // goes with the other controls; never on a desktop, where a tall window is
+  // not something to rotate.
+  const rotateHint = mode === '2d' && touchDevice && (
+    <div
+      className={cn(
+        'pointer-events-none absolute inset-x-0 bottom-[calc(max(1rem,env(safe-area-inset-bottom))+3.75rem)] flex justify-center transition-opacity duration-200',
+        controlVisibility,
+      )}
+    >
+      <span className="flex items-center gap-2 rounded-full bg-black/45 py-1.5 pl-2 pr-3.5 text-xs text-white/90 backdrop-blur-sm">
+        <RotatePhoneGraphic className="h-6 w-6" />
+        Rotate for 3D
+      </span>
+    </div>
+  );
+
   const zoomBadge = Math.abs(scale - 1) > 0.01 && (
     <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-secondary/60 px-3 py-1 text-sm text-muted-foreground backdrop-blur-sm">
       {Math.round(scale * 100)}%
@@ -726,6 +747,7 @@ export default function SmartViewer({
         {shareButton}
         {flipButton}
         {caption}
+        {rotateHint}
         {bottomLeftBar}
         {navButtons}
         {zoomBadge}
