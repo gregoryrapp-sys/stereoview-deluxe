@@ -1190,7 +1190,7 @@ export default function EventAlbumManagement() {
                   <CoverPreview
                     photo={profileCover}
                     icon={<User className="h-6 w-6" />}
-                    className="mt-1 aspect-[4/3] w-full"
+                    className="mt-1 aspect-square w-full"
                   />
                 </button>
                 <div className="space-y-2">
@@ -1242,7 +1242,7 @@ export default function EventAlbumManagement() {
   
                   return (
                     <Card key={eventRecord.id} className="overflow-hidden">
-                      <div className="aspect-[3/2] bg-secondary">
+                      <div className="aspect-square bg-secondary">
                         {cover ? <StereoThumbnail photo={cover} /> : (
                           <div className="flex h-full w-full items-center justify-center text-muted-foreground">
                             <FolderOpen className="h-6 w-6" />
@@ -1286,7 +1286,7 @@ export default function EventAlbumManagement() {
               <CardContent className="grid gap-4 md:grid-cols-[104px_1fr_1fr]">
                 <button type="button" onClick={() => selectedEvent && setCoverPicker(selectedEvent)} className="text-left">
                   <Label>Cover</Label>
-                  <div className="mt-1 aspect-[4/3] w-full shrink-0 overflow-hidden rounded-md bg-secondary">
+                  <div className="mt-1 aspect-square w-full shrink-0 overflow-hidden rounded-md bg-secondary">
                     {eventCover ? (
                       <StereoThumbnail photo={eventCover} />
                     ) : (
@@ -1351,7 +1351,7 @@ export default function EventAlbumManagement() {
   
                   return (
                     <Card key={album.id} className="overflow-hidden">
-                      <div className="aspect-[3/2] bg-secondary">
+                      <div className="aspect-square bg-secondary">
                         {cover ? <StereoThumbnail photo={cover} /> : (
                           <div className="flex h-full w-full items-center justify-center text-muted-foreground">
                             <Images className="h-6 w-6" />
@@ -1405,7 +1405,7 @@ export default function EventAlbumManagement() {
                   <CoverPreview
                     photo={albumCover}
                     icon={<Images className="h-6 w-6" />}
-                    className="mt-1 aspect-[4/3] w-full"
+                    className="mt-1 aspect-square w-full"
                   />
                 </button>
                 <div className="space-y-2">
@@ -1669,7 +1669,7 @@ export default function EventAlbumManagement() {
                           isSelectedCover ? 'ring-2 ring-emerald-500' : ''
                         } ${isSelectedForMove ? 'ring-2 ring-blue-500' : ''}`}
                       >
-                        <div className="aspect-[2/1] bg-secondary">
+                        <div className="aspect-square bg-secondary">
                           <StereoThumbnail photo={photo as GalleryPhoto} />
                         </div>
                         <CardContent className="flex items-center justify-between gap-2 p-2">
