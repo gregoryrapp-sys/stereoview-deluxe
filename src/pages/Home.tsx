@@ -156,7 +156,7 @@ export default function Home() {
         {sortedPhotographers.map((photographer) => (
           <Link key={photographer.id} to={`/${photographer.slug}`}>
             <Card className="overflow-hidden transition-colors hover:bg-accent">
-              <div className="aspect-[3/2] bg-secondary">
+              <div className="aspect-square bg-secondary">
                 {photographer.locked ? (
                   // Private but listed: the directory function withholds the
                   // cover, so a lock stands in for it.

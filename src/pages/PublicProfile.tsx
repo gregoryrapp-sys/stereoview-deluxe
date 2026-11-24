@@ -57,7 +57,6 @@ export default function PublicProfile() {
   const [dropboxFiles, setDropboxFiles] = useState<DropboxFile[]>([]);
   const [isDropboxLoading, setIsDropboxLoading] = useState(false);
   const [dropboxCoverUrls, setDropboxCoverUrls] = useState<Record<string, { src: string; name: string }>>({});
-  const [dropboxProfileCover, setDropboxProfileCover] = useState<GalleryPhoto | null>(null);
   const fullscreenContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -104,42 +103,6 @@ export default function PublicProfile() {
     }
     loadPublicData();
   }, [profileSlug, eventSlug, albumSlug, reloadKey, previewAsVisitor]);
-
-  useEffect(() => {
-    if (!data?.profile) return;
-
-    const profile = data.profile as any;
-    if (profile.dropbox_cover_album_id && profile.dropbox_cover_image_name) {
-      const album = data.albums.find(a => a.id === profile.dropbox_cover_album_id);
-      if (album?.dropbox_folder_url) {
-        let cancelled = false;
-        let objectUrl: string | null = null;
-        const fetchCover = async () => {
-          try {
-            // The cover's file name is already known; no metadata lookup, and
-            // a cached thumbnail instead of the multi-megabyte original.
-            const blob = await fetchDropboxThumbnailBlob({
-              folderUrl: album.dropbox_folder_url!,
-              fileName: profile.dropbox_cover_image_name,
-            });
-            objectUrl = URL.createObjectURL(blob);
-            if (!cancelled) {
-              setDropboxProfileCover({ id: `profile-cover-${profile.id}`, src: objectUrl, alt: profile.dropbox_cover_image_name });
-            } else if (objectUrl) {
-              URL.revokeObjectURL(objectUrl);
-            }
-          } catch (e) {
-            console.error("Failed to fetch dropbox profile cover", e);
-          }
-        };
-        fetchCover();
-        return () => {
-          cancelled = true;
-          if (objectUrl) URL.revokeObjectURL(objectUrl);
-        };
-      }
-    }
-  }, [data]);
 
   useEffect(() => {
     if (!data) return;
@@ -346,49 +309,6 @@ export default function PublicProfile() {
   const isEventPage = !!eventSlug && !albumSlug;
   const isProfilePage = !eventSlug;
   
-  const headerCover = useMemo(() => {
-    if (!data) return null;
-
-    if (isAlbumPage && selectedAlbum) {
-      const album = selectedAlbum as any;
-      if (album.dropbox_cover_image_name) {
-        // For dropbox albums, activePhotos are already fetched. Find cover by name.
-        return activePhotos.find(p => p.alt === album.dropbox_cover_image_name) ?? null;
-      }
-      if (album.cover_photo_id) {
-        // For upload albums, find cover by id.
-        return activePhotos.find(p => p.id === album.cover_photo_id) ?? null;
-      }
-      return null; // No explicit cover
-    }
-
-    if (isEventPage && selectedEvent) {
-      const event = selectedEvent as any;
-      if (event.dropbox_cover_album_id && event.dropbox_cover_image_name) {
-        const coverInfo = dropboxCoverUrls[`event:${event.id}`];
-        if (coverInfo) {
-          return { id: `event-cover-${event.id}`, src: coverInfo.src, alt: coverInfo.name };
-        }
-        return null; // wait for fetch
-      }
-      if (event.cover_photo_id) {
-        const eventPhotos = photosByEvent[selectedEvent.id] ?? [];
-        return eventPhotos.find(p => p.id === event.cover_photo_id) ?? null;
-      }
-      return null; // No explicit cover
-    }
-    
-    // Profile page logic
-    const profile = data.profile as any;
-    if (profile.dropbox_cover_album_id && profile.dropbox_cover_image_name) {
-      return dropboxProfileCover;
-    }
-    if (profile.cover_photo_id) {
-      return data.photos.find(p => p.id === profile.cover_photo_id) ?? null;
-    }
-    return null;
-  }, [data, selectedAlbum, selectedEvent, activePhotos, photosByEvent, isAlbumPage, isEventPage, dropboxProfileCover, dropboxCoverUrls]);
-
   const profileLabel = data?.profile.display_name ?? data?.profile.slug ?? profileSlug;
   // The page on screen, as a visitor would open it: the photographer, an event, or an album.
   const pageShareUrl = data?.profile.slug
@@ -398,11 +318,6 @@ export default function PublicProfile() {
   return (
     <div className="min-h-screen px-4 py-6">
       <header className="mx-auto mb-6 max-w-6xl">
-        {headerCover && (
-          <div className="mb-5 aspect-[4/1] overflow-hidden rounded-md bg-secondary">
-            <StereoThumbnail photo={headerCover} />
-          </div>
-        )}
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2 text-xl font-light md:text-2xl">
             <Link to={`/${profileSlug}`} className="hover:underline">
@@ -534,7 +449,7 @@ export default function PublicProfile() {
               if (event.locked) {
                 return (
                   <Link key={event.id} to={`/${profileSlug}/${event.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
-                    <div className="flex aspect-[3/2] flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
+                    <div className="flex aspect-square flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
                       <Lock className="h-6 w-6" />
                       <span className="text-xs font-medium">PIN required</span>
                     </div>
@@ -563,7 +478,7 @@ export default function PublicProfile() {
 
               return (
                 <Link key={event.id} to={`/${profileSlug}/${event.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
-                  <div className="aspect-[3/2] bg-secondary">
+                  <div className="aspect-square bg-secondary">
                     {cover ? <StereoThumbnail photo={cover} /> : <div className="flex h-full w-full items-center justify-center"><FolderOpen className="h-6 w-6 text-muted-foreground" /></div>}
                   </div>
                   <div className="p-3">
@@ -584,7 +499,7 @@ export default function PublicProfile() {
               if (album.locked) {
                 return (
                   <Link key={album.id} to={`/${profileSlug}/${selectedEvent.slug}/${album.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
-                    <div className="flex aspect-[3/2] flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
+                    <div className="flex aspect-square flex-col items-center justify-center gap-1.5 bg-secondary text-muted-foreground">
                       <Lock className="h-6 w-6" />
                       <span className="text-xs font-medium">PIN required</span>
                     </div>
@@ -616,7 +531,7 @@ export default function PublicProfile() {
 
               return (
                 <Link key={album.id} to={`/${profileSlug}/${selectedEvent.slug}/${album.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
-                  <div className="aspect-[3/2] bg-secondary">
+                  <div className="aspect-square bg-secondary">
                     {cover ? <StereoThumbnail photo={cover} /> : <div className="flex h-full w-full items-center justify-center"><Images className="h-6 w-6 text-muted-foreground" /></div>}
                   </div>
                   <div className="p-3">
@@ -683,7 +598,7 @@ export default function PublicProfile() {
                     disabled={!photo.src}
                     className="group overflow-hidden rounded-lg bg-secondary text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:cursor-wait disabled:hover:scale-100"
                   >
-                    <span className="block aspect-[2/1] overflow-hidden">
+                    <span className="block aspect-square overflow-hidden">
                       {photo.src ? (
                         <StereoThumbnail photo={photo} />
                       ) : (

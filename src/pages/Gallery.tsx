@@ -426,7 +426,7 @@ export default function Gallery() {
                   onClick={() => handleSelectEvent(event.id)}
                   className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  <span className="block aspect-[3/2] bg-secondary">
+                  <span className="block aspect-square bg-secondary">
                     {eventCover ? <StereoThumbnail photo={eventCover} /> : (
                       <span className="flex h-full w-full items-center justify-center">
                         <FolderOpen className="h-6 w-6 text-muted-foreground" />
@@ -461,7 +461,7 @@ export default function Gallery() {
                   onClick={() => handleSelectAlbum(album.id)}
                   className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  <span className="block aspect-[3/2] bg-secondary">
+                  <span className="block aspect-square bg-secondary">
                     {albumCover ? <StereoThumbnail photo={albumCover} /> : (
                       <span className="flex h-full w-full items-center justify-center">
                         <Images className="h-6 w-6 text-muted-foreground" />
@@ -500,7 +500,7 @@ export default function Gallery() {
                   onClick={() => handlePhotoClick(index)}
                   className="group overflow-hidden rounded-md bg-secondary text-left transition-transform hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background"
                 >
-                  <span className="block aspect-[2/1] overflow-hidden">
+                  <span className="block aspect-square overflow-hidden">
                     <StereoThumbnail photo={photo} />
                   </span>
                   <span className="block p-1.5">

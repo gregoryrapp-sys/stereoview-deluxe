@@ -200,7 +200,7 @@ export function ObjectCoverPickerDialog({
                 <button
                   type="button"
                   onClick={() => onSelect(null)}
-                  className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
+                  className={`flex aspect-square items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
                     selectedId === null ? 'ring-2 ring-ring' : ''
                   }`}
                 >
@@ -215,7 +215,7 @@ export function ObjectCoverPickerDialog({
                     selectedId === photo.id ? 'ring-2 ring-ring' : ''
                   }`}
                 >
-                  <div className="aspect-[2/1]">
+                  <div className="aspect-square">
                     <StereoThumbnail photo={photo} album={photo.album} />
                   </div>
                   <span className="absolute inset-x-0 bottom-0 bg-background/80 px-2 py-1 text-left text-xs backdrop-blur-sm transition-colors group-hover:bg-background/90 group-focus:bg-background/90">

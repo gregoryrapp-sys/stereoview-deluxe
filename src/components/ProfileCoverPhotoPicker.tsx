@@ -237,7 +237,7 @@ export function ProfileCoverPhotoPicker({
                   onClick={() => setSelectedEventId(event.id)}
                   className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  <span className="block aspect-[3/2] bg-secondary">
+                  <span className="block aspect-square bg-secondary">
                     {eventCover ? <StereoThumbnail photo={eventCover} /> : (
                       <span className="flex h-full w-full items-center justify-center">
                         <FolderOpen className="h-6 w-6 text-muted-foreground" />
@@ -293,7 +293,7 @@ export function ProfileCoverPhotoPicker({
                   onClick={() => setSelectedAlbumId(album.id)}
                   className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  <span className="block aspect-[3/2] bg-secondary">
+                  <span className="block aspect-square bg-secondary">
                     {albumCover ? <StereoThumbnail photo={albumCover} /> : (
                       <span className="flex h-full w-full items-center justify-center">
                         <Images className="h-6 w-6 text-muted-foreground" />
@@ -335,7 +335,7 @@ export function ProfileCoverPhotoPicker({
                 <button
                   type="button"
                   onClick={() => onSelect(null)}
-                  className={`flex aspect-[2/1] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
+                  className={`flex aspect-square items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground ${
                     currentCoverPhotoId === null ? 'ring-2 ring-ring' : ''
                   }`}
                 >
@@ -350,7 +350,7 @@ export function ProfileCoverPhotoPicker({
                     currentCoverPhotoId === photo.id ? 'ring-2 ring-ring' : ''
                   }`}
                 >
-                  <div className="aspect-[2/1]">
+                  <div className="aspect-square">
                     <StereoThumbnail photo={photo} />
                   </div>
                   <span className="absolute inset-x-0 bottom-0 bg-background/80 px-2 py-1 text-left text-xs backdrop-blur-sm transition-colors group-hover:bg-background/90 group-focus:bg-background/90">

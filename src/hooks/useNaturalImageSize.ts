@@ -21,6 +21,11 @@ export function rememberNaturalSize(src: string | undefined, width: number, heig
   if (src && width > 0 && height > 0) sizes.set(src, { width, height });
 }
 
+/** A size already seen this session, without loading anything. */
+export function knownNaturalSize(src: string | undefined): NaturalSize | null {
+  return (src && sizes.get(src)) || null;
+}
+
 export function useNaturalImageSize(src: string | undefined): NaturalSize | null {
   const [size, setSize] = useState<NaturalSize | null>(() => (src ? sizes.get(src) ?? null : null));
 
