@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import AlbumUploadDialog, { isAcceptedFile } from './AlbumUploadDialog';
+import AlbumUploadDialog from './AlbumUploadDialog';
+import { isAcceptedFile } from '@/lib/media';
 
 vi.mock('@/services/galleryService', () => ({ uploadSbsPhoto: vi.fn(), uploadSbsVideo: vi.fn() }));
 vi.mock('@/lib/spatial/convertSpatial', () => ({ convertSpatialToSbs: vi.fn() }));

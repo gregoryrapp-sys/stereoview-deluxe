@@ -396,10 +396,13 @@ export async function splitStereoImage(
 
   const stored = persistKey(photo, alignment);
   const tierKey = eyeTierKey(tier);
+  // QuickView shows the viewer's own files (blob: URLs). They are split in
+  // memory only: someone's personal photos must not land in the eye cache.
+  const persistable = !(photo as { src?: string }).src?.startsWith('blob:');
 
   const work = (async () => {
     // Persisted from an earlier visit: no download, no split.
-    const persisted = await readPersistedEyes(stored, tierKey, eyes);
+    const persisted = persistable ? await readPersistedEyes(stored, tierKey, eyes) : null;
     if (persisted) {
       const { meta } = persisted;
       const appliedAlignment: StereoAlignment = { dx: meta.dx, dy: meta.dy, swapped: meta.swapped };
@@ -418,7 +421,7 @@ export async function splitStereoImage(
     const split = await processImage(photo, folderUrl, eyes, alignment, tier);
     const result = await toProcessed(split);
     // Store after answering; the viewer never waits for the write.
-    void persistEyes(stored, tierKey, split.left, split.right, {
+    if (persistable) void persistEyes(stored, tierKey, split.left, split.right, {
       width: split.width,
       height: split.height,
       sourceScale: split.sourceScale,

@@ -12,6 +12,7 @@ import UploadPhoto from "./pages/UploadPhoto";
 import EventAlbumManagement from "./pages/EventAlbumManagement";
 import PublicProfile from "./pages/PublicProfile";
 import Home from "./pages/Home";
+import QuickView from "@/components/QuickView";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -44,6 +45,8 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          {/* On every page: view this device's own SBS files without uploading. */}
+          <QuickView />
         </Router>
       </AuthProvider>
     </TooltipProvider>
