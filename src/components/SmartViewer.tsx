@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
-import { ChevronLeft, ChevronRight, Loader2, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react';
+import { ArrowLeftRight, ChevronLeft, ChevronRight, Loader2, Pause, Play, Share2, Volume2, VolumeX, X } from 'lucide-react';
 import type { Photo } from '@/data/photos';
 import { useStereoGestures } from '@/hooks/useStereoGestures';
 import { useProcessedImage, usePreloadImages } from '@/hooks/useProcessedImage';
@@ -26,6 +26,14 @@ interface SmartViewerProps {
   onNext: () => void;
   hasPrevious: boolean;
   hasNext: boolean;
+  /**
+   * QuickView: the items are files from this device, not album photos. Share
+   * sends the picture itself; a video has nothing to share (no page to link).
+   */
+  local?: boolean;
+  /** Shows a Flip L/R control (QuickView): exchange which half is the left eye. */
+  onFlipEyes?: () => void;
+  eyesFlipped?: boolean;
 }
 
 type ViewMode = 'stereo' | '2d';
@@ -55,6 +63,9 @@ export default function SmartViewer({
   onNext,
   hasPrevious,
   hasNext,
+  local = false,
+  onFlipEyes,
+  eyesFlipped = false,
 }: SmartViewerProps) {
   const [mode, setMode] = useState<ViewMode>('stereo');
   const [showControls, setShowControls] = useState(true);
@@ -372,6 +383,25 @@ export default function SmartViewer({
   // control, pinches, pans, swipes and double taps never flip them.
   const controlVisibility = showControls ? 'opacity-100' : 'pointer-events-none opacity-0';
   const roundButton = 'rounded-full bg-white/20 p-3 text-white backdrop-blur-sm transition-opacity duration-200';
+  // Flip L/R, top centre (QuickView only): pictures straight off a camera
+  // can be stored either way round.
+  const flipButton = onFlipEyes && (
+    <button
+      onClick={(e) => { e.stopPropagation(); onFlipEyes(); }}
+      data-viewer-control
+      aria-pressed={eyesFlipped}
+      className={cn(
+        'absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-4 py-3 text-sm font-medium text-white backdrop-blur-sm transition-opacity duration-200',
+        eyesFlipped ? 'bg-sky-500/70' : 'bg-white/20',
+        controlVisibility,
+      )}
+      aria-label="Flip left and right"
+    >
+      <ArrowLeftRight className="h-5 w-5" />
+      {eyesFlipped ? 'R | L' : 'L | R'}
+    </button>
+  );
+
   // Previous / Next: large, vertically centred on the screen edges, frosted
   // glass (a strong backdrop blur with a light tint and a hairline edge)
   // rather than a flat grey disc, so they read on bright and dark photos alike.
@@ -395,7 +425,7 @@ export default function SmartViewer({
     </button>
   );
 
-  const shareButton = (
+  const shareButton = !(local && isVideo) && (
     <button
       onClick={(e) => {
         e.stopPropagation();
@@ -607,6 +637,7 @@ export default function SmartViewer({
         {errorIndicator}
         {closeButton}
         {shareButton}
+        {flipButton}
         {videoControls}
         {navButtons}
         {zoomBadge}
@@ -641,6 +672,7 @@ export default function SmartViewer({
       {errorIndicator}
       {closeButton}
       {shareButton}
+      {flipButton}
       {videoControls}
       {navButtons}
       {zoomBadge}

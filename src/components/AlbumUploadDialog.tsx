@@ -19,7 +19,7 @@ import { toast } from '@/hooks/use-toast';
 import { uploadSbsPhoto, uploadSbsVideo } from '@/services/galleryService';
 import { convertSpatialToSbs } from '@/lib/spatial/convertSpatial';
 import { isHeifFile } from '@/lib/spatial/heifBoxes';
-import { isVideoFile } from '@/lib/media';
+import { ACCEPTED_TYPES, isAcceptedFile, isVideoFile } from '@/lib/media';
 
 /**
  * Guided upload flow for an album.
@@ -49,26 +49,6 @@ type Step = 'select' | 'uploading' | 'summary';
 
 /** Uploads run a few at a time; sequential was needlessly slow for large batches. */
 const UPLOAD_CONCURRENCY = 3;
-
-/**
- * Apple Spatial Photos arrive as .HEIC and are converted in the browser; the
- * extension entries matter because Safari and Chrome disagree on the MIME type
- * a picker reports for HEIC.
- */
-const ACCEPTED_TYPES =
-  'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,.mp4,.mov,.m4v';
-
-/**
- * Dropped files bypass the picker's `accept` filter, so apply the same rule by
- * hand. Extension first: HEIC arrives with an empty or vendor MIME type.
- */
-export function isAcceptedFile(file: File): boolean {
-  return (
-    /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name) ||
-    /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type) ||
-    isVideoFile(file)
-  );
-}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;

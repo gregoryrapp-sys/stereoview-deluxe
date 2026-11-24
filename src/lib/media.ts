@@ -31,6 +31,26 @@ export function videoContentType(file: Pick<File, 'name' | 'type'>): string {
   return 'video/mp4';
 }
 
+/**
+ * Apple Spatial Photos arrive as .HEIC and are converted in the browser; the
+ * extension entries matter because Safari and Chrome disagree on the MIME type
+ * a picker reports for HEIC.
+ */
+export const ACCEPTED_TYPES =
+  'image/jpeg,image/png,image/webp,image/heic,image/heif,.heic,.heif,video/mp4,video/quicktime,.mp4,.mov,.m4v';
+
+/**
+ * Dropped files bypass the picker's `accept` filter, so apply the same rule by
+ * hand. Extension first: HEIC arrives with an empty or vendor MIME type.
+ */
+export function isAcceptedFile(file: Pick<File, 'name' | 'type'>): boolean {
+  return (
+    /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name) ||
+    /^image\/(jpeg|png|webp|hei[cf])$/i.test(file.type) ||
+    isVideoFile(file)
+  );
+}
+
 /** 75 -> "1:15", 3725 -> "1:02:05". */
 export function formatDuration(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
