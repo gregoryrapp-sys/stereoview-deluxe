@@ -10,6 +10,7 @@ import {
 import SmartViewer from '@/components/SmartViewer';
 import ShareLinkButton from '@/components/ShareLinkButton';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
+import CollectionDescription from '@/components/CollectionDescription';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -356,6 +357,8 @@ export default function Gallery() {
             ) : (
               <p className="text-sm text-muted-foreground">{gallerySubtitle}</p>
             )}
+            {/* The event's or album's own description, when it has one. */}
+            <CollectionDescription text={(selectedAlbum ?? selectedEvent)?.description} className="mt-2" />
           </div>
           <div className="flex flex-wrap gap-2">
             {pageShareUrl && (
