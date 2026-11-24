@@ -11,6 +11,7 @@ import SmartViewer from '@/components/SmartViewer';
 import ShareLinkButton from '@/components/ShareLinkButton';
 import ThumbnailGrid from '@/components/ThumbnailGrid';
 import CollectionDescription from '@/components/CollectionDescription';
+import { singleAlbumOf } from '@/lib/singleAlbum';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import { AlertCircle, Cloud, FolderOpen, Images, LogOut, Settings, Shield, User } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -251,7 +252,8 @@ export default function Gallery() {
 
   const handleSelectEvent = (eventId: string) => {
     setSelectedEventId(eventId);
-    setSelectedAlbumId('');
+    // A single album opens directly; the breadcrumb still leads to the event.
+    setSelectedAlbumId(singleAlbumOf(eventId, galleryData.albums)?.id ?? '');
     setSelectedPhotoIndex(null);
   };
 
@@ -358,6 +360,10 @@ export default function Gallery() {
               <p className="text-sm text-muted-foreground">{gallerySubtitle}</p>
             )}
             {/* The event's or album's own description, when it has one. */}
+            {/* A single-album event opens straight to its album, so that page shows the event's description too. */}
+            {selectedAlbum && selectedEvent && singleAlbumOf(selectedEvent.id, galleryData.albums) && (
+              <CollectionDescription text={selectedEvent.description} className="mt-2" />
+            )}
             <CollectionDescription text={(selectedAlbum ?? selectedEvent)?.description} className="mt-2" />
           </div>
           <div className="flex flex-wrap gap-2">

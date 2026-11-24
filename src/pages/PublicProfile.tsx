@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, ArrowLeft, Cloud, FolderOpen, Images, Lock, Settings, User } from 'lucide-react';
 import StereoThumbnail from '@/components/StereoThumbnail';
 import CollectionDescription from '@/components/CollectionDescription';
+import { singleAlbumOf } from '@/lib/singleAlbum';
 import { PhotoCount, PhotoGridSkeleton } from '@/components/PhotoGridStatus';
 import { useDropboxListing } from '@/hooks/useDropboxListing';
 import { isLiveDropboxAlbum } from '@/lib/albumSource';
@@ -296,6 +297,17 @@ export default function PublicProfile() {
   const isEventPage = !!eventSlug && !albumSlug;
   const isProfilePage = !eventSlug;
   
+  // An event with a single album opens that album directly: an event page
+  // holding one tile is a click with nothing to choose.
+  const eventHref = (event: { id: string; slug: string }) => {
+    const only = singleAlbumOf(event.id, data?.albums ?? []);
+    return only?.slug ? `/${profileSlug}/${event.slug}/${only.slug}` : `/${profileSlug}/${event.slug}`;
+  };
+  // Its event page is then skipped, so the album page carries the event's
+  // description too.
+  const skippedEventDescription =
+    isAlbumPage && selectedEvent && singleAlbumOf(selectedEvent.id, data?.albums ?? []) ? selectedEvent.description : null;
+
   const profileLabel = data?.profile.display_name ?? data?.profile.slug ?? profileSlug;
   // The page on screen, as a visitor would open it: the photographer, an event, or an album.
   const pageShareUrl = data?.profile.slug
@@ -464,7 +476,7 @@ export default function PublicProfile() {
               }
 
               return (
-                <Link key={event.id} to={`/${profileSlug}/${event.slug}`} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
+                <Link key={event.id} to={eventHref(event)} className="group overflow-hidden rounded-md border border-border bg-card text-left transition-colors hover:bg-accent focus:outline-none focus:ring-2 focus:ring-ring">
                   <div className="aspect-square bg-secondary">
                     {cover ? <StereoThumbnail photo={cover} /> : <div className="flex h-full w-full items-center justify-center"><FolderOpen className="h-6 w-6 text-muted-foreground" /></div>}
                   </div>
@@ -553,6 +565,7 @@ export default function PublicProfile() {
                   previewsSettled={isLiveDropbox ? dropboxThumbsSettled : undefined}
                   dropboxLive={isLiveDropbox}
                 />
+                <CollectionDescription text={skippedEventDescription} className="mt-2" />
                 <CollectionDescription text={selectedAlbum.description} className="mt-2" />
               </div>
             </div>
