@@ -12,6 +12,7 @@ import { type EyeTier, resolveAlignment, ZOOM_TIER_MIN_SCALE } from '@/lib/image
 import type { GalleryPhoto } from '@/services/galleryService';
 import { formatDuration, isVideoPhoto } from '@/lib/media';
 import { useSbsVideo } from '@/hooks/useSbsVideo';
+import { MAX_SEPARATION_STEPS, separationOffsetPx, useEyeSeparation } from '@/hooks/useEyeSeparation';
 import type { AlbumRecord } from '@/types/database';
 
 interface SmartViewerProps {
@@ -217,6 +218,10 @@ export default function SmartViewer({
   });
   const video = useSbsVideo({ src: isVideo ? photo.src : null, swapped: storedAlignment.swapped });
   const { togglePlay: toggleVideoPlay, toggleMute: toggleVideoMute } = video;
+
+  // The viewer's own spacing between the eyes, kept on this device.
+  const separation = useEyeSeparation();
+  const separationPx = separationOffsetPx(separation.steps, containerSize.width / 2);
   const isLoading = isVideo ? !video.ready && !video.error : imageLoading;
   const error = isVideo ? video.error : imageError;
 
@@ -551,14 +556,7 @@ export default function SmartViewer({
 
   // Play / sound / position, bottom left, showing and hiding with the other controls.
   const videoControls = isVideo && !video.error && (
-    <div
-      data-viewer-control
-      onClick={(e) => e.stopPropagation()}
-      className={cn(
-        'absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] right-32 flex items-center gap-2 transition-opacity duration-200',
-        controlVisibility,
-      )}
-    >
+    <>
       <button onClick={video.togglePlay} className={navButton} aria-label={video.playing ? 'Pause' : 'Play'}>
         {video.playing ? <Pause className="h-5 w-5 fill-current" /> : <Play className="h-5 w-5 fill-current" />}
       </button>
@@ -578,6 +576,67 @@ export default function SmartViewer({
       <span className="shrink-0 text-xs tabular-nums text-white/80 drop-shadow">
         {formatDuration(video.currentTime)} / {formatDuration(video.duration)}
       </span>
+    </>
+  );
+
+  // Eye separation, stereo only (portrait shows one eye): "> | <" brings the
+  // two pictures toward the centre line, "< | >" moves them apart; the number
+  // between them is the current setting, and tapping it returns to 0.
+  const separationLabel = separation.steps > 0 ? `+${separation.steps}` : String(separation.steps);
+  const separationControls = mode === 'stereo' && (
+    <div className="flex shrink-0 items-center gap-1">
+      <button
+        onClick={separation.closer}
+        disabled={separation.steps >= MAX_SEPARATION_STEPS}
+        className={navButton}
+        aria-label="Move the pictures closer together"
+        title="Move the pictures closer together"
+      >
+        <span className="flex items-center" aria-hidden>
+          <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
+          <span className="h-4 w-0.5 rounded bg-white/60" />
+          <ChevronLeft className="h-4 w-4" strokeWidth={2.5} />
+        </span>
+      </button>
+      <button
+        onClick={separation.reset}
+        className="min-w-[2.25rem] rounded-full px-1 py-2 text-center text-xs font-medium tabular-nums text-white/80 drop-shadow"
+        aria-label={`Picture spacing ${separationLabel}. Tap to reset`}
+        title="Picture spacing. Tap to reset"
+      >
+        {separationLabel}
+      </button>
+      <button
+        onClick={separation.farther}
+        disabled={separation.steps <= -MAX_SEPARATION_STEPS}
+        className={navButton}
+        aria-label="Move the pictures farther apart"
+        title="Move the pictures farther apart"
+      >
+        <span className="flex items-center" aria-hidden>
+          <ChevronLeft className="h-4 w-4" strokeWidth={2.5} />
+          <span className="h-4 w-0.5 rounded bg-white/60" />
+          <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
+        </span>
+      </button>
+    </div>
+  );
+
+  // Bottom left, across from Previous/Next: eye separation, then a video's
+  // play / sound / position. Only as wide as its contents unless a seek bar
+  // needs the room, so the rest of the bottom edge still takes taps and swipes.
+  const bottomLeftBar = (separationControls || videoControls) && (
+    <div
+      data-viewer-control
+      onClick={(e) => e.stopPropagation()}
+      className={cn(
+        'absolute bottom-[max(1rem,env(safe-area-inset-bottom))] left-[max(1rem,env(safe-area-inset-left))] flex items-center gap-2 transition-opacity duration-200',
+        videoControls && 'right-32',
+        controlVisibility,
+      )}
+    >
+      {separationControls}
+      {videoControls}
     </div>
   );
 
@@ -638,7 +697,7 @@ export default function SmartViewer({
         {closeButton}
         {shareButton}
         {flipButton}
-        {videoControls}
+        {bottomLeftBar}
         {navButtons}
         {zoomBadge}
       </div>
@@ -660,11 +719,16 @@ export default function SmartViewer({
       onClick={handleContainerClick}
     >
       <div className="flex h-full w-full">
+        {/* Eye separation moves each picture toward (or away from) the centre line. */}
         <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-          {renderEye('left', leftUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
+          <div style={{ transform: `translateX(${separationPx}px)` }}>
+            {renderEye('left', leftUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
+          </div>
         </div>
         <div className="flex h-full w-1/2 items-center justify-center overflow-hidden">
-          {renderEye('right', rightUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
+          <div style={{ transform: `translateX(${-separationPx}px)` }}>
+            {renderEye('right', rightUrl, imageTransform, isTransforming ? 'transform' : 'auto')}
+          </div>
         </div>
       </div>
       {videoElement}
@@ -673,7 +737,7 @@ export default function SmartViewer({
       {closeButton}
       {shareButton}
       {flipButton}
-      {videoControls}
+      {bottomLeftBar}
       {navButtons}
       {zoomBadge}
     </div>
